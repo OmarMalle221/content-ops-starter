@@ -1,0 +1,7 @@
+# Minimal Supabase CLI configuration. See supabase/README.md.
+project_id = "trustcargo-pay"
+
+[api]
+# Only `public` is exposed through PostgREST; RLS helper functions live in the private `app` schema.
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
