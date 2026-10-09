@@ -10,7 +10,7 @@ export async function createTestApp(): Promise<App> {
             SESSION_SECRET: 'test-session-secret-0123456789-abcdefghij',
             MOCK_PROVIDER_WEBHOOK_SECRET: 'test-webhook-secret-0123456789',
             APP_URL: 'http://localhost:3000'
-        } as NodeJS.ProcessEnv)
+        } as unknown as NodeJS.ProcessEnv)
     );
     await seedReferenceData(app);
     return app;

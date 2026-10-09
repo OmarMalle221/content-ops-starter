@@ -15,6 +15,9 @@ import { canonicalJson } from '@/domain/canonical';
 import { sha256Hex } from '@/server/security/crypto';
 import { AppError, notFound } from '@/server/errors';
 
+/** Matches the SQL schema's genesis value for the audit hash chain. */
+export const AUDIT_GENESIS_HASH = '0'.repeat(64);
+
 export interface AppConfig {
     mode: 'demo' | 'production';
     sessionSecret: string;
@@ -63,7 +66,7 @@ export async function audit(
 ) {
     const sequence = await db.nextSequence('audit');
     const previous = sequence > 1 ? await db.auditEvents.findOne({ sequence: sequence - 1 }) : undefined;
-    const previousHash = previous?.hash ?? 'GENESIS';
+    const previousHash = previous?.hash ?? AUDIT_GENESIS_HASH;
     const body = {
         id: deps.ids.id(),
         sequence,

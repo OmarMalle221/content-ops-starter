@@ -78,7 +78,10 @@ export interface StatementLine {
 export type FundingStatus = 'CREATED' | 'PENDING' | 'FUNDED' | 'FAILED' | 'EXPIRED';
 export type ProviderPayoutStatus = 'SUBMITTED' | 'PROCESSING' | 'PAID' | 'FAILED';
 
+const PROVIDER_ERROR = Symbol.for('trustcargo.ProviderError');
+
 export class ProviderError extends Error {
+    readonly [PROVIDER_ERROR] = true;
     constructor(
         message: string,
         public readonly retryable: boolean
@@ -86,6 +89,11 @@ export class ProviderError extends Error {
         super(message);
         this.name = 'ProviderError';
     }
+}
+
+/** Cross-bundle safe check (see isAppError). */
+export function isProviderError(error: unknown): error is ProviderError {
+    return typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[PROVIDER_ERROR] === true;
 }
 
 export interface PaymentProvider {

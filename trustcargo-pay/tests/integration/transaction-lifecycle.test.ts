@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { actors, createTestApp } from './helpers';
-import { agree, createAndInvite, payAllSubmitted, submitMilestone, toInProgress } from './flow';
+import { agree, createAndInvite, dealerOrgId, input, payAllSubmitted, pdf, submitMilestone, toInProgress } from './flow';
 
 describe('vehicle transaction lifecycle', () => {
     it('goes from draft to completed with milestone releases confirmed by the partner', async () => {
@@ -89,6 +89,22 @@ describe('vehicle transaction lifecycle', () => {
         await app.identity.complete(a.buyer2, kyc.id, 'APPROVE');
         expect((await app.views.transaction(a.buyer2, tx.id)).status).toBe('AWAITING_AGREEMENT');
         expect((await agree(app, a.seller, a.buyer2, tx.id)).status).toBe('AWAITING_FUNDING');
+    });
+
+    it('does not let the buyer fund before the seller provided the pre-funding documents', async () => {
+        const app = await createTestApp();
+        const a = await actors(app);
+        const tx = await app.transactions.createVehicleTransaction(a.seller, input({ sellerOrganizationId: await dealerOrgId(app) }));
+        const { links } = await app.transactions.sendInvitations(a.seller, tx.id);
+        await app.transactions.acceptInvitation(a.buyer, links[0]!.url.split('/invite/')[1]!);
+        await agree(app, a.seller, a.buyer, tx.id);
+        await expect(app.payments.requestFundingInstructions(a.buyer, tx.id)).rejects.toMatchObject({
+            code: 'PRECONDITION_FAILED',
+            details: { failedGuards: ['REQUIRED_DOCUMENTS_MISSING'], missing: ['TITLE', 'INVOICE'] }
+        });
+        await app.documents.upload(a.seller, { transactionId: tx.id, type: 'TITLE', title: 'Titre' }, pdf('titre'));
+        await app.documents.upload(a.seller, { transactionId: tx.id, type: 'INVOICE', title: 'Facture' }, pdf('facture'));
+        expect((await app.payments.requestFundingInstructions(a.buyer, tx.id)).status).toBe('CREATED');
     });
 
     it('lets the buyer request changes and the seller resubmit', async () => {

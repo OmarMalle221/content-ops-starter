@@ -9,7 +9,7 @@ import { journalTemplates } from '@/domain/ledger/ledger';
 import { money, type CurrencyCode, type Money } from '@/domain/money';
 import type { Milestone, Payout, Refund, Transaction } from '@/domain/model';
 import type { Db } from '@/server/ports/db';
-import { ProviderError } from '@/server/ports/payment-provider';
+import { isProviderError } from '@/server/ports/payment-provider';
 import type { Actor, AnyActor } from '@/server/auth/actor';
 import { SYSTEM, hasRole } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
@@ -50,6 +50,18 @@ export class PaymentService {
                     failedGuards: ['COMPLIANCE_HOLD_ACTIVE']
                 });
             }
+            // The buyer must not be asked to pay before the seller has provided the corridor's pre-funding documents.
+            const corridor = await db.corridors.get(tx.corridorId);
+            const liveDocs = (await db.documents.findBy({ transactionId })).filter(
+                (d) => !['SUPERSEDED', 'REJECTED', 'QUARANTINED'].includes(d.status)
+            );
+            const missingDocs = (corridor?.requiredDocumentsBeforeFunding ?? []).filter((type) => !liveDocs.some((d) => d.type === type));
+            if (missingDocs.length) {
+                throw new AppError('PRECONDITION_FAILED', 'Required documents missing', {
+                    failedGuards: ['REQUIRED_DOCUMENTS_MISSING'],
+                    missing: missingDocs
+                });
+            }
             const critical = (await this.risk.blockingAlerts(db, transactionId)).filter((a) => a.severity === 'CRITICAL');
             if (critical.length)
                 throw new AppError('PRECONDITION_FAILED', 'Transaction under compliance review', {
@@ -73,7 +85,7 @@ export class PaymentService {
                 idempotencyKey: prepared.existing ? `${prepared.idempotencyKey}:retry:${this.now()}` : prepared.idempotencyKey
             });
         } catch (e) {
-            if (e instanceof ProviderError)
+            if (isProviderError(e))
                 throw new AppError('PROVIDER_ERROR', 'The payment partner is temporarily unavailable. Please retry.', {
                     retryable: e.retryable
                 });
@@ -349,7 +361,7 @@ export class PaymentService {
     }
 
     private async recordSubmissionFailure(kind: 'payout' | 'refund', id: string, transactionId: string, attempts: number, error: unknown) {
-        if (!(error instanceof ProviderError)) throw error;
+        if (!isProviderError(error)) throw error;
         await this.deps.uow.run(async (db) => {
             const patch = { attempts: attempts + 1, failureReason: error.message.slice(0, 300), updatedAt: this.now() };
             if (kind === 'payout') await db.payouts.update(id, patch);

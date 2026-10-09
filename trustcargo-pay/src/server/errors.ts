@@ -23,8 +23,15 @@ const STATUS: Record<ErrorCode, number> = {
     INVALID_SIGNATURE: 401
 };
 
+/**
+ * Cross-bundle brand. Next.js may bundle this module more than once (one copy per route chunk)
+ * while the application singleton lives on globalThis, so `instanceof` is unreliable: use isAppError.
+ */
+const APP_ERROR = Symbol.for('trustcargo.AppError');
+
 /** Domain/application error with a stable code. `details` must never contain secrets or PII. */
 export class AppError extends Error {
+    readonly [APP_ERROR] = true;
     readonly status: number;
     constructor(
         readonly code: ErrorCode,
@@ -40,3 +47,7 @@ export class AppError extends Error {
 export const notFound = (what = 'Resource') => new AppError('NOT_FOUND', `${what} not found`);
 export const forbidden = (message = 'Not allowed') => new AppError('FORBIDDEN', message);
 export const precondition = (message: string, details?: Record<string, unknown>) => new AppError('PRECONDITION_FAILED', message, details);
+
+export function isAppError(error: unknown): error is AppError {
+    return typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[APP_ERROR] === true;
+}

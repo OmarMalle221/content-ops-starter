@@ -1,0 +1,86 @@
+# Architecture
+
+## Principes
+
+1. **Le domaine est pur.** `src/domain` ne dépend ni de Next.js, ni de la base, ni du réseau. On y trouve la monnaie, le VIN, la machine à états, le registre, l'antifraude et les règles documentaires. Tout y est testable unitairement.
+2. **Ports et adaptateurs.** Les services ne connaissent que des interfaces (`src/server/ports`) : `Db`/`UnitOfWork`, `PaymentProvider`, `IdentityVerificationProvider`, `ScreeningProvider`, `FileStorage`, `FileScanner`, `Clock`. Le choix des implémentations se fait **uniquement** dans `src/server/app.ts`.
+3. **L'autorisation se fait côté serveur, dans les services.** Chaque opération reçoit un `Actor` résolu depuis la session signée. Les rôles sont relus en base à chaque requête. L'interface n'est jamais une barrière de sécurité : les drapeaux `can.*` des vues ne servent qu'à l'affichage.
+4. **L'argent ne bouge que sur événement authentifié du partenaire.** Les transitions financières (`FUNDING_INITIATED`, `FUNDS_CONFIRMED`, `FUNDING_FAILED`) ne sont autorisées qu'à l'acteur `PROVIDER`. Les services n'utilisent cet acteur qu'après vérification HMAC d'un webhook.
+5. **Moteur générique, modules spécialisés.** Le moteur de transaction, les jalons, les contrats, les litiges, le registre et les paiements sont agnostiques du secteur. Le spécifique « véhicule » se limite à quelques éléments : l'entité `Vehicle`, le contrôle VIN, les règles antifraude de la catégorie `VEHICLE`, les types de documents et les jalons par défaut. `TransactionType` prévoit déjà `GOODS_PURCHASE` et `SERVICE_MILESTONES`.
+
+## Couches
+
+```mermaid
+flowchart LR
+  UI["Pages & composants<br/>(App Router, RSC)"] --> SA["Server actions"]
+  API["API REST /api/v1"] --> SVC
+  SA --> SVC["Services<br/>(autorisation, unité de travail, audit)"]
+  WH["Webhook partenaire<br/>/api/v1/webhooks/payments/mock"] --> PES["ProviderEventService<br/>(HMAC, anti-rejeu)"] --> SVC
+  SVC --> DOM["Domaine pur<br/>(state machine, ledger, risk, money)"]
+  SVC --> PORTS["Ports"]
+  PORTS --> MEM["Adaptateur mémoire (démo/tests)"]
+  PORTS -. à brancher .-> PG["Adaptateur Postgres/Supabase"]
+  PORTS --> MOCK["MockPaymentProvider / KYC / filtrage simulés"]
+```
+
+### Unité de travail
+
+`UnitOfWork.run(fn)` exécute `fn` de façon atomique. L'adaptateur mémoire sérialise les unités de travail et restaure un instantané en cas d'erreur. Il détecte aussi les appels imbriqués via `AsyncLocalStorage`, ce qui permet de rejoindre la transaction englobante sans risque entre requêtes concurrentes. Un adaptateur Postgres utilisera une transaction SQL : `BEGIN … COMMIT`, plus le verrou optimiste `transactions.version`.
+
+**Aucune entrée/sortie externe dans une unité de travail.** Les appels au partenaire suivent un schéma de type « outbox » :
+
+1. Une première unité de travail crée le versement `REQUESTED` et le journal d'autorisation.
+2. Le partenaire est appelé hors transaction.
+3. Une deuxième unité de travail enregistre `SUBMITTED`. En cas d'échec, elle enregistre l'erreur et le nombre de tentatives.
+
+### Flux d'un versement
+
+```mermaid
+sequenceDiagram
+  participant B as Acheteur
+  participant S as MilestoneService
+  participant P as PaymentService
+  participant L as Registre
+  participant M as Partenaire (mock)
+  participant E as ProviderEventService
+  B->>S: approuver le jalon (server action)
+  S->>S: garde-fous (état, rôle, preuves)
+  S->>P: authorizeReleaseInTx
+  P->>P: contrôles (gel, litige, alertes bloquantes, compte, délai de carence, solde)
+  P->>L: journal RELEASE_AUTHORIZED (TX_HELD → SELLER_PAYABLE)
+  P-->>M: requestAuthorizedRelease (hors transaction, idempotency key)
+  M-->>E: webhook signé payout.paid
+  E->>E: vérif. HMAC + horodatage, unicité de l'événement
+  E->>L: journal PAYOUT_SETTLED (SELLER_PAYABLE → PARTNER_CLEARING)
+  E->>S: jalon RELEASED, autoAdvance (→ COMPLETED si tout est versé)
+```
+
+## Décisions (ADR condensées)
+
+| # | Décision | Raison | Conséquence |
+| --- | --- | --- | --- |
+| 1 | Application autonome dans `trustcargo-pay/` | Le dépôt contenait un starter Netlify sans lien avec le produit, qu'il ne fallait pas casser | Le `tsconfig` racine exclut `trustcargo-pay` |
+| 2 | Next.js 16 (App Router), React 19, TS strict avec `noUncheckedIndexedAccess` | Version stable actuelle ; la sûreté de typage est critique pour un produit financier | `proxy.ts` remplace `middleware.ts` |
+| 3 | Montants en `bigint` d'unités mineures, répartition par la méthode du plus fort reste | Déterminisme : la somme des jalons est toujours exacte | Les DTO transportent les montants en chaîne |
+| 4 | Machine à états déclarative (`TRANSITIONS`) | Chaque transition expose ses états source, ses acteurs autorisés, ses gardes, son action d'audit et sa politique de reprise | Les gardes en échec sont renvoyés à l'interface (messages explicables) |
+| 5 | Registre en partie double, en ajout seul, corrections par contrepassation | Intégrité comptable, idempotence par clé | Le solde `TX_HELD` sert de contrôle avant tout versement |
+| 6 | Règles antifraude explicables, sans score numérique | Exigence produit ; pas de modèle validé statistiquement | Priorité, motifs, action recommandée, revue humaine |
+| 7 | Adaptateur mémoire pour la démo et les tests, schéma Supabase testé séparément | Démo exécutable sans service externe | Démo sur un seul processus ; adaptateur Postgres à écrire (voir mise en production) |
+| 8 | MFA TOTP (RFC 6238) en démo, Supabase Auth AAL2 en cible | Démontrer le step-up sans dépendance | Validité configurable : 12 h pour le back-office, 15 min pour les actions sensibles |
+| 9 | Chaîne d'audit par empreintes SHA-256 | Détection d'altération et de suppression | Genèse = 64 zéros, identique côté SQL |
+| 10 | Invitations : jeton aléatoire de 256 bits, stocké haché, à usage unique, lié au courriel | Éviter la prise de contrôle par lien partagé | Les invitations sont aussi visibles dans le tableau de bord du compte invité |
+| 11 | 404 au lieu de 403 sur les ressources inaccessibles | Ne pas révéler l'existence d'une transaction | Les refus d'accès aux documents sont journalisés à part (`DENIED`) |
+| 12 | `platform_admin` n'a pas accès aux transactions | Moindre privilège : la configuration est séparée des opérations | Il faut un rôle opérationnel distinct pour lire un dossier |
+
+## Extension à d'autres verticales
+
+Pour ajouter par exemple « marchandises B2B » :
+
+1. Ajouter l'entité spécifique (`GoodsLot`) et son schéma Zod.
+2. Ajouter les types de documents et les jalons par défaut.
+3. Ajouter les règles antifraude de la nouvelle catégorie (`RULES` est extensible).
+4. Ouvrir l'assistant au nouveau type.
+
+La machine à états, les contrats, les jalons, les paiements, le registre et les litiges sont réutilisés tels quels.
+
+Pour ajouter un corridor, il suffit de créer une entrée `corridors` : devises, seuil de revue renforcée, ports attendus, documents requis.

@@ -6,7 +6,7 @@ import type { Actor } from '@/server/auth/actor';
 import { hasRole, mfaIsRecent } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
 import { sha256Hex } from '@/server/security/crypto';
-import { audit, notify, securitySettings, type Deps } from './context';
+import { AUDIT_GENESIS_HASH, audit, notify, securitySettings, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
 import type { PaymentService } from './payment-service';
 
@@ -266,7 +266,7 @@ export class AdminService {
     /** Recomputes the hash chain to detect tampering or deleted events. */
     async verifyChainInTx(all: AuditEvent[]) {
         const sorted = [...all].sort((a, b) => a.sequence - b.sequence);
-        let previous = 'GENESIS';
+        let previous = AUDIT_GENESIS_HASH;
         for (const [i, e] of sorted.entries()) {
             const { previousHash, hash, ...body } = e;
             if (e.sequence !== i + 1 || previousHash !== previous || sha256Hex(previous + canonicalJson(body)) !== hash)
@@ -276,7 +276,8 @@ export class AdminService {
         return { valid: true, length: sorted.length };
     }
 
-    async corridors(actor: Actor) {
+    /** Any authenticated user may read corridor configuration. */
+    async corridors(_actor: Actor) {
         return this.deps.uow.run((db) => db.corridors.list());
     }
 
