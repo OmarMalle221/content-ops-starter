@@ -123,7 +123,7 @@ Le moteur se trouve dans `src/domain/risk/engine.ts`. Il compte 20 règles répa
 - **transaction** : montant inhabituel, vélocité, modifications successives du contrat, coordonnées modifiées en cours, filtrage, facture incohérente ;
 - **véhicule** : VIN mal formé, VIN divergent selon les documents, vendeur différent du titulaire, documents manquants, valeur déclarée, preuve d'exportation, document d'expédition.
 
-À cela s'ajoute l'alerte `FUNDING_AMOUNT_MISMATCH`, levée par le traitement des webhooks.
+À cela s'ajoute l'alerte `FUNDING_AMOUNT_MISMATCH`, levée par le traitement des webhooks : montant signalé différent de l'instruction, ou instruction qui n'est plus celle de la version de contrat et du montant en vigueur (amendement). `FUNDS_CONFIRMED` n'est alors jamais appliqué ; en base, `transactions_before_update` exige une instruction `FUNDED` du montant exact de la transaction.
 
 Chaque alerte comporte :
 

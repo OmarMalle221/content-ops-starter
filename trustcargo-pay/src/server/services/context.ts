@@ -13,6 +13,7 @@ import { TRANSACTION_READER_ROLES, hasRole } from '@/server/auth/actor';
 import type { PartyRole, PlatformRole, SecuritySettings, Transaction, TransactionParty } from '@/domain/model';
 import { canonicalJson } from '@/domain/canonical';
 import { sha256Hex } from '@/server/security/crypto';
+import { storableValue } from '@/server/text';
 import { AppError, notFound } from '@/server/errors';
 
 /** Matches the SQL schema's genesis value for the audit hash chain. */
@@ -76,7 +77,8 @@ export async function audit(
         entityType: entity.type,
         entityId: entity.id,
         transactionId: options.transactionId,
-        metadata: options.metadata ?? {}
+        // Hashed as stored: the adapters' storable-text rule is applied before hashing, not after.
+        metadata: storableValue(options.metadata ?? {}, 'metadata')
     };
     const hash = sha256Hex(previousHash + canonicalJson(body));
     return db.auditEvents.insert({ ...body, previousHash, hash });

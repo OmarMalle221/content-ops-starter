@@ -13,6 +13,7 @@ import { isProviderError } from '@/server/ports/payment-provider';
 import type { Actor, AnyActor } from '@/server/auth/actor';
 import { SYSTEM, hasRole } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
+import { truncateText } from '@/server/text';
 import { accessTransaction, audit, notify, notifyRole, securitySettings, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
 import type { RiskService } from './risk-service';
@@ -91,9 +92,20 @@ export class PaymentService {
                 });
             throw e;
         }
-        return this.deps.uow.run(async (db) => {
+        const recorded = await this.deps.uow.run(async (db) => {
             const now = this.now();
             const key = prepared.existing ? `${prepared.idempotencyKey}:${result.providerReference}` : prepared.idempotencyKey;
+            // The partner was called outside any unit of work: the contract may have been amended (or the
+            // transaction cancelled) meanwhile. The partner's instruction is then recorded as CANCELLED, never
+            // offered to the buyer: its amount or contract version is no longer the transaction's.
+            const current = (await db.transactions.get(prepared.tx.id))!;
+            const stale =
+                current.status !== 'AWAITING_FUNDING' ||
+                current.currentContractVersionId !== prepared.tx.currentContractVersionId ||
+                current.amount.amountMinor !== prepared.tx.amount.amountMinor ||
+                current.amount.currency !== prepared.tx.amount.currency;
+            // Only an amendment moves AWAITING_FUNDING to AWAITING_AGREEMENT or to another contract version.
+            const amended = current.status === 'AWAITING_FUNDING' || current.status === 'AWAITING_AGREEMENT';
             const instruction = await db.paymentInstructions.insert({
                 id: this.deps.ids.id(),
                 transactionId: prepared.tx.id,
@@ -101,26 +113,30 @@ export class PaymentService {
                 providerReference: result.providerReference,
                 amount: prepared.tx.amount,
                 payerUserId: actor.userId,
-                status: 'CREATED',
+                status: stale ? 'CANCELLED' : 'CREATED',
                 details: result.details,
                 idempotencyKey: key,
                 expiresAt: result.expiresAt,
                 createdAt: now,
-                updatedAt: now
+                updatedAt: now,
+                ...(stale && { failureReason: amended ? 'Superseded by contract amendment' : 'Transaction no longer awaiting funding' })
             });
             await audit(
                 this.deps,
                 db,
                 actor,
-                'payment.instruction_created',
+                stale ? 'payment.instruction_superseded' : 'payment.instruction_created',
                 { type: 'payment_instruction', id: instruction.id },
                 {
                     transactionId: prepared.tx.id,
                     metadata: { provider: instruction.provider, providerReference: instruction.providerReference }
                 }
             );
-            return instruction;
+            return { instruction, stale };
         });
+        if (recorded.stale)
+            throw new AppError('CONFLICT', 'The transaction changed while the payment instruction was being issued. Please reload.');
+        return recorded.instruction;
     }
 
     /* ------------------------------------------------------------------ releases */
@@ -363,7 +379,7 @@ export class PaymentService {
     private async recordSubmissionFailure(kind: 'payout' | 'refund', id: string, transactionId: string, attempts: number, error: unknown) {
         if (!isProviderError(error)) throw error;
         await this.deps.uow.run(async (db) => {
-            const patch = { attempts: attempts + 1, failureReason: error.message.slice(0, 300), updatedAt: this.now() };
+            const patch = { attempts: attempts + 1, failureReason: truncateText(error.message, 300), updatedAt: this.now() };
             if (kind === 'payout') await db.payouts.update(id, patch);
             else await db.refunds.update(id, patch);
             await audit(

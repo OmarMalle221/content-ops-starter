@@ -80,7 +80,8 @@ export default async function Partners() {
                                             {e.error && <p className="mt-1 text-xs text-danger">{e.error}</p>}
                                         </TD>
                                         <TD>
-                                            {e.status === 'FAILED' && hasRole(actor, 'finance_operator') && (
+                                            {/* Same rule as the service: FAILED, or left RECEIVED past the grace period. */}
+                                            {hasRole(actor, 'finance_operator') && app.providerEvents.reprocessable(e) && (
                                                 <ReprocessEvent eventId={e.id} />
                                             )}
                                         </TD>

@@ -1,4 +1,4 @@
-import { randomToken, sha256Hex } from '@/server/security/crypto';
+import { randomToken } from '@/server/security/crypto';
 import type { Clock, FileScanner, FileStorage, IdentityVerificationProvider, ScreeningProvider } from '@/server/ports/providers';
 
 export class SystemClock implements Clock {
@@ -71,7 +71,8 @@ export class MockScreeningProvider implements ScreeningProvider {
         const hit = /sanctiontest/i.test(subject.name);
         return {
             result: hit ? ('POTENTIAL_MATCH' as const) : ('NO_MATCH' as const),
-            providerReference: `sim_scr_${sha256Hex(subject.id).slice(0, 10)}`,
+            // One reference per screening call, as a real provider issues (screening_results is unique on it).
+            providerReference: `sim_scr_${randomToken(8)}`,
             listsChecked: ['SIMULATED-LIST (aucune liste réelle consultée)']
         };
     }

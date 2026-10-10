@@ -13,7 +13,7 @@ import { money } from '@/domain/money';
 import { canMovePayout, canMoveRefund, getTransition, TRANSITIONS, type TransitionId } from '@/domain/transaction/state-machine';
 import { MemoryDatabase } from '@/server/adapters/memory/memory-db';
 import { InvalidValueError } from '@/server/adapters/postgres/codecs';
-import { PostgresDatabase } from '@/server/adapters/postgres/pg-database';
+import { DEFAULT_TIMEOUTS, PostgresDatabase, type UnitOfWorkTimeouts } from '@/server/adapters/postgres/pg-database';
 import { TABLES } from '@/server/adapters/postgres/tables';
 import { UuidV7Generator } from '@/server/adapters/uuid-v7';
 import { createApp } from '@/server/app';
@@ -23,7 +23,7 @@ import { ConcurrencyError, UniqueViolationError, type Db } from '@/server/ports/
 import { sha256Hex } from '@/server/security/crypto';
 import { AUDIT_GENESIS_HASH, DEFAULT_SECURITY_SETTINGS } from '@/server/services/context';
 import { actors } from './helpers';
-import { createTestDatabase, databaseUrl, usePostgres } from './pg-test-db';
+import { captureProcessErrors, createTestDatabase, databaseUrl, usePostgres } from './pg-test-db';
 import { payAllSubmitted, submitMilestone, toInProgress } from './flow';
 
 type TableKey = Exclude<keyof Db, 'nextSequence'>;
@@ -1073,6 +1073,82 @@ describe.skipIf(!usePostgres)('Postgres adapter', () => {
             });
         await Promise.all(Array.from({ length: 20 }, (_, i) => increment(i % 2 ? uow : other)));
         expect((await uow.run((db) => db.notifications.get(counter)))!.params.n).toBe('20');
+    });
+
+    it(
+        'waits for the global lock longer than lock_timeout (10 s): a unit of work queues behind a slow one',
+        { timeout: 30_000 },
+        async () => {
+            const { uow, raw } = await openDatabase();
+            // Another unit of work (any instance) holds the global lock for 10.5 s.
+            await raw.query('begin');
+            await raw.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', ['trustcargo.unit_of_work']);
+            const started = Date.now();
+            const queued = uow
+                .run((db) => db.users.list())
+                .then(
+                    (rows) => ({ rows }),
+                    (error: { code?: string }) => ({ code: error.code })
+                );
+            await new Promise((resolve) => setTimeout(resolve, 10_500));
+            await raw.query('commit');
+            expect(await queued).toEqual({ rows: [] });
+            expect(Date.now() - started).toBeGreaterThanOrEqual(10_500);
+            expect(DEFAULT_TIMEOUTS).toEqual({ globalLockWaitMs: 30_000, lockTimeoutMs: 10_000, statementTimeoutMs: 20_000 });
+        }
+    );
+
+    it('reports a busy database (lock wait or statement timeout) as the retryable UNAVAILABLE error, not an internal one', async () => {
+        const { database, raw } = await openDatabase();
+        const open = (timeouts: Partial<UnitOfWorkTimeouts>) => {
+            const db = new PostgresDatabase({ url: database.url, role: 'service_role', poolMax: 2 }, timeouts);
+            onTestFinished(() => db.close());
+            return db;
+        };
+        const unavailable = { code: 'UNAVAILABLE', status: 503 };
+
+        // 1. The global lock is still held when its own (bounded) wait ends: 55P03.
+        const queued = open({ globalLockWaitMs: 300 });
+        await raw.query('begin');
+        await raw.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', ['trustcargo.unit_of_work']);
+        await expect(queued.run((db) => db.users.list())).rejects.toMatchObject(unavailable);
+        await raw.query('commit');
+        expect(await queued.run((db) => db.users.list())).toEqual([]);
+
+        // 2. A row lock inside the unit of work outlasts lock_timeout (55P03) or statement_timeout (57014).
+        await raw.query("insert into trustcargo_private.counters (name, value) values ('busy', 1)");
+        await raw.query('begin');
+        await raw.query("select 1 from trustcargo_private.counters where name = 'busy' for update");
+        await expect(open({ lockTimeoutMs: 200 }).run((db) => db.nextSequence('busy'))).rejects.toMatchObject(unavailable);
+        await expect(open({ lockTimeoutMs: 5_000, statementTimeoutMs: 200 }).run((db) => db.nextSequence('busy'))).rejects.toMatchObject(
+            unavailable
+        );
+        await raw.query('rollback');
+        expect(await queued.run((db) => db.nextSequence('busy'))).toBe(2);
+    });
+
+    it('rejects a unit of work whose backend is lost, without any uncaught error, and keeps working', async () => {
+        const { database, uow, raw } = await openDatabase();
+        const problems = captureProcessErrors();
+        let terminated = 0;
+        await expect(
+            uow.run(async (db) => {
+                await db.users.list(); // transaction open, global lock held
+                const { rows } = await raw.query(
+                    `select pid from pg_stat_activity
+                     where datname = $1 and application_name = 'trustcargo-pay' and state = 'idle in transaction'`,
+                    [database.name]
+                );
+                for (const row of rows)
+                    terminated += (await raw.query('select pg_terminate_backend($1) as ok', [row.pid])).rows[0].ok ? 1 : 0;
+                await new Promise((resolve) => setTimeout(resolve, 300)); // e.g. a failover while the service works
+                await db.users.list();
+            })
+        ).rejects.toThrow();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(terminated).toBe(1);
+        expect(problems).toEqual([]);
+        expect(await uow.run((db) => db.users.list())).toEqual([]);
     });
 
     it('grants service_role what the adapter needs, and nothing to anon / authenticated on private tables', async () => {

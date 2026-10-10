@@ -17,7 +17,7 @@ import { seedReferenceData } from '@/server/demo/seed';
 import { isProviderError, type StatementLine } from '@/server/ports/payment-provider';
 import { agree, createAndInvite, payAllSubmitted, submitMilestone } from './flow';
 import { actors } from './helpers';
-import { createTestDatabase, usePostgres } from './pg-test-db';
+import { captureProcessErrors, createTestDatabase, usePostgres, waitFor } from './pg-test-db';
 
 const ALL = { from: '1970-01-01T00:00:00Z', to: '2100-01-01T00:00:00Z' };
 const at = (second: number, ms = 0) => new Date(Date.UTC(2026, 0, 10, 14, 0, second, ms)).toISOString();
@@ -236,6 +236,45 @@ describe.skipIf(!usePostgres)('simulated partner on Postgres (trustcargo_sim)', 
         await raw.connect();
         track(() => raw.end());
         expect((await raw.query('select count(*)::int as n from trustcargo_sim.instructions')).rows[0].n).toBe(1);
+    });
+
+    it('rejects a call whose backend is lost, without any uncaught error, and keeps working', async () => {
+        const { url, track } = await database();
+        const store = new PostgresSimulatedPartnerStore({ url, role: 'service_role', poolMax: 2 });
+        track(() => store.close());
+        const [holder, observer] = [new pg.Client({ connectionString: url }), new pg.Client({ connectionString: url })];
+        for (const client of [holder, observer]) {
+            await client.connect();
+            track(() => client.end());
+        }
+        await store.createInstruction({
+            reference: 'sim_pi_lost',
+            idempotencyKey: 'fund:lost',
+            amount: money(1_850_000n, 'CAD'),
+            status: 'CREATED'
+        });
+        const problems = captureProcessErrors();
+
+        // The partner's update waits on a row lock; its backend is terminated meanwhile (failover, pooler restart...).
+        await holder.query('begin');
+        await holder.query("select 1 from trustcargo_sim.instructions where reference = 'sim_pi_lost' for update");
+        const outcome = store.setInstructionStatus('sim_pi_lost', 'FUNDED').then(
+            () => 'resolved',
+            () => 'rejected'
+        );
+        const pid = await waitFor(async () => {
+            const { rows } = await observer.query(
+                `select pid from pg_stat_activity where datname = current_database()
+                 and application_name = 'trustcargo-pay-simulated-partner' and wait_event_type = 'Lock'`
+            );
+            return rows[0]?.pid as number | undefined;
+        });
+        await observer.query('select pg_terminate_backend($1)', [pid]);
+        expect(await outcome).toBe('rejected');
+        await holder.query('rollback');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(problems).toEqual([]);
+        expect((await store.getInstruction('sim_pi_lost'))?.status).toBe('CREATED');
     });
 
     it('closes the simulated partner pool with persistence.close()', async () => {

@@ -2,6 +2,7 @@ import { milestoneDecisionSchema } from '@/lib/validation/schemas';
 import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
+import { truncateText } from '@/server/text';
 import { accessTransaction, audit, notify, type Deps } from './context';
 import type { PaymentService, ReleaseBlocker } from './payment-service';
 import type { Workflow } from './workflow';
@@ -65,7 +66,7 @@ export class MilestoneService {
             await db.milestones.update(milestoneId, {
                 status: 'SUBMITTED',
                 submittedAt: this.deps.clock.now().toISOString(),
-                submissionNote: note?.slice(0, 2000),
+                submissionNote: note === undefined ? undefined : truncateText(note, 2000),
                 changeRequestReason: undefined
             });
             const buyer = await db.transactionParties.findOne({ transactionId, role: 'BUYER' });

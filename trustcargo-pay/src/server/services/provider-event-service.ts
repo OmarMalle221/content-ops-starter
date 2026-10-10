@@ -2,8 +2,12 @@
  * Ingestion of partner webhooks — the ONLY path through which money-related state changes.
  *
  * 1. Authenticate (HMAC signature + timestamp tolerance) → reject otherwise.
- * 2. De-duplicate on (provider, external_event_id) → replays are acknowledged but not re-applied.
- * 3. Persist the raw event (RECEIVED), then process it in a separate unit of work.
+ * 2. De-duplicate on (provider, external_event_id) → replays of a handled event are acknowledged but not
+ *    re-applied. A stored event whose processing never completed is processed again on redelivery: FAILED,
+ *    or still RECEIVED after a grace period (crash, lost connection or busy database between the two units
+ *    of work). Within the grace period a redelivery is answered UNAVAILABLE (503): the partner retries later.
+ * 3. Persist the raw event (RECEIVED), then process it in a separate unit of work, which re-reads the event
+ *    first and skips it when another delivery or a reprocess has handled it meanwhile (idempotent).
  * 4. Processing failures mark the event FAILED for manual review / reprocessing; nothing partial is kept.
  */
 import { journalTemplates } from '@/domain/ledger/ledger';
@@ -13,12 +17,19 @@ import type { VerifiedProviderEvent } from '@/server/ports/payment-provider';
 import type { Actor, SystemActor } from '@/server/auth/actor';
 import { SYSTEM, hasRole } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
+import { truncateText } from '@/server/text';
 import { buildReversal } from '@/domain/ledger/ledger';
 import { audit, notifyRole, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
 import type { PaymentService } from './payment-service';
 import type { Workflow } from './workflow';
 import { currentMilestones } from './workflow';
+
+/** A RECEIVED event younger than this may still be in its first processing (another request or instance). */
+export const RECEIVED_GRACE_MS = 60_000;
+
+/** Statuses of an event that has not been handled yet. */
+const UNHANDLED: ReadonlySet<ProviderEvent['status']> = new Set(['RECEIVED', 'FAILED']);
 
 export class ProviderEventService {
     /** Hook used by disputes to close themselves once settlement completes. */
@@ -56,7 +67,22 @@ export class ProviderEventService {
         const event = verification.event;
         const stored = await this.deps.uow.run(async (db) => {
             const existing = await db.providerEvents.findOne({ provider: this.deps.payments.name, externalEventId: event.externalEventId });
-            if (existing) return { record: existing, duplicate: true };
+            if (existing) {
+                if (!this.reprocessable(existing))
+                    return {
+                        record: existing,
+                        outcome: existing.status === 'RECEIVED' ? ('in_progress' as const) : ('duplicate' as const)
+                    };
+                await audit(
+                    this.deps,
+                    db,
+                    this.providerActor,
+                    'provider_event.redelivered',
+                    { type: 'provider_event', id: existing.id },
+                    { metadata: { status: existing.status } }
+                );
+                return { record: existing, outcome: 'retry' as const };
+            }
             const record: ProviderEvent = {
                 id: this.deps.ids.id(),
                 provider: this.deps.payments.name,
@@ -69,40 +95,69 @@ export class ProviderEventService {
                 receivedAt: this.deps.clock.now().toISOString()
             };
             await db.providerEvents.insert(record);
-            return { record, duplicate: false };
+            return { record, outcome: 'new' as const };
         });
-        if (stored.duplicate) return { status: 'duplicate', eventId: stored.record.id };
-        return this.process(stored.record.id, event);
+        switch (stored.outcome) {
+            case 'duplicate':
+                return { status: 'duplicate', eventId: stored.record.id };
+            case 'in_progress':
+                throw new AppError('UNAVAILABLE', 'This event is still being processed. Please retry later.', { retryable: true });
+            case 'retry':
+                return this.process(stored.record.id, this.storedEvent(stored.record));
+            default:
+                return this.process(stored.record.id, event);
+        }
     }
 
-    /** Manual recovery for FAILED events (finance operators). */
+    /**
+     * Whether the event still has to be applied: FAILED, or RECEIVED for longer than the grace period (its
+     * processing never completed). Redeliveries and the finance "Reprocess" action use the same rule.
+     */
+    reprocessable(event: Pick<ProviderEvent, 'status' | 'receivedAt'>): boolean {
+        if (event.status === 'FAILED') return true;
+        return event.status === 'RECEIVED' && this.deps.clock.now().getTime() - Date.parse(event.receivedAt) >= RECEIVED_GRACE_MS;
+    }
+
+    /** Manual recovery (finance operators) of FAILED events and of events left RECEIVED past the grace period. */
     async reprocess(actor: Actor, eventId: string) {
         if (!hasRole(actor, 'finance_operator')) throw forbidden();
-        const record = await this.deps.uow.run(async (db) => db.providerEvents.get(eventId));
-        if (!record) throw notFound('Event');
-        if (record.status !== 'FAILED') throw new AppError('CONFLICT', 'Only failed events can be reprocessed');
-        const raw = record.payload as {
-            id: string;
-            type: VerifiedProviderEvent['type'];
-            created: string;
-            data: VerifiedProviderEvent['data'];
-        };
-        await this.deps.uow.run((db) =>
-            audit(this.deps, db, actor, 'provider_event.reprocess_requested', { type: 'provider_event', id: eventId })
-        );
-        return this.process(eventId, {
-            externalEventId: raw.id,
-            type: raw.type,
-            occurredAt: raw.created,
+        const record = await this.deps.uow.run(async (db) => {
+            const found = await db.providerEvents.get(eventId);
+            if (!found) throw notFound('Event');
+            if (!this.reprocessable(found))
+                throw new AppError('CONFLICT', 'Only failed events, or events left unprocessed for over a minute, can be reprocessed');
+            await audit(
+                this.deps,
+                db,
+                actor,
+                'provider_event.reprocess_requested',
+                { type: 'provider_event', id: eventId },
+                { metadata: { status: found.status } }
+            );
+            return found;
+        });
+        return this.process(eventId, this.storedEvent(record));
+    }
+
+    /** The verified event as recorded at ingestion (the stored payload is immutable). */
+    private storedEvent(record: ProviderEvent): VerifiedProviderEvent {
+        const raw = record.payload as { data?: VerifiedProviderEvent['data'] };
+        return {
+            externalEventId: record.externalEventId,
+            type: record.type,
+            occurredAt: record.occurredAt,
             data: raw.data ?? {},
             raw: record.payload
-        });
+        };
     }
 
     private async process(eventId: string, event: VerifiedProviderEvent) {
-        let transactionId: string | undefined;
+        let applied: { transactionId?: string } | undefined;
         try {
-            transactionId = await this.deps.uow.run(async (db) => {
+            applied = await this.deps.uow.run(async (db) => {
+                // Re-read under the unit of work: a concurrent delivery or reprocess may have handled it already.
+                const current = await db.providerEvents.get(eventId);
+                if (!current || !UNHANDLED.has(current.status)) return undefined;
                 const outcome = await this.apply(db, eventId, event);
                 await db.providerEvents.update(eventId, {
                     status: outcome.ignored ? 'IGNORED' : outcome.error ? 'FAILED' : 'PROCESSED',
@@ -110,14 +165,17 @@ export class ProviderEventService {
                     transactionId: outcome.transactionId,
                     processedAt: this.deps.clock.now().toISOString()
                 });
-                return outcome.transactionId;
+                return { transactionId: outcome.transactionId };
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Unknown error';
-            await this.deps.uow.run(async (db) => {
+            const marked = await this.deps.uow.run(async (db) => {
+                // Never overwrite the outcome of a concurrent processing that succeeded meanwhile.
+                const current = await db.providerEvents.get(eventId);
+                if (!current || !UNHANDLED.has(current.status)) return false;
                 await db.providerEvents.update(eventId, {
                     status: 'FAILED',
-                    error: message.slice(0, 500),
+                    error: truncateText(message, 500),
                     processedAt: this.deps.clock.now().toISOString()
                 });
                 await audit(
@@ -126,13 +184,15 @@ export class ProviderEventService {
                     SYSTEM,
                     'provider_event.processing_failed',
                     { type: 'provider_event', id: eventId },
-                    { metadata: { type: event.type, error: message.slice(0, 200) } }
+                    { metadata: { type: event.type, error: truncateText(message, 200) } }
                 );
                 await notifyRole(this.deps, db, 'finance_operator', 'provider_event.failed', { type: event.type });
+                return true;
             });
-            return { status: 'failed' as const, eventId };
+            return { status: marked ? ('failed' as const) : ('duplicate' as const), eventId };
         }
-        if (transactionId) await this.payments.dispatchPending(transactionId);
+        if (!applied) return { status: 'duplicate' as const, eventId };
+        if (applied.transactionId) await this.payments.dispatchPending(applied.transactionId);
         const final = await this.deps.uow.run((db) => db.providerEvents.get(eventId));
         return { status: final?.status === 'FAILED' ? ('failed' as const) : ('processed' as const), eventId };
     }
@@ -167,7 +227,7 @@ export class ProviderEventService {
                 if (event.type === 'payment.failed') {
                     await db.paymentInstructions.update(instruction.id, {
                         status: 'FAILED',
-                        failureReason: d.reason?.slice(0, 300),
+                        failureReason: typeof d.reason === 'string' ? truncateText(d.reason, 300) : undefined,
                         updatedAt: this.deps.clock.now().toISOString()
                     });
                     if (tx.status === 'FUNDING_PENDING')
@@ -231,7 +291,7 @@ export class ProviderEventService {
                 } else {
                     await db.payouts.update(payout.id, {
                         status: 'FAILED',
-                        failureReason: d.reason?.slice(0, 300) ?? 'Reported failed by partner',
+                        failureReason: typeof d.reason === 'string' ? truncateText(d.reason, 300) : 'Reported failed by partner',
                         updatedAt: now
                     });
                     await this.reverseAuthorization(db, `release:${payout.id}`, 'payout failed at partner');
@@ -292,7 +352,7 @@ export class ProviderEventService {
                 } else {
                     await db.refunds.update(refund.id, {
                         status: 'FAILED',
-                        failureReason: d.reason?.slice(0, 300) ?? 'Reported failed by partner',
+                        failureReason: typeof d.reason === 'string' ? truncateText(d.reason, 300) : 'Reported failed by partner',
                         updatedAt: now
                     });
                     await this.reverseAuthorization(db, `refund-auth:${refund.id}`, 'refund failed at partner');
@@ -321,37 +381,64 @@ export class ProviderEventService {
     private async onFundsConfirmed(db: Db, eventId: string, event: VerifiedProviderEvent, tx: Transaction, instructionId: string) {
         const instruction = (await db.paymentInstructions.get(instructionId))!;
         if (instruction.status === 'FUNDED') return { transactionId: tx.id, ignored: true };
-        const matches =
+        const reportedMatches =
             event.data.amountMinor !== undefined &&
             BigInt(event.data.amountMinor) === instruction.amount.amountMinor &&
             event.data.currency === instruction.amount.currency;
-        if (!matches) {
+        // The instruction must also be the one for the transaction as it stands: issued for the current
+        // contract version (fund:<tx>:<version>[:<retry>]) and for the current amount. An amendment may have
+        // superseded it (e.g. a late confirmation of a FAILED instruction, or one issued during the amendment).
+        const fundingKey = `fund:${tx.id}:${tx.currentContractVersionId}`;
+        const instructionCurrent =
+            (instruction.idempotencyKey === fundingKey || instruction.idempotencyKey.startsWith(`${fundingKey}:`)) &&
+            instruction.amount.amountMinor === tx.amount.amountMinor &&
+            instruction.amount.currency === tx.amount.currency;
+        if (!reportedMatches || !instructionCurrent) {
             // Never advance on a partial / different amount: route to finance & compliance.
             const now = this.deps.clock.now().toISOString();
             const fingerprint = `FUNDING_AMOUNT_MISMATCH:${eventId}`;
-            await db.riskAlerts.insert({
-                id: this.deps.ids.id(),
-                ruleId: 'FUNDING_AMOUNT_MISMATCH',
-                category: 'TRANSACTION',
-                severity: 'CRITICAL',
-                transactionId: tx.id,
-                fingerprint,
-                reasons: [
-                    {
-                        code: 'REPORTED_AMOUNT_DIFFERS',
-                        params: {
-                            reportedMinor: event.data.amountMinor ?? 'n/a',
-                            reportedCurrency: event.data.currency ?? 'n/a',
-                            expectedMinor: instruction.amount.amountMinor.toString()
-                        }
-                    }
-                ],
-                recommendedAction: 'CONTACT_PARTNER_AND_BUYER',
-                blocksFundsMovement: true,
-                status: 'OPEN',
-                createdAt: now,
-                updatedAt: now
-            });
+            // Idempotent: a reprocessed or redelivered event does not raise the alert twice.
+            if (!(await db.riskAlerts.findOne({ fingerprint })))
+                await db.riskAlerts.insert({
+                    id: this.deps.ids.id(),
+                    ruleId: 'FUNDING_AMOUNT_MISMATCH',
+                    category: 'TRANSACTION',
+                    severity: 'CRITICAL',
+                    transactionId: tx.id,
+                    fingerprint,
+                    reasons: [
+                        ...(reportedMatches
+                            ? []
+                            : [
+                                  {
+                                      code: 'REPORTED_AMOUNT_DIFFERS',
+                                      params: {
+                                          reportedMinor: event.data.amountMinor ?? 'n/a',
+                                          reportedCurrency: event.data.currency ?? 'n/a',
+                                          expectedMinor: instruction.amount.amountMinor.toString()
+                                      }
+                                  }
+                              ]),
+                        ...(instructionCurrent
+                            ? []
+                            : [
+                                  {
+                                      code: 'INSTRUCTION_NOT_CURRENT',
+                                      params: {
+                                          instructionMinor: instruction.amount.amountMinor.toString(),
+                                          instructionCurrency: instruction.amount.currency,
+                                          expectedMinor: tx.amount.amountMinor.toString(),
+                                          expectedCurrency: tx.amount.currency
+                                      }
+                                  }
+                              ])
+                    ],
+                    recommendedAction: 'CONTACT_PARTNER_AND_BUYER',
+                    blocksFundsMovement: true,
+                    status: 'OPEN',
+                    createdAt: now,
+                    updatedAt: now
+                });
             await audit(
                 this.deps,
                 db,
@@ -362,8 +449,10 @@ export class ProviderEventService {
             );
             await notifyRole(this.deps, db, 'finance_operator', 'payment.amount_mismatch', { reference: tx.reference }, tx.id);
             await notifyRole(this.deps, db, 'compliance_analyst', 'payment.amount_mismatch', { reference: tx.reference }, tx.id);
-            return { transactionId: tx.id, error: 'AMOUNT_MISMATCH' };
+            return { transactionId: tx.id, error: reportedMatches ? 'INSTRUCTION_NOT_CURRENT' : 'AMOUNT_MISMATCH' };
         }
+        // The instruction is FUNDED before the status update: the database refuses FUNDS_CONFIRMED without a
+        // FUNDED instruction covering exactly the transaction's amount (transactions_before_update).
         const now = this.deps.clock.now().toISOString();
         await db.paymentInstructions.update(instruction.id, { status: 'FUNDED', updatedAt: now });
         await this.ledger.post(
