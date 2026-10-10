@@ -18,7 +18,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ a
     const { t, locale, dict } = await getI18n();
     const config = loadConfig();
     const { auth } = await searchParams;
-    // Email sign-in (Supabase Auth) and the demo persona picker can coexist in demo mode; production has no personas.
+    // Either e-mail sign-in (Supabase Auth, real accounts) or the persona picker (persona demo), never both:
+    // persona login requires AUTH_PROVIDER=demo, and a database never holds personas next to real accounts.
     const emailSignIn = config.auth.provider === 'supabase';
     return (
         <div className="min-h-dvh bg-gradient-to-b from-primary-soft/60 to-background">

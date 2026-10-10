@@ -7,14 +7,6 @@
  * session only proves the e-mail address and the second factor.
  */
 
-/** E-mail link types accepted by the callback (sign-in only: no recovery, invite or e-mail change links). */
-export const EMAIL_LINK_TYPES = ['email', 'magiclink', 'signup'] as const;
-export type EmailLinkType = (typeof EMAIL_LINK_TYPES)[number];
-
-export function isEmailLinkType(value: unknown): value is EmailLinkType {
-    return typeof value === 'string' && (EMAIL_LINK_TYPES as readonly string[]).includes(value);
-}
-
 /** Identity as confirmed by the provider's server (never decoded from a cookie alone). */
 export interface VerifiedIdentity {
     authUserId: string;
@@ -65,10 +57,12 @@ export function isAuthGatewayError(error: unknown): error is AuthGatewayError {
 export interface AuthGateway {
     /** Sends a magic link / OTP e-mail. Creates the provider account if it does not exist yet. */
     sendMagicLink(email: string, redirectTo: string): Promise<void>;
-    /** PKCE: exchanges the `code` of the callback URL for a provider session (same browser as the request). */
+    /**
+     * PKCE: exchanges the `code` of the callback URL for a provider session. The only way to sign in: the code is
+     * bound to the browser that asked for the link (code verifier cookie), so a link forwarded to, or forced on,
+     * another browser opens nothing there. Cross-browser `token_hash` links are deliberately not supported.
+     */
     exchangeCode(code: string): Promise<void>;
-    /** Verifies a `token_hash` link (works across browsers). */
-    verifyEmailLink(tokenHash: string, type: EmailLinkType): Promise<void>;
     /** Identity of the current provider session, validated by the provider's server; undefined without a session. */
     currentIdentity(): Promise<VerifiedIdentity | undefined>;
     listTotpFactors(): Promise<TotpFactor[]>;

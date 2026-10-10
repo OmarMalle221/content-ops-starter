@@ -14,7 +14,6 @@ import {
     AuthGatewayError,
     type AssuranceLevel,
     type AuthGateway,
-    type EmailLinkType,
     type TotpEnrolment,
     type TotpFactor,
     type VerifiedIdentity
@@ -98,11 +97,6 @@ export class SupabaseAuthGateway implements AuthGateway {
 
     async exchangeCode(code: string): Promise<void> {
         const { error } = await this.client.auth.exchangeCodeForSession(code);
-        if (error) throw toGatewayError(error);
-    }
-
-    async verifyEmailLink(tokenHash: string, type: EmailLinkType): Promise<void> {
-        const { error } = await this.client.auth.verifyOtp({ token_hash: tokenHash, type });
         if (error) throw toGatewayError(error);
     }
 

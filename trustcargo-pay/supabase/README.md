@@ -20,8 +20,8 @@ reported by, a licensed payment partner. The MVP runs in **SIMULATION** mode onl
 
 ## Conventions
 
-- Nothing is created in `public` (checked by `tests/rls_test.sql`): the target Supabase project is
-  shared with another application.
+- Nothing is created in `public` (checked by `tests/rls_test.sql`): the development Supabase project
+  (`cargoflow-verify`) is shared with another application, CargoFlow.
 - The server's Postgres adapter (`src/server/adapters/postgres/tables.ts`) maps every entity of the
   TypeScript model losslessly: optional fields ↔ NULL, `bigint` ↔ `bigint`, dates without timezone
   shift, ordered child rows (`user_platform_roles.ordinal`, `reconciliation_items.ordinal`), polymorphic
@@ -92,6 +92,30 @@ reported by, a licensed payment partner. The MVP runs in **SIMULATION** mode onl
 
 ## Apply to a Supabase project
 
+Each file in `migrations/` is applied once, in filename order. How depends on the project.
+
+### Shared development project (`cargoflow-verify`)
+
+**Never run `supabase db push` or `supabase migration repair` against it.** Its migration history
+belongs to CargoFlow: `db push` stops on CargoFlow's versions that are not in this directory, and the
+`migration repair --status reverted …` it suggests would rewrite CargoFlow's history. Instead:
+
+1. Check what is already there: whether schema `trustcargo` exists, and the TrustCargo entries listed by
+   the Supabase MCP `list_migrations`.
+2. Apply each missing file **one by one, in filename order**:
+   - with the Supabase MCP `apply_migration`, the file name without `.sql` as the migration name and the
+     file content, unchanged, as the query; or
+   - in the dashboard SQL editor, one file at a time.
+3. The MCP may ask for an explicit confirmation before running `REVOKE` or `DROP` statements (the RLS
+   migration revokes privileges, for example): review them and confirm; never edit a file to avoid the
+   prompt.
+
+The migrations are not idempotent (plain `create table`): never apply a file twice. To start over on
+this project, drop the schemas `trustcargo`, `trustcargo_private` and `trustcargo_sim`
+(`drop schema … cascade`, TrustCargo data only) and apply the files again.
+
+### Dedicated project (staging, production)
+
 ```bash
 supabase link --project-ref <project-ref>
 supabase db push          # applies supabase/migrations in filename order
@@ -131,7 +155,7 @@ npm run test:pg           # = bash scripts/test-integration-pg.sh
 Same cluster conventions (`.tmp/pgdata-integration`, port 54329, or the server of `DATABASE_URL`;
 the shared bootstrap is `scripts/lib/pg-cluster.sh`). The script builds a template database (shim +
 migrations), then runs `vitest` on `tests/integration`: every test app clones the template into its own
-empty database, connects with `DATABASE_ROLE=service_role`, and drops it when the test ends.
+empty database, connects with the default `DATABASE_ROLE` (`service_role`), and drops it when the test ends.
 `tests/integration/postgres-adapter.test.ts` (skipped without `TEST_PG_ADMIN_URL`) checks lossless
 round trips of every table, ordering, error mapping, transactions, the audit chain after a restart,
 cross-pool serialisation, privileges, and compares the SQL transition guards with the TypeScript

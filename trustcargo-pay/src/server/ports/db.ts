@@ -67,8 +67,17 @@ export interface Db {
     nextSequence(name: string): Promise<number>;
 }
 
+export interface UnitOfWorkOptions {
+    /**
+     * Maintenance transaction that may legitimately last minutes, or wait that long for another instance's: the
+     * first-boot seed. The Postgres adapter raises its lock and statement timeouts for it only. Ignored by nested
+     * runs (they join the outer unit of work) and by the in-memory adapter.
+     */
+    longRunning?: boolean;
+}
+
 export interface UnitOfWork {
-    run<T>(fn: (db: Db) => Promise<T>): Promise<T>;
+    run<T>(fn: (db: Db) => Promise<T>, options?: UnitOfWorkOptions): Promise<T>;
 }
 
 export class ConcurrencyError extends Error {

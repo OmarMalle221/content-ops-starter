@@ -14,14 +14,15 @@ const BASE_ENV = {
 
 /**
  * Fresh application seeded with reference data. In-memory by default; with TEST_PG_ADMIN_URL
- * (scripts/test-integration-pg.sh) it runs on its own empty migrated Postgres database, connected as
- * service_role, which is dropped when the test finishes.
+ * (scripts/test-integration-pg.sh) it runs on its own empty migrated Postgres database, which is dropped
+ * when the test finishes. DATABASE_ROLE is left to its default (service_role); document files stay in
+ * memory, which DATABASE_URL requires to be explicit. `env` adds or overrides variables.
  */
-export async function createTestApp(options: { seed?: boolean } = {}): Promise<App> {
-    let env: Record<string, string> = BASE_ENV;
+export async function createTestApp(options: { seed?: boolean; env?: Record<string, string> } = {}): Promise<App> {
+    let env: Record<string, string> = { ...BASE_ENV, ...options.env };
     if (usePostgres) {
         const database = await createTestDatabase();
-        env = { ...BASE_ENV, DATABASE_URL: database.url, DATABASE_ROLE: 'service_role', DATABASE_POOL_MAX: '2' };
+        env = { ...BASE_ENV, DATABASE_URL: database.url, STORAGE_PROVIDER: 'memory', DATABASE_POOL_MAX: '2', ...options.env };
         const app = createApp(loadConfig(env as unknown as NodeJS.ProcessEnv));
         onTestFinished(async () => {
             await app.persistence.close();

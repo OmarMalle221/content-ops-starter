@@ -997,6 +997,7 @@ describe.skipIf(!usePostgres)('Postgres adapter', () => {
                 MOCK_PROVIDER_WEBHOOK_SECRET: 'test-webhook-secret-0123456789',
                 DATABASE_URL: url,
                 DATABASE_ROLE: 'service_role',
+                STORAGE_PROVIDER: 'memory',
                 DATABASE_POOL_MAX: '2'
             } as unknown as NodeJS.ProcessEnv);
         const first = createApp(env(database.url));
@@ -1029,7 +1030,8 @@ describe.skipIf(!usePostgres)('Postgres adapter', () => {
             SESSION_SECRET: 'test-session-secret-0123456789-abcdefghij',
             MOCK_PROVIDER_WEBHOOK_SECRET: 'test-webhook-secret-0123456789',
             DATABASE_URL: database.url,
-            DATABASE_ROLE: 'service_role'
+            DATABASE_ROLE: 'service_role',
+            STORAGE_PROVIDER: 'memory'
         } as unknown as NodeJS.ProcessEnv);
         const apps = [createApp(config), createApp(config), createApp({ ...config, mode: 'production' })];
         const global = globalThis as unknown as { __trustcargo?: Promise<unknown> };

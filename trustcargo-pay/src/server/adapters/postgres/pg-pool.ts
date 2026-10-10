@@ -22,19 +22,25 @@ const typeParsers: pg.CustomTypesConfig = {
     }) as pg.CustomTypesConfig['getTypeParser']
 };
 
-/** With an explicit CA, TLS settings in the URL (sslmode, sslrootcert...) would override ours: drop them. */
-function connectionString(config: DatabaseConfig): string {
-    if (!config.sslCa) return config.url;
+/** URL parameters pg turns into TLS settings; it merges them OVER the explicit `ssl` option (e.g. `ssl=0` → no TLS). */
+const URL_TLS_PARAMS = ['ssl', 'sslmode', 'sslnegotiation', 'sslcert', 'sslkey', 'sslrootcert', 'sslpassword', 'uselibpqcompat'];
+
+/**
+ * With DATABASE_SSL_CA, TLS is always on and the server certificate is verified against that CA: the URL's TLS
+ * parameters are dropped so they cannot downgrade it. loadConfig requires the CA for any non-local host; without it
+ * (loopback or Unix socket only) the URL is used as is.
+ */
+export function pgConnectionOptions(config: DatabaseConfig): Pick<pg.PoolConfig, 'connectionString' | 'ssl'> {
+    if (!config.sslCa) return { connectionString: config.url, ssl: undefined };
     const url = new URL(config.url);
-    for (const key of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert', 'sslpassword', 'uselibpqcompat']) url.searchParams.delete(key);
-    return url.toString();
+    for (const key of URL_TLS_PARAMS) url.searchParams.delete(key);
+    return { connectionString: url.toString(), ssl: { ca: config.sslCa, rejectUnauthorized: true } };
 }
 
 export function createPgPool(config: DatabaseConfig, options: { max: number; applicationName: string }): pg.Pool {
     const pool = new pg.Pool({
-        connectionString: connectionString(config),
+        ...pgConnectionOptions(config),
         max: options.max,
-        ssl: config.sslCa ? { ca: config.sslCa, rejectUnauthorized: true } : undefined,
         application_name: options.applicationName,
         types: typeParsers
     });

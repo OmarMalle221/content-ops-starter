@@ -1,7 +1,12 @@
 /**
- * Demo data. Reference data is inserted directly; scenarios are produced by driving the real
+ * Seed data. Reference data is inserted directly; scenarios are produced by driving the real
  * services (and the mock partner's signed events) so that statuses, ledger, audit chain and risk
  * alerts are exactly what the product would produce. Everything is fictitious.
+ *
+ * - seedPlatformReferenceData: what any deployment needs to operate (security settings, corridors, the
+ *   simulated partner connection). The only seed of a database with real accounts (AUTH_PROVIDER=supabase).
+ * - seedDemoPersonas / seedDemoScenarios: persona demo only (AUTH_PROVIDER=demo). Personas never share a
+ *   database with real accounts (src/server/instance.ts).
  */
 import { DEFAULT_VEHICLE_MILESTONES } from '@/domain/transaction/contract';
 import type { CreateVehicleTransactionInput } from '@/lib/validation/schemas';
@@ -13,10 +18,12 @@ import { makeDemoPdf, makeDemoPng } from './files';
 import { DEMO_TOTP_SECRET, PERSONAS } from './personas';
 
 const DAY = 86_400_000;
+const T0 = '2026-01-10T14:00:00.000Z';
 
-export async function seedReferenceData(app: App) {
+/** Reference data needed to operate, with or without personas. */
+export async function seedPlatformReferenceData(app: App) {
     const { deps } = app;
-    const t0 = '2026-01-10T14:00:00.000Z';
+    const t0 = T0;
     await deps.uow.run(async (db) => {
         await db.securitySettings.insert({ id: 'default', ...DEFAULT_SECURITY_SETTINGS, updatedAt: t0 });
         await db.corridors.insert({
@@ -54,7 +61,14 @@ export async function seedReferenceData(app: App) {
             regulatoryStatusNote: 'Simulation uniquement — aucun partenaire juridiquement habilité n’est intégré. Aucun fonds réel.',
             createdAt: t0
         });
+    });
+}
 
+/** Persona demo only: the fictitious personas with their verifications, organisations, payout account and sessions. */
+export async function seedDemoPersonas(app: App) {
+    const { deps } = app;
+    const t0 = T0;
+    await deps.uow.run(async (db) => {
         const ids: Record<string, string> = {};
         for (const p of PERSONAS) {
             const id = deps.ids.id();
@@ -213,6 +227,14 @@ export async function seedReferenceData(app: App) {
                 ipHash: pseudonymize(app.config.sessionSecret, `demo-ip:${key}`)
             });
         }
+    });
+}
+
+/** Platform reference data and the demo personas, in one unit of work (persona demo and tests). */
+export async function seedReferenceData(app: App) {
+    await app.deps.uow.run(async () => {
+        await seedPlatformReferenceData(app);
+        await seedDemoPersonas(app);
     });
 }
 

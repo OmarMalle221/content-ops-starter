@@ -11,7 +11,6 @@ import {
     AuthGatewayError,
     type AssuranceLevel,
     type AuthGateway,
-    type EmailLinkType,
     type TotpFactor,
     type VerifiedIdentity
 } from '@/server/ports/auth-gateway';
@@ -39,10 +38,6 @@ class FakeGateway implements AuthGateway {
     }
     async exchangeCode(code: string) {
         this.calls.push(`exchangeCode:${code}`);
-        if (this.failWith) throw this.failWith;
-    }
-    async verifyEmailLink(tokenHash: string, type: EmailLinkType) {
-        this.calls.push(`verifyEmailLink:${tokenHash}:${type}`);
         if (this.failWith) throw this.failWith;
     }
     async currentIdentity() {
@@ -78,14 +73,21 @@ class FakeSession implements SessionControl {
     mfaMarked = 0;
     ended = 0;
     onboarding: string | undefined;
+    /** User of the browser's current tc_session. */
+    current: string | undefined;
+    async currentUserId() {
+        return this.current;
+    }
     async start(userId: string) {
         this.started.push(userId);
+        this.current = userId;
     }
     async markMfaVerified() {
         this.mfaMarked += 1;
     }
     async end() {
         this.ended += 1;
+        this.current = undefined;
     }
     async startOnboarding(authUserId: string) {
         this.onboarding = authUserId;
@@ -192,6 +194,18 @@ describe('magic link request', () => {
             code: 'RATE_LIMITED'
         });
     });
+
+    it('caps the links sent per process, whatever the client IP, to protect the project e-mail quota', async () => {
+        const { app, gateway } = await setup();
+        const results = [];
+        for (let i = 0; i < 25; i += 1) {
+            results.push(
+                await app.accounts.requestMagicLink({ gateway, client: { ip: `198.51.100.${i}`, userAgent: 'x' } }, `u${i}@example.test`)
+            );
+        }
+        expect(gateway.sent).toHaveLength(20);
+        expect(results.slice(20)).toEqual(Array(5).fill({ kind: 'error', code: 'RATE_LIMITED' }));
+    });
 });
 
 describe('e-mail link callback', () => {
@@ -210,22 +224,95 @@ describe('e-mail link callback', () => {
         expect(await auditActions(app)).toContain('auth.signed_in');
     });
 
-    it('falls back to /dashboard for an unsafe next and accepts token_hash links of sign-in types only', async () => {
+    it('falls back to /dashboard for an unsafe next and accepts the PKCE code only (token_hash links are ignored)', async () => {
         const { app, gateway, session, ctx } = await setup();
         const user = await insertUser(app);
         gateway.identity = identity({ authUserId: user.id });
-        expect(await app.accounts.completeSignIn(ctx, { tokenHash: 'th_1', type: 'email', next: '/\\evil.example' })).toEqual({
+        expect(await app.accounts.completeSignIn(ctx, { code: 'c1', next: '/\\evil.example' })).toEqual({
             kind: 'redirect',
             to: '/dashboard'
         });
-        expect(gateway.calls).toEqual(['verifyEmailLink:th_1:email']);
-        expect(await app.accounts.completeSignIn(ctx, { tokenHash: 'th_2', type: 'recovery' })).toEqual({
-            kind: 'redirect',
-            to: '/?auth=error'
-        });
-        expect(await app.accounts.completeSignIn(ctx, {})).toEqual({ kind: 'redirect', to: '/?auth=error' });
-        expect(gateway.calls.filter((c) => c.startsWith('verifyEmailLink'))).toHaveLength(1);
+        // What the route would pass for `?token_hash=…&type=email`: no code, so nothing is verified.
+        const tokenHashLink = { token_hash: 'th_1', type: 'email' } as unknown as Parameters<App['accounts']['completeSignIn']>[1];
+        expect(await app.accounts.completeSignIn(ctx, tokenHashLink)).toEqual({ kind: 'redirect', to: '/?auth=error' });
+        expect(gateway.calls).toEqual(['exchangeCode:c1']);
+        expect('verifyEmailLink' in gateway).toBe(false);
         expect(session.started).toEqual([user.id]);
+    });
+
+    it('never signs anybody out on a callback without a usable code (no logout CSRF)', async () => {
+        const { app, gateway, session, ctx } = await setup();
+        const user = await insertUser(app);
+        session.current = user.id;
+        gateway.identity = identity({ authUserId: user.id });
+        // No parameter, an over-long code, a code the provider rejects, then the per-IP limit.
+        expect(await app.accounts.completeSignIn(ctx, {})).toEqual({ kind: 'redirect', to: '/?auth=error' });
+        expect(await app.accounts.completeSignIn(ctx, { code: 'x'.repeat(600) })).toEqual({ kind: 'redirect', to: '/?auth=error' });
+        gateway.failWith = new AuthGatewayError('rejected', 'flow_state_not_found');
+        expect(await app.accounts.completeSignIn(ctx, { code: 'forged' })).toEqual({ kind: 'redirect', to: '/?auth=error' });
+        for (let i = 0; i < 25; i += 1) await app.accounts.completeSignIn(ctx, {});
+        expect(gateway.calls).toEqual(['exchangeCode:forged']);
+        expect(gateway.calls).not.toContain('signOut');
+        expect(gateway.identity?.authUserId).toBe(user.id);
+        expect(session).toMatchObject({ current: user.id, ended: 0, started: [] });
+    });
+
+    it('ends and audits the session of another user instead of silently replacing it', async () => {
+        const { app, gateway, session, ctx } = await setup();
+        const previous = await personaActor(app, 'buyer');
+        const user = await insertUser(app);
+        session.current = previous.userId;
+        gateway.identity = identity({ authUserId: user.id });
+        expect(await app.accounts.completeSignIn(ctx, { code: 'c' })).toEqual({ kind: 'redirect', to: '/dashboard' });
+        expect(session).toMatchObject({ ended: 1, started: [user.id], current: user.id });
+        const ended = await app.deps.uow.run((db) => db.auditEvents.findBy({ action: 'auth.session_ended' }));
+        expect(ended.map((e) => [e.entityId, e.metadata])).toEqual([[previous.userId, { reason: 'another_account_signed_in' }]]);
+
+        // The same user signing in again keeps nothing else to end; a new identity going to onboarding ends it too.
+        expect(await app.accounts.completeSignIn(ctx, { code: 'c' })).toEqual({ kind: 'redirect', to: '/dashboard' });
+        expect(session.ended).toBe(1);
+        gateway.identity = identity({ email: 'newcomer@example.test' });
+        expect(await app.accounts.completeSignIn(ctx, { code: 'c' })).toEqual({ kind: 'redirect', to: '/onboarding' });
+        expect(session).toMatchObject({ ended: 2, current: undefined, onboarding: gateway.identity.authUserId });
+    });
+
+    it('updates the profile e-mail to the verified provider address, auditing pseudonymised addresses only', async () => {
+        const { app, gateway, session, ctx } = await setup();
+        const user = await insertUser(app, { email: 'bob@corp.example' });
+        gateway.identity = identity({ authUserId: user.id, email: 'Bob@Gmail.Example' });
+        expect(await app.accounts.completeSignIn(ctx, { code: 'c' })).toEqual({ kind: 'redirect', to: '/dashboard' });
+        expect((await app.deps.uow.run((db) => db.users.get(user.id)))!.email).toBe('bob@gmail.example');
+        expect(session.started).toEqual([user.id]);
+        const synced = await app.deps.uow.run((db) => db.auditEvents.findBy({ action: 'user.email_synced' }));
+        expect(synced).toHaveLength(1);
+        expect(synced[0]!.metadata).toEqual({
+            previousEmailHash: expect.stringMatching(/^[0-9a-f]{32}$/),
+            emailHash: expect.stringMatching(/^[0-9a-f]{32}$/),
+            provider: 'supabase'
+        });
+        expect(JSON.stringify(await app.deps.uow.run((db) => db.auditEvents.list()))).not.toMatch(/bob@/i);
+    });
+
+    it('refuses a changed verified address that another profile already uses, and changes nothing', async () => {
+        const { app, gateway, session, ctx } = await setup();
+        const user = await insertUser(app, { email: 'bob@corp.example' });
+        gateway.identity = identity({ authUserId: user.id, email: PERSONAS[0]!.email });
+        expect(await app.accounts.completeSignIn(ctx, { code: 'c' })).toEqual({ kind: 'redirect', to: '/?auth=error' });
+        expect((await app.deps.uow.run((db) => db.users.get(user.id)))!.email).toBe('bob@corp.example');
+        expect(session.started).toEqual([]);
+        expect(gateway.calls).toContain('signOut');
+        const refused = await app.deps.uow.run((db) => db.auditEvents.findBy({ action: 'auth.sign_in_refused' }));
+        expect(refused.map((e) => e.metadata)).toEqual([{ reason: 'email_belongs_to_another_account' }]);
+        expect(await auditActions(app)).not.toContain('user.email_synced');
+    });
+
+    it('caps code exchanges per process, whatever the client IP', async () => {
+        const { app, gateway, ctx } = await setup();
+        gateway.failWith = new AuthGatewayError('rejected', 'flow_state_not_found');
+        for (let i = 0; i < 130; i += 1) {
+            await app.accounts.completeSignIn({ ...ctx, client: { ip: `198.51.100.${i % 250}`, userAgent: 'x' } }, { code: `c${i}` });
+        }
+        expect(gateway.calls.filter((c) => c.startsWith('exchangeCode'))).toHaveLength(120);
     });
 
     it('sends a verified identity without profile to onboarding', async () => {

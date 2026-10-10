@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import type { App } from '@/server/app';
 import type { Actor } from '@/server/auth/actor';
 import { getActor } from '@/server/auth/session';
+import { clientIp } from '@/server/http/client-ip';
 import { AppError, isAppError } from '@/server/errors';
 import { getApp } from '@/server/instance';
 import { logger } from '@/server/logger';
@@ -75,7 +76,7 @@ export function apiRoute<P>(
                 if (!ct.startsWith('application/json')) throw new AppError('VALIDATION', 'Content-Type must be application/json');
             }
             const rl = options.rateLimit ?? { limit: 120, windowMs: 60_000 };
-            const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+            const ip = clientIp(req.headers, app.config.clientIpHeader);
             const limited = app.rateLimiter.consume(
                 `api:${actor.userId}:${pseudonymize(app.config.sessionSecret, ip)}:${req.nextUrl.pathname}`,
                 rl.limit,
