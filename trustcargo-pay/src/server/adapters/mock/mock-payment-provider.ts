@@ -7,9 +7,10 @@
  *
  * Its records (instructions, transfers, statement) live in a SimulatedPartnerStore: in memory by default,
  * in schema `trustcargo_sim` with Postgres persistence, so they survive restarts and are shared by every
- * instance. Store writes are committed before the corresponding webhook is emitted. The simulated outage
- * counter (`simulateOutage`) stays in process memory: with several instances, only the instance that
- * received the request fails its next partner calls.
+ * instance. Store writes are committed before the corresponding webhook is emitted, except during
+ * `withStagedWrites` (first-boot demo seed), which publishes them only once the seed has succeeded. The
+ * simulated outage counter (`simulateOutage`) stays in process memory: with several instances, only the
+ * instance that received the request fails its next partner calls.
  */
 import type { Money } from '@/domain/money';
 import { randomToken } from '@/server/security/crypto';
@@ -29,7 +30,12 @@ import {
     type VerifiedProviderEvent
 } from '@/server/ports/payment-provider';
 import type { Clock } from '@/server/ports/providers';
-import { MemorySimulatedPartnerStore, type SimulatedPartnerStore, type TransferKind } from './simulated-partner-store';
+import {
+    MemorySimulatedPartnerStore,
+    StagedSimulatedPartnerStore,
+    type SimulatedPartnerStore,
+    type TransferKind
+} from './simulated-partner-store';
 
 type Delivery = (rawBody: string, signatureHeader: string) => Promise<unknown>;
 
@@ -43,8 +49,28 @@ export class MockPaymentProvider implements PaymentProvider {
     constructor(
         private readonly webhookSecret: string,
         private readonly clock: Clock,
-        private readonly store: SimulatedPartnerStore = new MemorySimulatedPartnerStore()
+        private store: SimulatedPartnerStore = new MemorySimulatedPartnerStore()
     ) {}
+
+    /**
+     * Runs `fn` with this partner's writes held back (StagedSimulatedPartnerStore), then publishes them in order
+     * once `fn` has succeeded; if it fails they are discarded. The first-boot demo seed runs this way, so a seed
+     * that rolls back leaves no partner records behind. Every partner call of this instance is staged meanwhile:
+     * only for a run that has the instance to itself (the seed, before the instance serves requests).
+     */
+    async withStagedWrites<T>(fn: () => Promise<T>): Promise<T> {
+        const base = this.store;
+        const staged = new StagedSimulatedPartnerStore(base);
+        this.store = staged;
+        try {
+            const result = await fn();
+            this.store = base;
+            await staged.publish();
+            return result;
+        } finally {
+            this.store = base;
+        }
+    }
 
     setDelivery(deliver: Delivery): void {
         this.deliver = deliver;

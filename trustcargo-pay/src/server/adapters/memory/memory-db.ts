@@ -13,7 +13,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ConcurrencyError, UniqueViolationError, type AppendOnlyTable, type Db, type Table, type UnitOfWork } from '@/server/ports/db';
-import { storableValue } from '@/server/text';
+import { filterString, storableValue } from '@/server/text';
 
 type Row = { id: string } & Record<string, unknown>;
 type State = { tables: Record<string, Map<string, Row>>; sequences: Record<string, number> };
@@ -96,8 +96,14 @@ const clone = <T>(v: T): T => structuredClone(v);
 const storable = <T extends Record<string, unknown>>(row: T): T =>
     Object.fromEntries(Object.entries(row).map(([key, value]) => [key, storableValue(value, key)])) as T;
 
+/** Equality on every defined key; a string is compared in its stored form (same rule as the Postgres codecs). */
 function matches(row: Row, where: Record<string, unknown>): boolean {
-    return Object.entries(where).every(([k, v]) => v === undefined || row[k] === v);
+    return Object.entries(where).every(([k, v]) => {
+        if (v === undefined) return true;
+        if (typeof v !== 'string') return row[k] === v;
+        const stored = filterString(v);
+        return stored !== undefined && row[k] === stored;
+    });
 }
 
 class MemoryTable implements Table<Row> {

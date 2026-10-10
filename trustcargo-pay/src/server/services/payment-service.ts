@@ -7,7 +7,7 @@
  */
 import { journalTemplates } from '@/domain/ledger/ledger';
 import { money, type CurrencyCode, type Money } from '@/domain/money';
-import type { Milestone, Payout, Refund, Transaction } from '@/domain/model';
+import type { Milestone, PaymentInstruction, Payout, Refund, Transaction } from '@/domain/model';
 import type { Db } from '@/server/ports/db';
 import { isProviderError } from '@/server/ports/payment-provider';
 import type { Actor, AnyActor } from '@/server/auth/actor';
@@ -27,6 +27,22 @@ export type ReleaseBlocker =
     | 'PAYOUT_ACCOUNT_CURRENCY_MISMATCH'
     | 'PAYOUT_ACCOUNT_COOLING_OFF'
     | 'INSUFFICIENT_HELD_FUNDS';
+
+/** Idempotency key of the first funding instruction of the transaction's current contract version. */
+export const fundingKey = (tx: Transaction) => `fund:${tx.id}:${tx.currentContractVersionId}`;
+
+/**
+ * Whether `instruction` funds the transaction as it stands: issued for its current contract version
+ * (fund:<tx>:<version>[:<retry>]) and for its current amount. An amendment supersedes the others.
+ */
+export function isCurrentInstruction(tx: Transaction, instruction: PaymentInstruction): boolean {
+    const key = fundingKey(tx);
+    return (
+        (instruction.idempotencyKey === key || instruction.idempotencyKey.startsWith(`${key}:`)) &&
+        instruction.amount.amountMinor === tx.amount.amountMinor &&
+        instruction.amount.currency === tx.amount.currency
+    );
+}
 
 export class PaymentService {
     constructor(
@@ -68,11 +84,17 @@ export class PaymentService {
                 throw new AppError('PRECONDITION_FAILED', 'Transaction under compliance review', {
                     failedGuards: ['BLOCKING_RISK_ALERTS']
                 });
-            const idempotencyKey = `fund:${tx.id}:${tx.currentContractVersionId}`;
+            const idempotencyKey = fundingKey(tx);
             const existing = await db.paymentInstructions.findOne({ idempotencyKey });
+            // One payable instruction at a time: an open one (the first, or a retry after a failure) is returned
+            // again, never doubled by a second retry the buyer could pay as well.
+            const open = (await db.paymentInstructions.findBy({ transactionId }))
+                .filter((i) => (i.status === 'CREATED' || i.status === 'PENDING') && isCurrentInstruction(tx, i))
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]; // the newest: the one the buyer is shown
             const buyer = (await db.users.get(actor.userId))!;
-            return { tx, idempotencyKey, existing, payerName: buyer.fullName };
+            return { tx, idempotencyKey, existing, open, payerName: buyer.fullName };
         });
+        if (prepared.open) return prepared.open;
         if (prepared.existing && prepared.existing.status !== 'CANCELLED' && prepared.existing.status !== 'FAILED')
             return prepared.existing;
 

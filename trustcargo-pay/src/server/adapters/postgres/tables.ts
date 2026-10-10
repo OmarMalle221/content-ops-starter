@@ -6,6 +6,7 @@
 import type * as M from '@/domain/model';
 import { DOCUMENT_TYPES, TRANSACTION_STATUSES } from '@/domain/model';
 import type { Db } from '@/server/ports/db';
+import { storableValue } from '@/server/text';
 import {
     INTEGER_STRING_RE,
     InvalidValueError,
@@ -91,7 +92,10 @@ const demoTotpSecret: Factory = (key) => {
         select: () => [`${secret} as "${key}"`],
         decode: (row) => row[key] ?? undefined,
         assign: () => [],
-        equals: (value, params) => (typeof value === 'string' ? `${secret} = ${params.add(value)}::text` : null),
+        equals: (value, params) => {
+            const v = types.text.filter(value); // the stored form, or NO_MATCH (same rule as every text column)
+            return typeof v === 'string' ? `${secret} = ${params.add(v)}::text` : null;
+        },
         writeRelated: async (query, id, value, mode) => {
             if (mode === 'update') await query('delete from trustcargo_private.demo_mfa_secrets where user_id = $1', [id]);
             if (value === undefined) return;
@@ -138,7 +142,7 @@ const reconciliationItems: Factory = (key) => ({
                     (e.item ->> 'providerAmountMinor')::bigint, (e.item ->> 'ledgerAmountMinor')::bigint,
                     e.item ->> 'currency', e.item ->> 'result'
              from jsonb_array_elements($2::jsonb) with ordinality as e (item, ordinal)`,
-            [id, JSON.stringify(value)]
+            [id, JSON.stringify(storableValue(value, key))]
         );
     }
 });

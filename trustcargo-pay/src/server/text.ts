@@ -6,6 +6,8 @@
  * strings may contain all of these, so:
  *   - both adapters pass every stored string through `storableString` / `storableValue` (lone surrogates
  *     become U+FFFD, U+0000 is a VALIDATION error), in memory exactly as on Postgres;
+ *   - both compare a string filter value in its stored form (`filterString`), so a lookup finds the row its
+ *     value was stored in (check-then-insert deduplication keyed on an external string relies on it);
  *   - services cut user text with `truncateText`, on code points, never inside a surrogate pair.
  */
 import { AppError } from './errors';
@@ -32,6 +34,14 @@ export function isStorableString(value: string): boolean {
 export function storableString(value: string, field: string): string {
     if (value.includes('\u0000')) throw new AppError('VALIDATION', 'Text cannot contain the NUL character (U+0000)', { field });
     return value.isWellFormed() ? value : value.toWellFormed();
+}
+
+/**
+ * A string filter value as the stored strings it is compared with: lone surrogates as U+FFFD; `undefined` (matches
+ * nothing) when it holds U+0000, which is never stored.
+ */
+export function filterString(value: string): string | undefined {
+    return value.includes('\u0000') ? undefined : value.toWellFormed();
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {

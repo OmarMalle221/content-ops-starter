@@ -9,6 +9,9 @@
  * 3. Persist the raw event (RECEIVED), then process it in a separate unit of work, which re-reads the event
  *    first and skips it when another delivery or a reprocess has handled it meanwhile (idempotent).
  * 4. Processing failures mark the event FAILED for manual review / reprocessing; nothing partial is kept.
+ * 5. Late or out-of-order events never move money state twice: progress or failure of an instruction no longer
+ *    awaiting its funds (or superseded by an amendment) and a transfer outcome that contradicts the recorded one
+ *    are audited and ignored; contradictions are sent to finance for review.
  */
 import { journalTemplates } from '@/domain/ledger/ledger';
 import type { ProviderEvent, Transaction } from '@/domain/model';
@@ -21,7 +24,7 @@ import { truncateText } from '@/server/text';
 import { buildReversal } from '@/domain/ledger/ledger';
 import { audit, notifyRole, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
-import type { PaymentService } from './payment-service';
+import { isCurrentInstruction, type PaymentService } from './payment-service';
 import type { Workflow } from './workflow';
 import { currentMilestones } from './workflow';
 
@@ -224,12 +227,31 @@ export class ProviderEventService {
                     return { transactionId: tx.id, error: 'EVENT_ON_CANCELLED_INSTRUCTION' };
                 }
                 if (event.type === 'funds.confirmed') return this.onFundsConfirmed(db, eventId, event, tx, instruction.id);
+                // Only an instruction still awaiting its funds can progress or fail. A late, redelivered or reprocessed
+                // event for one that is FUNDED, FAILED or EXPIRED, and progress reported on an instruction that an
+                // amendment superseded, never change the instruction, the transaction or the parties: audited for
+                // finance review, then ignored.
+                const awaitingFunds = instruction.status === 'CREATED' || instruction.status === 'PENDING';
+                const current = isCurrentInstruction(tx, instruction);
+                if (!awaitingFunds || (event.type !== 'payment.failed' && !current)) {
+                    await audit(
+                        this.deps,
+                        db,
+                        this.providerActor,
+                        'provider_event.stale_instruction_ignored',
+                        { type: 'payment_instruction', id: instruction.id },
+                        { transactionId: tx.id, metadata: { eventId, type: event.type, instructionStatus: instruction.status, current } }
+                    );
+                    return { transactionId: tx.id, ignored: true };
+                }
                 if (event.type === 'payment.failed') {
                     await db.paymentInstructions.update(instruction.id, {
                         status: 'FAILED',
                         failureReason: typeof d.reason === 'string' ? truncateText(d.reason, 300) : undefined,
                         updatedAt: this.deps.clock.now().toISOString()
                     });
+                    // A superseded instruction's failure only closes it: the transaction is funded through the current one.
+                    if (!current) return { transactionId: tx.id };
                     if (tx.status === 'FUNDING_PENDING')
                         await this.workflow.transition(db, tx, 'FUNDING_FAILED', 'PROVIDER', this.providerActor, { metadata: { eventId } });
                     await this.payments.notifyParties(db, tx, 'payment.failed');
@@ -257,8 +279,13 @@ export class ProviderEventService {
                     if (payout.status === 'SUBMITTED') await db.payouts.update(payout.id, { status: 'PROCESSING', updatedAt: now });
                     return { transactionId: tx.id };
                 }
-                if (payout.status === 'PAID' || payout.status === 'FAILED' || payout.status === 'CANCELLED')
+                if (payout.status === 'PAID' || payout.status === 'FAILED' || payout.status === 'CANCELLED') {
+                    // Settled already: a repeat of the recorded outcome is a duplicate. A contradicting one (paid after a
+                    // failure the books reversed, failed after payment) never moves the books twice: routed to review.
+                    if ((event.type === 'payout.paid') !== (payout.status === 'PAID'))
+                        await this.reviewContradiction(db, tx, { type: 'payout', id: payout.id }, eventId, event.type, payout.status);
                     return { transactionId: tx.id, ignored: true };
+                }
                 if (d.amountMinor !== undefined && BigInt(d.amountMinor) !== payout.amount.amountMinor) {
                     await notifyRole(this.deps, db, 'finance_operator', 'provider_event.needs_review', { reference: tx.reference }, tx.id);
                     return { transactionId: tx.id, error: 'PAYOUT_AMOUNT_MISMATCH' };
@@ -320,8 +347,11 @@ export class ProviderEventService {
                     if (refund.status === 'SUBMITTED') await db.refunds.update(refund.id, { status: 'PROCESSING', updatedAt: now });
                     return { transactionId: tx.id };
                 }
-                if (refund.status === 'REFUNDED' || refund.status === 'FAILED' || refund.status === 'CANCELLED')
+                if (refund.status === 'REFUNDED' || refund.status === 'FAILED' || refund.status === 'CANCELLED') {
+                    if ((event.type === 'refund.completed') !== (refund.status === 'REFUNDED'))
+                        await this.reviewContradiction(db, tx, { type: 'refund', id: refund.id }, eventId, event.type, refund.status);
                     return { transactionId: tx.id, ignored: true };
+                }
                 if (event.type === 'refund.completed') {
                     await db.refunds.update(refund.id, { status: 'REFUNDED', updatedAt: now });
                     await this.ledger.post(
@@ -385,14 +415,9 @@ export class ProviderEventService {
             event.data.amountMinor !== undefined &&
             BigInt(event.data.amountMinor) === instruction.amount.amountMinor &&
             event.data.currency === instruction.amount.currency;
-        // The instruction must also be the one for the transaction as it stands: issued for the current
-        // contract version (fund:<tx>:<version>[:<retry>]) and for the current amount. An amendment may have
-        // superseded it (e.g. a late confirmation of a FAILED instruction, or one issued during the amendment).
-        const fundingKey = `fund:${tx.id}:${tx.currentContractVersionId}`;
-        const instructionCurrent =
-            (instruction.idempotencyKey === fundingKey || instruction.idempotencyKey.startsWith(`${fundingKey}:`)) &&
-            instruction.amount.amountMinor === tx.amount.amountMinor &&
-            instruction.amount.currency === tx.amount.currency;
+        // The instruction must also be the one for the transaction as it stands (isCurrentInstruction). An amendment
+        // may have superseded it (e.g. a late confirmation of a FAILED instruction, or one issued during the amendment).
+        const instructionCurrent = isCurrentInstruction(tx, instruction);
         if (!reportedMatches || !instructionCurrent) {
             // Never advance on a partial / different amount: route to finance & compliance.
             const now = this.deps.clock.now().toISOString();
@@ -475,6 +500,22 @@ export class ProviderEventService {
         await this.payments.notifyParties(db, tx, 'funds.confirmed');
         await this.workflow.autoAdvance(db, tx.id);
         return { transactionId: tx.id };
+    }
+
+    /** A partner outcome that contradicts a settled transfer: never applied, audited and sent to finance for review. */
+    private async reviewContradiction(
+        db: Db,
+        tx: Transaction,
+        entity: { type: 'payout' | 'refund'; id: string },
+        eventId: string,
+        type: string,
+        status: string
+    ) {
+        await audit(this.deps, db, this.providerActor, 'provider_event.contradicts_settlement', entity, {
+            transactionId: tx.id,
+            metadata: { eventId, type, status }
+        });
+        await notifyRole(this.deps, db, 'finance_operator', 'provider_event.needs_review', { reference: tx.reference }, tx.id);
     }
 
     private async markMilestonesReleased(db: Db, tx: Transaction, milestoneId?: string, disputeDecisionId?: string) {

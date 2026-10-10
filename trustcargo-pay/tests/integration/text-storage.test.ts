@@ -1,10 +1,13 @@
 /**
  * User text is stored identically by both persistence adapters (in memory, and on Postgres with
- * scripts/test-integration-pg.sh): cut on code points, lone surrogates stored as U+FFFD, U+0000 refused.
+ * scripts/test-integration-pg.sh): cut on code points, lone surrogates stored as U+FFFD, U+0000 refused,
+ * and a text filter compared in its stored form.
  */
 import { describe, expect, it } from 'vitest';
+import type { Reconciliation } from '@/domain/model';
+import { hashCanonical } from '@/server/security/crypto';
 import { actors, createTestApp } from './helpers';
-import { createAndInvite } from './flow';
+import { agree, createAndInvite, input } from './flow';
 
 const CAR = '\u{1F697}';
 
@@ -62,8 +65,10 @@ describe('user text storage (same rule on every adapter)', () => {
             type: 'note�',
             params: { ['k�']: 'v�', ok: `fine ${CAR}` }
         });
-        // A filter value that can never be stored as is matches nothing (and is not a database error).
-        expect(await app.deps.uow.run((db) => db.notifications.findBy({ type: 'note\uDC00' }))).toEqual([]);
+        // A filter value is compared in its stored form: the value inserted finds its row again...
+        for (const type of ['note\uDC00', 'note\uD800', 'note\uFFFD'])
+            expect((await app.deps.uow.run((db) => db.notifications.findBy({ type }))).map((n) => n.id)).toEqual([id]);
+        // ...and a value that can never be stored (U+0000) matches nothing, without a database error.
         expect(await app.deps.uow.run((db) => db.users.findBy({ email: 'a\u0000b@example.test' }))).toEqual([]);
         await expect(
             app.deps.uow.run((db) =>
@@ -76,5 +81,78 @@ describe('user text storage (same rule on every adapter)', () => {
                 })
             )
         ).rejects.toMatchObject({ code: 'VALIDATION' });
+    });
+
+    it('stores reconciliation items and filters the demo TOTP secret with the same rule (related tables)', async () => {
+        const app = await createTestApp();
+        const a = await actors(app);
+        const reconciliation = (externalReference: string): Reconciliation => ({
+            id: app.deps.ids.id(),
+            provider: 'mock',
+            runBy: a.finance.userId,
+            runAt: app.deps.clock.now().toISOString(),
+            status: 'DISCREPANCIES',
+            items: [{ externalReference, kind: 'FUNDS_RECEIVED', providerAmountMinor: '100', currency: 'CAD', result: 'MISSING_IN_LEDGER' }]
+        });
+        const stored = reconciliation('ref\uD800');
+        await app.deps.uow.run((db) => db.reconciliations.insert(stored));
+        const [read] = await app.deps.uow.run(async (db) => (await db.reconciliations.list()).filter((r) => r.id === stored.id));
+        expect(read!.items).toEqual([{ ...stored.items[0], externalReference: 'ref\uFFFD' }]);
+        await expect(app.deps.uow.run((db) => db.reconciliations.insert(reconciliation('ref\u0000x')))).rejects.toMatchObject({
+            code: 'VALIDATION'
+        });
+        expect(await app.deps.uow.run(async (db) => (await db.reconciliations.list()).length)).toBe(1);
+
+        const finance = (await app.deps.uow.run((db) => db.users.get(a.finance.userId)))!;
+        expect(finance.mfaTotpSecret).toBeDefined();
+        const holders = await app.deps.uow.run((db) => db.users.findBy({ mfaTotpSecret: finance.mfaTotpSecret }));
+        expect(holders.map((u) => u.id)).toContain(finance.id);
+        expect(await app.deps.uow.run((db) => db.users.findBy({ mfaTotpSecret: 'a\u0000b' }))).toEqual([]);
+    });
+
+    it('deduplicates a redelivered partner event whose id holds a lone surrogate (one stored event)', async () => {
+        const app = await createTestApp();
+        const a = await actors(app);
+        const body = (id: string, type: string, data: Record<string, string> = {}) =>
+            JSON.stringify({ id, type, created: app.clock.now().toISOString(), livemode: false, data });
+        const ignored = body('evt_\uD800dup', 'provider.error');
+        expect(await app.mockProvider.replay(ignored)).toMatchObject({ status: 'processed' });
+        expect(await app.mockProvider.replay(ignored)).toMatchObject({ status: 'duplicate' });
+        // A FAILED one is applied again on redelivery (still failing here), never inserted twice.
+        const failing = body('evt_\uDC00fail', 'payment.initiated', { instructionReference: 'sim_pi_unknown' });
+        const first = await app.mockProvider.replay(failing);
+        expect(first).toMatchObject({ status: 'failed' });
+        expect(await app.mockProvider.replay(failing)).toEqual(first);
+        const events = await app.admin.providerEvents(a.finance);
+        expect(events.map((e) => [e.externalEventId, e.status]).sort()).toEqual([
+            ['evt_\uFFFDdup', 'IGNORED'],
+            ['evt_\uFFFDfail', 'FAILED']
+        ]);
+    });
+
+    it('fingerprints the contract terms as stored, so acceptances bind to them and an unchanged amendment is refused', async () => {
+        const app = await createTestApp();
+        const a = await actors(app);
+        const terms = { ...input().terms, goodsDescription: 'Toyota RAV4 \uD83D 2021' };
+        const { tx, token } = await createAndInvite(app, a.seller, { terms });
+        const version = await app.deps.uow.run(async (db) => (await db.contractVersions.findBy({ transactionId: tx.id }))[0]!);
+        expect(version.terms.goodsDescription).toBe('Toyota RAV4 \uFFFD 2021');
+        expect(version.contentHash).toBe(hashCanonical(version.terms));
+
+        await app.transactions.acceptInvitation(a.buyer, token('BUYER'));
+        expect((await agree(app, a.seller, a.buyer, tx.id)).status).toBe('AWAITING_FUNDING');
+        const view = await app.views.transaction(a.seller, tx.id);
+        expect(view.contract!.contentHash).toBe(hashCanonical(view.contract!.terms));
+        // Re-submitting what the edit form shows (the stored terms), or the original input, is no change.
+        for (const goodsDescription of [view.contract!.terms.goodsDescription, terms.goodsDescription])
+            await expect(
+                app.transactions.amendContract(a.seller, tx.id, {
+                    price: { amount: '18500', currency: 'CAD' },
+                    terms: { ...view.contract!.terms, goodsDescription },
+                    milestones: view.contract!.terms.milestones,
+                    changeSummary: 'Aucun changement'
+                })
+            ).rejects.toMatchObject({ code: 'VALIDATION', message: 'No change compared with the current version' });
+        expect((await app.views.transaction(a.seller, tx.id)).contract!.versionNumber).toBe(1);
     });
 });

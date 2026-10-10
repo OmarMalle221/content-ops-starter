@@ -84,6 +84,15 @@ Les mêmes transitions sont aussi contrôlées en base, par un trigger dans `sup
 - `PAID` / `REFUNDED` : **uniquement** sur webhook signé du partenaire.
 - Un `FAILED` signalé par le partenaire déclenche la contrepassation du journal d'autorisation. Les fonds reviennent dans `TX_HELD`. La relance crée une **nouvelle** instruction (nouvelle clé d'idempotence).
 
+## Événements du partenaire tardifs, rejoués ou dans le désordre
+
+Un événement signé n'est appliqué que s'il correspond encore à l'état enregistré. Sinon, il est audité puis ignoré (statut `IGNORED`) : l'argent n'est jamais déplacé deux fois.
+
+- `payment.initiated`, `payment.pending` et `payment.failed` n'agissent que sur une instruction encore en attente de fonds (`CREATED` ou `PENDING`). Un échec reçu après la confirmation des fonds (renvoi tardif, événement resté `RECEIVED` puis retraité) ne remet jamais une instruction `FUNDED` en échec et n'avertit pas les parties. La progression d'une instruction `FAILED` ne fait pas repasser la transaction en `FUNDING_PENDING`. Action d'audit : `provider_event.stale_instruction_ignored`.
+- La progression d'une instruction remplacée par un amendement (autre version de contrat ou autre montant) ne fait jamais avancer la transaction, qui reste modifiable. L'échec d'une telle instruction la clôt, sans avertir les parties.
+- Une seule instruction payable à la fois : tant qu'une instruction de la version en vigueur est `CREATED` ou `PENDING`, une nouvelle demande la renvoie au lieu d'en émettre une seconde.
+- Un versement ou un remboursement déjà réglé ignore la répétition du même résultat (doublon). Un résultat contradictoire (`payout.paid` après un échec contrepassé, `payout.failed` après paiement, de même pour les remboursements) n'est jamais appliqué : action d'audit `provider_event.contradicts_settlement` et notification des opérations financières pour revue. La réconciliation fait aussi apparaître l'écart.
+
 ## Contrôles avant versement (`releaseBlockers`)
 
 Aucune instruction de versement n'est créée si l'une de ces conditions est vraie :
@@ -99,7 +108,7 @@ Le jalon reste alors `APPROVED`. Le versement est relancé automatiquement aprè
 
 ## Contrat versionné
 
-- Chaque version contient les conditions complètes et une empreinte SHA-256 de leur JSON canonique.
+- Chaque version contient les conditions complètes et une empreinte SHA-256 de leur JSON canonique, calculée sur les conditions telles qu'elles sont stockées (règle de texte commune, voir le modèle de données) : l'empreinte affichée correspond toujours au texte affiché, et une modification identique au contenu stocké est refusée (aucun changement).
 - Une acceptation porte sur `(version, empreinte)`. Accepter une version obsolète ou altérée est refusé : erreur `CONFLICT`.
 - Une modification crée la version n+1 et remplace l'instruction de paiement non financée. Les jalons sont recalculés et **toutes les parties doivent accepter à nouveau**. La vue affiche les champs modifiés.
 
