@@ -92,7 +92,42 @@ export const fr = {
         verify: 'Vérifier',
         demoHint: 'Démo : code actuel pour ce profil fictif',
         invalid: 'Code invalide ou expiré.',
-        why: 'Requis pour le back-office et les actions sensibles (décisions de litige, coordonnées de versement, gel de fonds).'
+        why: 'Requis pour le back-office et les actions sensibles (décisions de litige, coordonnées de versement, gel de fonds).',
+        start: 'Continuer',
+        startHelp: 'La vérification utilise une application d’authentification (code TOTP à 6 chiffres).',
+        enrolTitle: 'Configurer votre application d’authentification',
+        enrolHelp:
+            'Scannez ce code QR avec votre application d’authentification, ou saisissez la clé ci-dessous, puis entrez le code à 6 chiffres affiché.',
+        qrAlt: 'Code QR de configuration de l’application d’authentification',
+        secretLabel: 'Clé de configuration manuelle',
+        unavailable: 'La vérification en deux étapes n’est pas disponible pour ce compte dans cet environnement.'
+    },
+    auth: {
+        signInTitle: 'Se connecter',
+        signInHelp: 'Recevez un lien de connexion à usage unique par e-mail. Aucun mot de passe.',
+        email: 'Adresse e-mail',
+        sendLink: 'Recevoir un lien de connexion',
+        linkSentTitle: 'Vérifiez votre boîte de réception',
+        linkSent:
+            'Si cette adresse peut recevoir un lien de connexion, un e-mail vient d’être envoyé. Le lien est à usage unique et expire rapidement ; ouvrez-le dans ce navigateur.',
+        error: 'La connexion n’a pas pu être finalisée. Demandez un nouveau lien de connexion.',
+        expired: 'Votre session a expiré. Reconnectez-vous.',
+        notConfigured: 'La connexion par e-mail n’est pas configurée dans cet environnement.'
+    },
+    onboarding: {
+        title: 'Créer votre profil',
+        subtitle: 'Votre adresse e-mail est vérifiée. Complétez votre profil pour accéder à TrustCargo Pay.',
+        emailNote: 'L’adresse e-mail vérifiée de votre lien de connexion sera utilisée ; elle ne peut pas être modifiée ici.',
+        fullName: 'Nom complet',
+        country: 'Pays',
+        countryHint: 'Code ISO à 2 lettres, par exemple CA ou SN.',
+        city: 'Ville',
+        phone: 'Téléphone',
+        locale: 'Langue',
+        localeFr: 'Français',
+        localeEn: 'English',
+        submit: 'Créer mon profil',
+        rolesNote: 'Aucun rôle du personnel TrustCargo n’est attribué à l’inscription.'
     },
     status: {
         DRAFT: 'Brouillon',
@@ -326,7 +361,10 @@ export const fr = {
         RATE_LIMITED: 'Trop de tentatives. Réessayez dans un instant.',
         PROVIDER_ERROR: 'Le partenaire financier est momentanément indisponible. Réessayez.',
         INVALID_SIGNATURE: 'Signature invalide.',
-        INTERNAL: 'Une erreur inattendue est survenue.'
+        INTERNAL: 'Une erreur inattendue est survenue.',
+        MFA_UNAVAILABLE: 'La vérification en deux étapes n’est pas disponible pour ce compte.',
+        AUTH_UNAVAILABLE: 'Le service d’authentification est momentanément indisponible. Réessayez.',
+        ACCOUNT_EXISTS: 'Un profil TrustCargo existe déjà pour cette adresse ou ce compte. Contactez le support.'
     },
     nextAction: {
         sendInvitations: 'Envoyer l’invitation à l’acheteur',

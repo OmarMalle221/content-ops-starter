@@ -3,13 +3,15 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { LOCALE_COOKIE } from '@/i18n';
 import { PERSONAS } from '@/server/demo/personas';
-import { clientFingerprint, endSession, getActor, markMfaVerified, startSession } from '@/server/auth/session';
+import { requestAuthGateway } from '@/server/auth/auth-gateway';
+import { clientFingerprint, endSession, getActor, sessionControl, startSession } from '@/server/auth/session';
 import { getApp, resetDemo } from '@/server/instance';
 import { pseudonymize } from '@/server/security/crypto';
-import { verifyTotp } from '@/server/security/totp';
+import { safeRedirectPath } from '@/server/security/redirect';
+import type { AuthContext, FlowResult, MfaStep } from '@/server/services/account-service';
 import type { ActionState } from '@/lib/action-state';
 import { hasRole } from '@/server/auth/actor';
-import { str } from './_run';
+import { str, toActionError } from './_run';
 
 /** Demo-only sign-in as a fictitious persona. Disabled outside demo mode. */
 export async function loginAsPersona(_: ActionState, form: FormData): Promise<ActionState> {
@@ -35,35 +37,72 @@ export async function loginAsPersona(_: ActionState, form: FormData): Promise<Ac
     redirect(user.platformRoles.length ? '/admin' : '/dashboard');
 }
 
+async function authContext(): Promise<{ app: Awaited<ReturnType<typeof getApp>>; ctx: AuthContext }> {
+    const app = await getApp();
+    return { app, ctx: { gateway: await requestAuthGateway(app.config), session: sessionControl, client: await clientFingerprint() } };
+}
+
+/** Runs an account flow: redirects are thrown outside the try/catch, errors become a safe ActionState. */
+async function runFlow<T>(fn: () => Promise<FlowResult<T>>): Promise<ActionState<T>> {
+    let result: FlowResult<T>;
+    try {
+        result = await fn();
+    } catch (error) {
+        return toActionError(error) as ActionState<T>;
+    }
+    if (result.kind === 'redirect') redirect(result.to);
+    if (result.kind === 'error') return { ok: false, at: Date.now(), error: { code: result.code, fields: result.fields } };
+    return { ok: true, at: Date.now(), data: result.data };
+}
+
+/** Supabase Auth: sends a magic link. Always the same confirmation, whatever the address. */
+export async function requestMagicLink(_: ActionState, form: FormData): Promise<ActionState> {
+    const { app, ctx } = await authContext();
+    const gateway = ctx.gateway;
+    if (!gateway) return { ok: false, at: Date.now(), error: { code: 'FORBIDDEN' } };
+    return runFlow(() => app.accounts.requestMagicLink({ gateway, client: ctx.client }, str(form, 'email')));
+}
+
+/** Creates the TrustCargo profile of a verified Supabase identity. The e-mail address is never read from the form. */
+export async function completeOnboarding(_: ActionState, form: FormData): Promise<ActionState> {
+    const { app, ctx } = await authContext();
+    const locale = str(form, 'locale');
+    const input = {
+        fullName: str(form, 'fullName'),
+        country: str(form, 'country'),
+        city: str(form, 'city'),
+        phone: str(form, 'phone'),
+        locale
+    };
+    return runFlow(async () => {
+        const result = await app.accounts.completeOnboarding(ctx, input);
+        if (result.kind === 'redirect' && (locale === 'fr' || locale === 'en')) {
+            (await cookies()).set(LOCALE_COOKIE, locale, { path: '/', sameSite: 'lax', maxAge: 365 * 86_400 });
+        }
+        return result;
+    });
+}
+
 export async function logout() {
-    await endSession();
+    const { app, ctx } = await authContext();
+    await app.accounts.signOut(ctx);
     redirect('/');
 }
 
+/** Supabase MFA, step 1: returns whether to verify an existing TOTP factor or to enrol one (QR code + secret). */
+export async function prepareMfa(_: ActionState): Promise<ActionState<MfaStep>> {
+    const { app, ctx } = await authContext();
+    const actor = await getActor();
+    if (!actor) return { ok: false, at: Date.now(), error: { code: 'UNAUTHENTICATED' } };
+    return runFlow(() => app.accounts.prepareMfa(ctx, actor));
+}
+
+/** Step-up MFA: local TOTP for demo personas, Supabase TOTP (AAL2 required) for real users. */
 export async function verifyMfa(_: ActionState, form: FormData): Promise<ActionState> {
-    const app = await getApp();
+    const { app, ctx } = await authContext();
     const actor = await getActor();
     if (!actor) return { ok: false, error: { code: 'UNAUTHENTICATED' } };
-    const limit = app.rateLimiter.consume(`mfa:${actor.userId}`, 5, 5 * 60_000);
-    if (!limit.allowed) return { ok: false, error: { code: 'RATE_LIMITED' } };
-    const user = await app.deps.uow.run((db) => db.users.get(actor.userId));
-    const code = str(form, 'code').replace(/\s/g, '');
-    if (!user?.mfaTotpSecret || !verifyTotp(user.mfaTotpSecret, code)) {
-        await app.deps.uow.run((db) =>
-            import('@/server/services/context').then(({ audit }) =>
-                audit(app.deps, db, actor, 'auth.mfa_failed', { type: 'user', id: actor.userId })
-            )
-        );
-        return { ok: false, error: { code: 'MFA_INVALID' } };
-    }
-    await markMfaVerified();
-    await app.deps.uow.run((db) =>
-        import('@/server/services/context').then(({ audit }) =>
-            audit(app.deps, db, actor, 'auth.mfa_verified', { type: 'user', id: actor.userId })
-        )
-    );
-    const next = str(form, 'next');
-    redirect(next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard');
+    return runFlow(() => app.accounts.verifyMfa(ctx, actor, str(form, 'code'), str(form, 'next')));
 }
 
 export async function setLocale(form: FormData) {
@@ -78,7 +117,7 @@ export async function setLocale(form: FormData) {
     } catch {
         /* no referer */
     }
-    redirect(back.startsWith('/') && !back.startsWith('//') ? back : '/');
+    redirect(safeRedirectPath(back) ?? '/');
 }
 
 export async function resetDemoAction() {

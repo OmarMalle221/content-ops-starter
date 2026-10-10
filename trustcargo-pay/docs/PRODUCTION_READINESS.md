@@ -34,14 +34,14 @@ TrustCargo Pay **ne doit traiter aucun fonds réel** tant que les étapes ci-des
 
 - [ ] **Adaptateur de persistance Postgres** implémentant `Db`/`UnitOfWork` (transactions SQL, verrou optimiste, `post_ledger_journal`, chaîne d'audit avec retry sur `40001`), testé contre la même suite d'intégration que l'adaptateur mémoire.
 - [ ] Appliquer les migrations sur un projet Supabase de **staging**, exécuter `supabase/tests/rls_test.sql` et les contrôles `supabase db lint`, puis appliquer en production.
-- [ ] Supabase Auth + MFA (AAL2) ; supprimer la connexion par profil (`DEMO_ALLOW_PERSONA_LOGIN=false`).
+- [ ] Supabase Auth + MFA (AAL2) ; supprimer la connexion par profil (`DEMO_ALLOW_PERSONA_LOGIN=false`). Code branché (`AUTH_PROVIDER=supabase`), testé avec des doublures seulement : à valider sur un projet Supabase **dédié** (voir [DEPLOYMENT](DEPLOYMENT.md#supabase-auth-et-supabase-storage)).
 - [ ] Adaptateur `PaymentProvider` du partenaire réel :
   - signatures webhook selon sa spécification ;
   - mTLS si proposé ;
   - liste d'IP ;
   - idempotence ;
   - relevés de réconciliation quotidiens.
-- [ ] Supabase Storage privé, antivirus réel, chiffrement au repos (natif), durées des URL signées.
+- [ ] Supabase Storage privé, antivirus réel, chiffrement au repos (natif), durées des URL signées. Adaptateur branché (`STORAGE_PROVIDER=supabase`), testé avec un faux `fetch` seulement.
 - [ ] Limitation de débit distribuée, file de tâches pour les relances (outbox), tâches planifiées : réconciliation quotidienne, expiration des invitations, relances des versements `REQUESTED`.
 - [ ] Observabilité : journaux structurés centralisés, métriques, alertes. Points à surveiller :
   - balance du registre ;
