@@ -31,8 +31,10 @@ pg_admin_sql "alter database $TEMPLATE_DB with allow_connections false is_templa
 
 log "running vitest on tests/integration"
 status=0
+# Every unit of work is a real SQL transaction here, and the test files run in parallel against one server:
+# a full scenario (e.g. the demo seed) needs more than vitest's default 5 s per test on a loaded machine.
 TEST_PG_ADMIN_URL="$SERVER_URL" TEST_PG_TEMPLATE_DB="$TEMPLATE_DB" \
-    "$ROOT/node_modules/.bin/vitest" run --root "$ROOT" tests/integration "$@" || status=$?
+    "$ROOT/node_modules/.bin/vitest" run --root "$ROOT" --testTimeout 30000 tests/integration "$@" || status=$?
 
 if [[ -n "${DATABASE_URL:-}" ]]; then
     pg_admin_sql "alter database $TEMPLATE_DB with is_template false" || true

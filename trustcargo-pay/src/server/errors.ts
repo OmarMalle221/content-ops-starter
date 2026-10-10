@@ -8,7 +8,9 @@ export type ErrorCode =
     | 'MFA_REQUIRED'
     | 'RATE_LIMITED'
     | 'PROVIDER_ERROR'
-    | 'INVALID_SIGNATURE';
+    | 'INVALID_SIGNATURE'
+    /** Transient: the database is busy (lock wait / statement timeout). Safe to retry later. */
+    | 'UNAVAILABLE';
 
 const STATUS: Record<ErrorCode, number> = {
     UNAUTHENTICATED: 401,
@@ -20,7 +22,8 @@ const STATUS: Record<ErrorCode, number> = {
     MFA_REQUIRED: 403,
     RATE_LIMITED: 429,
     PROVIDER_ERROR: 502,
-    INVALID_SIGNATURE: 401
+    INVALID_SIGNATURE: 401,
+    UNAVAILABLE: 503
 };
 
 /**

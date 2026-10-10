@@ -9,7 +9,11 @@
  *     which memory compares by reference) yields `null` = "matches nothing" instead of a database error.
  *
  * Column names only ever come from the static table specs (tables.ts); values are always parameters.
+ * Strings (text, text[] and every string of a jsonb document) go through the shared storable-text rule
+ * (src/server/text.ts, also applied by the in-memory adapter): lone surrogates become U+FFFD and U+0000
+ * is a VALIDATION error, so both adapters store and refuse exactly the same strings.
  */
+import { isStorableString, storableString, storableValue } from '@/server/text';
 
 export type Row = Record<string, unknown>;
 
@@ -96,7 +100,16 @@ function scalar(check: (v: unknown) => boolean, expected: string, extra: Partial
 }
 
 export const types = {
-    text: scalar((v) => typeof v === 'string', 'a string', { filterCast: '::text' }),
+    text: {
+        encode: (v, field) => {
+            if (typeof v !== 'string') throw new InvalidValueError(field, 'a string');
+            return storableString(v, field);
+        },
+        decode: (v) => v,
+        // A string that is never stored as is matches nothing (memory compares the stored, normalised value).
+        filter: (v) => (typeof v === 'string' && isStorableString(v) ? v : NO_MATCH),
+        filterCast: '::text'
+    } satisfies ColumnType,
     /** Canonical lowercase uuid (what the generator produces and Postgres returns). */
     uuid: scalar((v) => typeof v === 'string' && UUID_RE.test(v), 'a lowercase uuid', { filterCast: '::uuid' }),
     int: scalar((v) => Number.isInteger(v), 'an integer'),
@@ -138,7 +151,7 @@ export const types = {
         assignCast: '::jsonb',
         encode: (v, field) => {
             if (typeof v !== 'object' || v === null) throw new InvalidValueError(field, 'an object or array');
-            return JSON.stringify(v);
+            return JSON.stringify(storableValue(v, field));
         },
         decode: (v) => v,
         filter: () => NO_MATCH
@@ -155,7 +168,7 @@ function arrayOf(sqlArrayType: string): ColumnType {
         selectCast: '::text[]',
         encode: (v, field) => {
             if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new InvalidValueError(field, 'an array of strings');
-            return v;
+            return v.map((x: string) => storableString(x, field));
         },
         decode: (v) => v,
         filter: () => NO_MATCH

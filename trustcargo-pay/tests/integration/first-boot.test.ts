@@ -184,18 +184,26 @@ describe.skipIf(!usePostgres)('first boot on Postgres: several instances', () =>
     });
 
     it('raises the lock and statement timeouts for the seed transaction only', async () => {
+        // Unit-of-work statements only: before the global lock (with the session settings), then once it is held.
+        const AFTER_LOCK = "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)";
         const { instance } = await deployment();
         const app = instance();
         const query = vi.spyOn(pg.Client.prototype, 'query');
-        // Unit-of-work timeout statements only (the simulated partner's own pool sets its own).
         const timeouts = () =>
             (query.mock.calls as unknown as [unknown, unknown][])
-                .filter(([text]) => typeof text === 'string' && /app_managed_updated_at|set_config\('statement_timeout', \$1/.test(text))
+                .filter(([text]) => typeof text === 'string' && (text.includes('app_managed_updated_at') || text === AFTER_LOCK))
                 .map(([, values]) => values);
+        // Bounded wait for the global lock, then the per-statement limits once it is held.
         await app.deps.uow.run((db) => db.users.list({ limit: 1 }));
-        expect(timeouts()).toEqual([['10s', '20s', 'service_role']]);
+        expect(timeouts()).toEqual([
+            ['30000ms', '35000ms', 'service_role'],
+            ['10000ms', '20000ms']
+        ]);
         query.mockClear();
         await seedIfEmpty(app);
-        expect(timeouts()).toEqual([['10s', '20s', 'service_role'], ['15min']]);
+        expect(timeouts()).toEqual([
+            ['900000ms', '905000ms', 'service_role'],
+            ['900000ms', '900000ms']
+        ]);
     });
 });

@@ -5,12 +5,15 @@
  *   structured-clone snapshot — atomicity semantics comparable to an SQL transaction.
  * - Enforces the same unique constraints and append-only rules as the SQL schema.
  * - Rows are cloned on read and write so callers can never mutate stored state by reference.
+ * - Strings are stored as Postgres stores them (src/server/text.ts): lone surrogates become U+FFFD and
+ *   U+0000 is refused (VALIDATION), so a value accepted here is accepted by the Postgres adapter too.
  *
  * Limitation: state is per-process and lost on restart. Not suitable for multi-instance or
  * serverless deployments (each instance would hold different data).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ConcurrencyError, UniqueViolationError, type AppendOnlyTable, type Db, type Table, type UnitOfWork } from '@/server/ports/db';
+import { storableValue } from '@/server/text';
 
 type Row = { id: string } & Record<string, unknown>;
 type State = { tables: Record<string, Map<string, Row>>; sequences: Record<string, number> };
@@ -89,6 +92,10 @@ const TABLE_NAMES = [
 
 const clone = <T>(v: T): T => structuredClone(v);
 
+/** Copy of `row` as stored: the storable-text rule applied to every field (same rule as the Postgres codecs). */
+const storable = <T extends Record<string, unknown>>(row: T): T =>
+    Object.fromEntries(Object.entries(row).map(([key, value]) => [key, storableValue(value, key)])) as T;
+
 function matches(row: Row, where: Record<string, unknown>): boolean {
     return Object.entries(where).every(([k, v]) => v === undefined || row[k] === v);
 }
@@ -134,8 +141,9 @@ class MemoryTable implements Table<Row> {
 
     async insert(row: Row) {
         if (this.rows.has(row.id)) throw new UniqueViolationError(this.name, 'id');
-        this.checkUnique(row);
-        this.rows.set(row.id, clone(row));
+        const stored = storable(clone(row));
+        this.checkUnique(stored);
+        this.rows.set(row.id, stored);
         return clone(row);
     }
 
@@ -146,7 +154,7 @@ class MemoryTable implements Table<Row> {
         if (options?.expectedVersion !== undefined && current.version !== options.expectedVersion) {
             throw new ConcurrencyError(this.name, id);
         }
-        const next: Row = { ...current, ...clone(patch), id };
+        const next: Row = { ...current, ...storable(clone(patch)), id };
         if (typeof current.version === 'number' && this.name === 'transactions') next.version = (current.version as number) + 1;
         this.checkUnique(next, id);
         this.rows.set(id, next);

@@ -2,8 +2,9 @@
  * PostgreSQL persistence adapter (Supabase schema `trustcargo`, see supabase/migrations).
  *
  * Unit of work = one SQL transaction on a pooled connection:
- *   BEGIN → SET LOCAL ROLE <DATABASE_ROLE> → lock / statement timeouts → global transaction-scoped
- *   advisory lock → fn(db) → COMMIT (ROLLBACK on any error; the connection is always released).
+ *   BEGIN → SET LOCAL ROLE <DATABASE_ROLE> → global transaction-scoped advisory lock (bounded wait of its
+ *   own) → per-statement lock / statement timeouts → fn(db) → COMMIT (ROLLBACK on any error; the
+ *   connection is always released, and destroyed when it reported an error).
  *
  * The global advisory lock deliberately reproduces the in-memory adapter's serialisation of units of
  * work, across processes and instances: the services' check-then-act logic (idempotency keys, held
@@ -15,6 +16,10 @@
  *   (SQLSTATE 40001 / 40P01) only. External I/O must therefore not happen inside a unit of work.
  * - A failed statement aborts the transaction: errors raised by the database cannot be caught and
  *   ignored inside a unit of work (no service does; the whole unit of work is rolled back).
+ * - Waiting behind other units of work is bounded by `globalLockWaitMs` (30 s), not by the per-statement
+ *   lock_timeout. A wait or statement that still times out (SQLSTATE 55P03 / 57014) surfaces as the
+ *   retryable AppError UNAVAILABLE (HTTP 503), never as an internal error. A `longRunning` unit of work
+ *   (first-boot seed) uses 15-minute limits instead, for its own wait and for its statements.
  *
  * Node-only (pg): imported from server code exclusively.
  */
@@ -22,26 +27,45 @@ import 'server-only';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import type { DatabaseConfig } from '@/server/config';
+import { AppError } from '@/server/errors';
 import { logger } from '@/server/logger';
 import type { Db, UnitOfWork, UnitOfWorkOptions } from '@/server/ports/db';
 import type { Query } from './codecs';
+import { checkout } from './pg-checkout';
 import { createPgPool } from './pg-pool';
 import { createPgDb } from './tables';
 
 const UNIT_OF_WORK_LOCK = 'trustcargo.unit_of_work';
 const MAX_RETRIES = 3;
 const RETRYABLE = new Set(['40001', '40P01']);
-const LOCK_TIMEOUT = '10s';
-const STATEMENT_TIMEOUT = '20s';
+/** lock_timeout / statement_timeout expired: the database is busy, the caller may retry later. */
+const BUSY = new Set(['55P03', '57014']);
+const POOL_NAME = 'trustcargo-pay';
+
+export interface UnitOfWorkTimeouts {
+    /** Wait for the global unit-of-work lock, i.e. for the units of work queued ahead (all instances). */
+    globalLockWaitMs: number;
+    /** Any other lock wait, once the global lock is held. */
+    lockTimeoutMs: number;
+    statementTimeoutMs: number;
+}
+
+export const DEFAULT_TIMEOUTS: UnitOfWorkTimeouts = { globalLockWaitMs: 30_000, lockTimeoutMs: 10_000, statementTimeoutMs: 20_000 };
 /** `longRunning` units of work (first-boot seed): thousands of round trips to a remote database, or waiting for them. */
-const LONG_RUNNING_TIMEOUT = '15min';
+const LONG_RUNNING_TIMEOUTS: UnitOfWorkTimeouts = { globalLockWaitMs: 900_000, lockTimeoutMs: 900_000, statementTimeoutMs: 900_000 };
 
 export class PostgresDatabase implements UnitOfWork {
     private readonly pool: pg.Pool;
     private readonly context = new AsyncLocalStorage<Db>();
+    private readonly timeouts: UnitOfWorkTimeouts;
 
-    constructor(private readonly config: DatabaseConfig) {
-        this.pool = createPgPool(config, { max: config.poolMax, applicationName: 'trustcargo-pay' });
+    /** `timeouts` overrides the defaults (tests use short ones). */
+    constructor(
+        private readonly config: DatabaseConfig,
+        timeouts: Partial<UnitOfWorkTimeouts> = {}
+    ) {
+        this.pool = createPgPool(config, { max: config.poolMax, applicationName: POOL_NAME });
+        this.timeouts = { ...DEFAULT_TIMEOUTS, ...timeouts };
     }
 
     async run<T>(fn: (db: Db) => Promise<T>, options: UnitOfWorkOptions = {}): Promise<T> {
@@ -56,13 +80,17 @@ export class PostgresDatabase implements UnitOfWork {
                     logger.warn('db.unit_of_work_retry', { code, attempt: attempt + 1 });
                     continue;
                 }
+                if (code && BUSY.has(code)) {
+                    logger.warn('db.unit_of_work_busy', { code });
+                    throw new AppError('UNAVAILABLE', 'The service is temporarily busy. Please retry.', { retryable: true });
+                }
                 throw error;
             }
         }
     }
 
     private async attempt<T>(fn: (db: Db) => Promise<T>, options: UnitOfWorkOptions): Promise<T> {
-        const client = await this.pool.connect();
+        const { client, markBroken, release } = await checkout(this.pool, POOL_NAME);
         // Services issue reads in parallel (Promise.all) inside one unit of work: one transaction means
         // one connection, so statements are queued here instead of overlapping on the client.
         let queue: Promise<unknown> = Promise.resolve();
@@ -71,23 +99,24 @@ export class PostgresDatabase implements UnitOfWork {
             queue = next.catch(() => undefined);
             return next;
         };
-        let broken: Error | undefined;
+        const { globalLockWaitMs, lockTimeoutMs, statementTimeoutMs } = options.longRunning ? LONG_RUNNING_TIMEOUTS : this.timeouts;
         try {
             await query('begin', []);
-            // set_config(…, true) = SET LOCAL; the role name is a parameter, never interpolated.
+            // While queued for the global lock, only its own bounded wait applies (the statement timeout is set
+            // just above it so that lock_timeout decides). set_config(…, true) = SET LOCAL; the role name is a
+            // parameter, never interpolated.
             await query(
                 `select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true),
                         set_config('trustcargo.app_managed_updated_at', 'on', true)` +
                     (this.config.role ? ", set_config('role', $3, true)" : ''),
-                this.config.role ? [LOCK_TIMEOUT, STATEMENT_TIMEOUT, this.config.role] : [LOCK_TIMEOUT, STATEMENT_TIMEOUT]
+                [`${globalLockWaitMs}ms`, `${globalLockWaitMs + 5_000}ms`, ...(this.config.role ? [this.config.role] : [])]
             );
-            if (options.longRunning) {
-                // Waiting for the global lock counts against both timeouts: a concurrent first-boot seed may hold it for minutes.
-                await query("select set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)", [
-                    LONG_RUNNING_TIMEOUT
-                ]);
-            }
             await query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [UNIT_OF_WORK_LOCK]);
+            // Lock held: the normal per-statement limits apply to the unit of work itself.
+            await query("select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)", [
+                `${lockTimeoutMs}ms`,
+                `${statementTimeoutMs}ms`
+            ]);
             const db = createPgDb(query, (name) => this.nextSequence(query, name));
             const result = await this.context.run(db, () => fn(db));
             await query('commit', []);
@@ -97,11 +126,11 @@ export class PostgresDatabase implements UnitOfWork {
                 await queue; // statements still in flight (e.g. siblings of a failed Promise.all)
                 await client.query('rollback');
             } catch (rollbackError) {
-                broken = rollbackError as Error; // the connection is unusable: destroy it
+                markBroken(rollbackError as Error); // the connection is unusable: destroy it
             }
             throw error;
         } finally {
-            client.release(broken);
+            release();
         }
     }
 

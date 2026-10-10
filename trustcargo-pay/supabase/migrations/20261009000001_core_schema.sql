@@ -1106,6 +1106,18 @@ begin
             using errcode = '23514';
     end if;
 
+    -- Funds are confirmed only against a FUNDED payment instruction for exactly the transaction's amount
+    -- (the partner's confirmation of a superseded instruction must never fund an amended price). The
+    -- server marks the instruction FUNDED before this update, in the same SQL transaction.
+    if new.status = 'FUNDS_CONFIRMED' and old.status is distinct from new.status
+       and not exists (
+           select 1 from trustcargo.payment_instructions pi
+           where pi.transaction_id = new.id and pi.status = 'FUNDED'
+             and pi.amount_minor = new.amount_minor and pi.currency = new.currency) then
+        raise exception 'FUNDS_CONFIRMED requires a FUNDED payment instruction for the transaction amount'
+            using errcode = '23514';
+    end if;
+
     return new;
 end;
 $$;

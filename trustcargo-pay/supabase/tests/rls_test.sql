@@ -925,6 +925,25 @@ select tst.fails('amount frozen once funding started',
     $q$update trustcargo.transactions set amount_minor = 1 where id = '33333333-3333-4333-8333-333333333333'$q$, '42501');
 select tst.eq('version incremented by 1 on every update (7 updates)', (select version from trustcargo.transactions where id = '33333333-3333-4333-8333-333333333333'), 8);
 
+-- FUNDS_CONFIRMED needs a FUNDED payment instruction for exactly the transaction's amount (now 2300000 CAD):
+-- the partner's confirmation of an instruction issued before the amendment (1850000) must not fund it.
+select tst.fails('FUNDS_CONFIRMED refused without any payment instruction',
+    $q$update trustcargo.transactions set status = 'FUNDS_CONFIRMED' where id = '33333333-3333-4333-8333-333333333333'$q$, '23514');
+insert into trustcargo.payment_instructions (id, transaction_id, provider, provider_reference, amount_minor, currency, payer_user_id, status, details, idempotency_key, expires_at) values
+    ('9b000000-0000-4000-8000-000000000031', '33333333-3333-4333-8333-333333333333', 'sim', 'SIM-PI-0031', 2400000, 'CAD', 'b0000000-0000-4000-8000-00000000000b', 'FUNDED',
+     '{"method": "BANK_TRANSFER"}', 'fund:t3:v1', now() + interval '7 days'),
+    ('9b000000-0000-4000-8000-000000000032', '33333333-3333-4333-8333-333333333333', 'sim', 'SIM-PI-0032', 2300000, 'USD', 'b0000000-0000-4000-8000-00000000000b', 'FUNDED',
+     '{"method": "BANK_TRANSFER"}', 'fund:t3:v1:usd', now() + interval '7 days'),
+    ('9b000000-0000-4000-8000-000000000033', '33333333-3333-4333-8333-333333333333', 'sim', 'SIM-PI-0033', 2300000, 'CAD', 'b0000000-0000-4000-8000-00000000000b', 'PENDING',
+     '{"method": "BANK_TRANSFER"}', 'fund:t3:v2', now() + interval '7 days'),
+    ('9b000000-0000-4000-8000-000000000034', '11111111-1111-4111-8111-111111111111', 'sim', 'SIM-PI-0034', 2300000, 'CAD', 'b0000000-0000-4000-8000-00000000000b', 'FUNDED',
+     '{"method": "BANK_TRANSFER"}', 'fund:t1:other', now() + interval '7 days');
+select tst.fails('FUNDS_CONFIRMED refused: FUNDED instructions of another amount / currency / transaction, matching one only PENDING',
+    $q$update trustcargo.transactions set status = 'FUNDS_CONFIRMED' where id = '33333333-3333-4333-8333-333333333333'$q$, '23514');
+select tst.eq('FUNDS_CONFIRMED accepted once the instruction for the transaction amount is FUNDED', tst.affected($q$
+    update trustcargo.payment_instructions set status = 'FUNDED' where id = '9b000000-0000-4000-8000-000000000033';
+    update trustcargo.transactions set status = 'FUNDS_CONFIRMED' where id = '33333333-3333-4333-8333-333333333333'$q$), 1);
+
 -- updated_at: application-owned columns keep the writer's value; DB-owned columns are always now().
 with u as (update trustcargo.transactions set title = 'Lexus RX 2020 (a)', updated_at = '2026-01-02T03:04:05.678Z'
            where id = '33333333-3333-4333-8333-333333333333' returning updated_at)

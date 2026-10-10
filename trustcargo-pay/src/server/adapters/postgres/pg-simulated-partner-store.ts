@@ -18,12 +18,14 @@ import type { CurrencyCode } from '@/domain/money';
 import type { DatabaseConfig } from '@/server/config';
 import { ProviderError, type FundingStatus, type ProviderPayoutStatus, type StatementLine } from '@/server/ports/payment-provider';
 import type { SimulatedInstruction, SimulatedPartnerStore, SimulatedTransfer, TransferKind } from '../mock/simulated-partner-store';
+import { checkout } from './pg-checkout';
 import { createPgPool } from './pg-pool';
 
 const LOCK_TIMEOUT = '5s';
 const STATEMENT_TIMEOUT = '10s';
 /** The simulator issues one short call at a time per request: a couple of connections are enough. */
 const POOL_MAX = 2;
+const POOL_NAME = 'trustcargo-pay-simulated-partner';
 
 type Client = Pick<pg.PoolClient, 'query'>;
 type Row = Record<string, unknown>;
@@ -58,16 +60,12 @@ export class PostgresSimulatedPartnerStore implements SimulatedPartnerStore {
     private readonly pool: pg.Pool;
 
     constructor(private readonly config: DatabaseConfig) {
-        this.pool = createPgPool(config, {
-            max: Math.min(POOL_MAX, config.poolMax),
-            applicationName: 'trustcargo-pay-simulated-partner'
-        });
+        this.pool = createPgPool(config, { max: Math.min(POOL_MAX, config.poolMax), applicationName: POOL_NAME });
     }
 
     /** One short transaction on a dedicated connection; the client is always released (destroyed if broken). */
     private async transaction<T>(fn: (client: Client) => Promise<T>): Promise<T> {
-        const client = await this.pool.connect();
-        let broken: Error | undefined;
+        const { client, markBroken, release } = await checkout(this.pool, POOL_NAME);
         try {
             await client.query('begin');
             // set_config(…, true) = SET LOCAL; the role name is a parameter, never interpolated.
@@ -83,11 +81,11 @@ export class PostgresSimulatedPartnerStore implements SimulatedPartnerStore {
             try {
                 await client.query('rollback');
             } catch (rollbackError) {
-                broken = rollbackError as Error; // the connection is unusable: destroy it
+                markBroken(rollbackError as Error); // the connection is unusable: destroy it
             }
             throw error;
         } finally {
-            client.release(broken);
+            release();
         }
     }
 

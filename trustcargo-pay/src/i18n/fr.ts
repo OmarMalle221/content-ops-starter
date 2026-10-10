@@ -287,7 +287,9 @@ export const fr = {
         BOL_WITHOUT_EXPORT_DECLARATION: 'Connaissement présent sans déclaration d’exportation.',
         CONSIGNEE_NOT_BUYER: 'Destinataire « {consignee} » ≠ acheteur « {buyer} ».',
         UNEXPECTED_DISCHARGE_PORT: 'Port de déchargement « {port} » inattendu (attendu : {expected}).',
-        REPORTED_AMOUNT_DIFFERS: 'Montant signalé {reportedMinor} {reportedCurrency} ≠ attendu {expectedMinor}.'
+        REPORTED_AMOUNT_DIFFERS: 'Montant signalé {reportedMinor} {reportedCurrency} ≠ attendu {expectedMinor}.',
+        INSTRUCTION_NOT_CURRENT:
+            'Fonds signalés sur une instruction de paiement ({instructionMinor} {instructionCurrency}) qui ne correspond plus au contrat en vigueur ({expectedMinor} {expectedCurrency}).'
     },
     riskAction: {
         COMPLETE_KYC: 'Demander la finalisation de la vérification d’identité',
@@ -361,6 +363,7 @@ export const fr = {
         RATE_LIMITED: 'Trop de tentatives. Réessayez dans un instant.',
         PROVIDER_ERROR: 'Le partenaire financier est momentanément indisponible. Réessayez.',
         INVALID_SIGNATURE: 'Signature invalide.',
+        UNAVAILABLE: 'Le service est momentanément surchargé. Réessayez dans un instant.',
         INTERNAL: 'Une erreur inattendue est survenue.',
         MFA_UNAVAILABLE: 'La vérification en deux étapes n’est pas disponible pour ce compte.',
         AUTH_UNAVAILABLE: 'Le service d’authentification est momentanément indisponible. Réessayez.',

@@ -6,6 +6,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
+import { onTestFinished } from 'vitest';
 
 export const usePostgres = Boolean(process.env.TEST_PG_ADMIN_URL);
 
@@ -52,4 +53,31 @@ export async function createTestDatabase(): Promise<TestDatabase> {
         url: databaseUrl(name),
         drop: () => admin((c) => c.query(`drop database if exists ${name} with (force)`)).then(() => undefined)
     };
+}
+
+/**
+ * Records uncaught exceptions and unhandled rejections raised while the current test runs (the listeners are
+ * removed when it finishes). A lost database connection must never surface as one.
+ */
+export function captureProcessErrors(): unknown[] {
+    const seen: unknown[] = [];
+    const record = (error: unknown) => void seen.push(error);
+    process.on('uncaughtException', record);
+    process.on('unhandledRejection', record);
+    onTestFinished(() => {
+        process.off('uncaughtException', record);
+        process.off('unhandledRejection', record);
+    });
+    return seen;
+}
+
+/** Polls `probe` until it returns a value (or fails after `timeoutMs`). */
+export async function waitFor<T>(probe: () => Promise<T | undefined>, timeoutMs = 3_000): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        const value = await probe();
+        if (value !== undefined) return value;
+        if (Date.now() > deadline) throw new Error('waitFor: condition not met in time');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
 }

@@ -287,7 +287,9 @@ export const en: Dictionary = {
         BOL_WITHOUT_EXPORT_DECLARATION: 'Bill of lading present without an export declaration.',
         CONSIGNEE_NOT_BUYER: 'Consignee "{consignee}" ≠ buyer "{buyer}".',
         UNEXPECTED_DISCHARGE_PORT: 'Unexpected discharge port "{port}" (expected: {expected}).',
-        REPORTED_AMOUNT_DIFFERS: 'Reported amount {reportedMinor} {reportedCurrency} ≠ expected {expectedMinor}.'
+        REPORTED_AMOUNT_DIFFERS: 'Reported amount {reportedMinor} {reportedCurrency} ≠ expected {expectedMinor}.',
+        INSTRUCTION_NOT_CURRENT:
+            'Funds reported on a payment instruction ({instructionMinor} {instructionCurrency}) that no longer matches the current contract ({expectedMinor} {expectedCurrency}).'
     },
     riskAction: {
         COMPLETE_KYC: 'Ask the party to complete identity verification',
@@ -360,6 +362,7 @@ export const en: Dictionary = {
         RATE_LIMITED: 'Too many attempts. Try again shortly.',
         PROVIDER_ERROR: 'The financial partner is temporarily unavailable. Please retry.',
         INVALID_SIGNATURE: 'Invalid signature.',
+        UNAVAILABLE: 'The service is temporarily busy. Please retry in a moment.',
         INTERNAL: 'An unexpected error occurred.',
         MFA_UNAVAILABLE: 'Two-step verification is not available for this account.',
         AUTH_UNAVAILABLE: 'The authentication service is temporarily unavailable. Please retry.',

@@ -13,6 +13,7 @@ import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
 import { hashCanonical, randomToken, sha256Hex } from '@/server/security/crypto';
 import { AppError, forbidden, notFound } from '@/server/errors';
+import { truncateText } from '@/server/text';
 import { accessTransaction, audit, notify, securitySettings, type Deps } from './context';
 import type { Workflow } from './workflow';
 import { currentMilestones } from './workflow';
@@ -294,7 +295,7 @@ export class TransactionService {
                           destinationCountry: vehicle.destinationCountry
                       }
                     : undefined,
-                inviteeEmailMasked: `${local!.slice(0, 2)}•••@${domain}`,
+                inviteeEmailMasked: `${truncateText(local!, 2)}•••@${domain}`,
                 expiresAt: party.invitationExpiresAt!
             };
         });
@@ -386,6 +387,7 @@ export class TransactionService {
     }
 
     async declineInvitation(actor: Actor, token: string, reason?: string) {
+        const kept = reason === undefined ? undefined : truncateText(reason, 500);
         return this.deps.uow.run(async (db) => {
             const party = await this.findInvitation(db, token);
             if (!party) throw notFound('Invitation');
@@ -399,7 +401,7 @@ export class TransactionService {
                 actor,
                 'party.declined',
                 { type: 'transaction_party', id: party.id },
-                { transactionId: tx.id, metadata: { reason } }
+                { transactionId: tx.id, metadata: { reason: kept } }
             );
             const seller = await db.transactionParties.findOne({ transactionId: tx.id, role: 'SELLER' });
             await notify(this.deps, db, seller?.userId, 'party.declined', { reference: tx.reference }, tx.id);
@@ -408,11 +410,12 @@ export class TransactionService {
 
     async cancel(actor: Actor, transactionId: string, reason: string) {
         if (!reason.trim()) throw new AppError('VALIDATION', 'A reason is required');
+        const kept = truncateText(reason, 500);
         return this.deps.uow.run(async (db) => {
             const { tx, party } = await accessTransaction(db, actor, transactionId, { roles: ['SELLER', 'BUYER'], write: true });
             const updated = await this.workflow.transition(db, tx, 'CANCEL', party!.role as 'SELLER' | 'BUYER', actor, {
-                patch: { cancellationReason: reason.slice(0, 500), closedAt: this.now() },
-                metadata: { reason: reason.slice(0, 500) }
+                patch: { cancellationReason: kept, closedAt: this.now() },
+                metadata: { reason: kept }
             });
             for (const i of await db.paymentInstructions.findBy({ transactionId, status: 'CREATED' })) {
                 await db.paymentInstructions.update(i.id, { status: 'CANCELLED', updatedAt: this.now() });

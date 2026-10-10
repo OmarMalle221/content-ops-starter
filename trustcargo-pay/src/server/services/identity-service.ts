@@ -13,20 +13,29 @@ export class IdentityService {
         private readonly risk: RiskService
     ) {}
 
-    /** Starts a (simulated) KYC session with the identity provider. */
+    /**
+     * Starts a (simulated) KYC session with the identity provider. A session still waiting for its result is
+     * returned instead (double submit, stale tab): a user never has two such sessions in parallel.
+     */
     async start(actor: Actor) {
-        const user = await this.deps.uow.run(async (db) => {
+        const { user, open } = await this.deps.uow.run(async (db) => {
             const u = await db.users.get(actor.userId);
             if (!u) throw notFound('User');
             if (u.kycStatus === 'VERIFIED') throw new AppError('CONFLICT', 'Identity already verified');
-            return u;
+            return { user: u, open: await this.openSession(db, u.id) };
         });
+        if (open) return open;
         const { providerReference } = await this.deps.identity.startVerification({
             id: user.id,
             fullName: user.fullName,
             country: user.country
         });
         return this.deps.uow.run(async (db) => {
+            // Checked again under the unit of work: a concurrent start may have opened a session (or the user
+            // been verified) while the provider was called.
+            if ((await db.users.get(user.id))?.kycStatus === 'VERIFIED') throw new AppError('CONFLICT', 'Identity already verified');
+            const opened = await this.openSession(db, user.id);
+            if (opened) return opened;
             const now = this.deps.clock.now().toISOString();
             const verification = await db.identityVerifications.insert({
                 id: this.deps.ids.id(),
@@ -142,6 +151,13 @@ export class IdentityService {
             );
             return updated;
         });
+    }
+
+    /** The user's session that has no result yet (PENDING without checks; a REVIEW result has checks). */
+    private async openSession(db: Db, userId: string) {
+        return (await db.identityVerifications.findBy({ subjectType: 'USER', subjectId: userId, status: 'PENDING' })).find(
+            (v) => v.checks.length === 0
+        );
     }
 
     private async afterKycChange(db: Db, userId: string) {
