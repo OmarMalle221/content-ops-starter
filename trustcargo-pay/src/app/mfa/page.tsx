@@ -27,7 +27,8 @@ export default async function MfaPage({ searchParams }: { searchParams: Promise<
     const app = await getApp();
     const user = await app.deps.uow.run((db) => db.users.get(actor.userId));
     const localSecret = user?.isDemo ? user.mfaTotpSecret : undefined;
-    const demoCode = app.config.mode === 'demo' && localSecret ? totp(localSecret) : undefined;
+    // The fictitious code is printed for the persona demo only, where every account is a fictitious persona.
+    const demoCode = app.config.personaLogin && localSecret ? totp(localSecret) : undefined;
     const providerMfa = !localSecret && app.config.auth.provider === 'supabase';
     return (
         <main id="main" className="mx-auto flex min-h-[80dvh] max-w-md flex-col justify-center gap-6 px-4 py-10">

@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { getApp } from '@/server/instance';
 import { json, problem } from '@/server/http/api';
+import { clientIp } from '@/server/http/client-ip';
 import { AppError } from '@/server/errors';
 import { pseudonymize, randomToken } from '@/server/security/crypto';
 import { SIGNATURE_HEADER } from '@/server/security/webhook-signature';
@@ -13,7 +14,7 @@ export async function POST(req: NextRequest) {
     const requestId = randomToken(8);
     try {
         const app = await getApp();
-        const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+        const ip = clientIp(req.headers, app.config.clientIpHeader);
         if (!app.rateLimiter.consume(`webhook:${pseudonymize(app.config.sessionSecret, ip)}`, 300, 60_000).allowed)
             throw new AppError('RATE_LIMITED', 'Too many requests');
         const raw = await req.text();

@@ -23,7 +23,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import type { DatabaseConfig } from '@/server/config';
 import { logger } from '@/server/logger';
-import type { Db, UnitOfWork } from '@/server/ports/db';
+import type { Db, UnitOfWork, UnitOfWorkOptions } from '@/server/ports/db';
 import type { Query } from './codecs';
 import { createPgPool } from './pg-pool';
 import { createPgDb } from './tables';
@@ -33,6 +33,8 @@ const MAX_RETRIES = 3;
 const RETRYABLE = new Set(['40001', '40P01']);
 const LOCK_TIMEOUT = '10s';
 const STATEMENT_TIMEOUT = '20s';
+/** `longRunning` units of work (first-boot seed): thousands of round trips to a remote database, or waiting for them. */
+const LONG_RUNNING_TIMEOUT = '15min';
 
 export class PostgresDatabase implements UnitOfWork {
     private readonly pool: pg.Pool;
@@ -42,12 +44,12 @@ export class PostgresDatabase implements UnitOfWork {
         this.pool = createPgPool(config, { max: config.poolMax, applicationName: 'trustcargo-pay' });
     }
 
-    async run<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+    async run<T>(fn: (db: Db) => Promise<T>, options: UnitOfWorkOptions = {}): Promise<T> {
         const current = this.context.getStore();
         if (current) return fn(current);
         for (let attempt = 0; ; attempt++) {
             try {
-                return await this.attempt(fn);
+                return await this.attempt(fn, options);
             } catch (error) {
                 const code = (error as { code?: string }).code;
                 if (code && RETRYABLE.has(code) && attempt < MAX_RETRIES) {
@@ -59,7 +61,7 @@ export class PostgresDatabase implements UnitOfWork {
         }
     }
 
-    private async attempt<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+    private async attempt<T>(fn: (db: Db) => Promise<T>, options: UnitOfWorkOptions): Promise<T> {
         const client = await this.pool.connect();
         // Services issue reads in parallel (Promise.all) inside one unit of work: one transaction means
         // one connection, so statements are queued here instead of overlapping on the client.
@@ -79,6 +81,12 @@ export class PostgresDatabase implements UnitOfWork {
                     (this.config.role ? ", set_config('role', $3, true)" : ''),
                 this.config.role ? [LOCK_TIMEOUT, STATEMENT_TIMEOUT, this.config.role] : [LOCK_TIMEOUT, STATEMENT_TIMEOUT]
             );
+            if (options.longRunning) {
+                // Waiting for the global lock counts against both timeouts: a concurrent first-boot seed may hold it for minutes.
+                await query("select set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)", [
+                    LONG_RUNNING_TIMEOUT
+                ]);
+            }
             await query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [UNIT_OF_WORK_LOCK]);
             const db = createPgDb(query, (name) => this.nextSequence(query, name));
             const result = await this.context.run(db, () => fn(db));

@@ -2,6 +2,7 @@ import 'server-only';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { PlatformRole } from '@/domain/model';
+import { clientIp } from '@/server/http/client-ip';
 import { getApp } from '@/server/instance';
 import { hmacHex, randomToken, safeEqualHex } from '@/server/security/crypto';
 import type { SessionControl } from '@/server/services/account-service';
@@ -103,6 +104,7 @@ export async function endOnboarding() {
 
 /** Cookie side effects handed to AccountService (Route Handlers and Server Actions only). */
 export const sessionControl: SessionControl = {
+    currentUserId: async () => (await readSession((await getApp()).config.sessionSecret))?.uid,
     start: startSession,
     markMfaVerified,
     end: endSession,
@@ -145,9 +147,7 @@ export async function requireStaff(roles: PlatformRole[], next: string): Promise
 }
 
 export async function clientFingerprint(): Promise<{ ip: string; userAgent: string }> {
+    const app = await getApp();
     const h = await headers();
-    return {
-        ip: h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? 'unknown',
-        userAgent: h.get('user-agent') ?? 'unknown'
-    };
+    return { ip: clientIp(h, app.config.clientIpHeader), userAgent: h.get('user-agent') ?? 'unknown' };
 }

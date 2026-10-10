@@ -1,6 +1,7 @@
 /**
  * Account flows for real users authenticated by an external provider (Supabase Auth): magic-link request,
- * e-mail link callback, onboarding, step-up MFA (TOTP, AAL2) and sign-out. Demo personas keep their local TOTP.
+ * e-mail link callback (PKCE code only), onboarding, step-up MFA (TOTP, AAL2) and sign-out. Demo personas keep their
+ * local TOTP.
  *
  * Framework-free on purpose: the provider is reached through the request-scoped `AuthGateway` port and the
  * cookies through `SessionControl`, so every branch is unit-tested with fakes. Server actions and the callback
@@ -11,7 +12,8 @@ import type { User } from '@/domain/model';
 import type { Actor } from '@/server/auth/actor';
 import { SYSTEM } from '@/server/auth/actor';
 import { logger } from '@/server/logger';
-import { isAuthGatewayError, isEmailLinkType, type AuthGateway, type TotpFactor } from '@/server/ports/auth-gateway';
+import { isAuthGatewayError, type AuthGateway, type TotpFactor } from '@/server/ports/auth-gateway';
+import type { Db } from '@/server/ports/db';
 import { pseudonymize } from '@/server/security/crypto';
 import type { RateLimiter } from '@/server/security/rate-limit';
 import { safeRedirectPath } from '@/server/security/redirect';
@@ -21,6 +23,8 @@ import type { RiskService } from './risk-service';
 
 /** Cookie side effects, implemented with next/headers in src/server/auth/session.ts. */
 export interface SessionControl {
+    /** User id of this browser's valid TrustCargo session, if any. */
+    currentUserId(): Promise<string | undefined>;
     start(userId: string): Promise<void>;
     markMfaVerified(): Promise<void>;
     end(): Promise<void>;
@@ -57,6 +61,10 @@ const LIMITS = {
     magicLinkPerIp: { limit: 10, windowMs: 15 * 60_000 },
     magicLinkPerEmail: { limit: 3, windowMs: 15 * 60_000 },
     callbackPerIp: { limit: 20, windowMs: 5 * 60_000 },
+    // Per process, whatever the client IP: every Supabase Auth call comes from the server's IP and spends the
+    // (possibly shared) project's e-mail quota and per-IP verification budget.
+    magicLinkGlobal: { limit: 20, windowMs: 60 * 60_000 },
+    callbackGlobal: { limit: 120, windowMs: 60 * 60_000 },
     onboardingPerIp: { limit: 10, windowMs: 60 * 60_000 },
     // Same budget as the demo TOTP challenge: 5 attempts per 5 minutes and per user.
     mfa: { limit: 5, windowMs: 5 * 60_000 },
@@ -129,10 +137,14 @@ export class AccountService {
         if (!parsed.success) return { kind: 'error', code: 'VALIDATION', fields: ['email'] };
         if (!this.allowed(`magic-link:ip:${this.hash(ctx.client.ip)}`, LIMITS.magicLinkPerIp))
             return { kind: 'error', code: 'RATE_LIMITED' };
-        const emailHash = this.hash(`email:${parsed.data}`);
+        const emailHash = this.emailHash(parsed.data);
         if (!this.allowed(`magic-link:email:${emailHash}`, LIMITS.magicLinkPerEmail)) {
             logger.info('auth.magic_link_throttled', { emailHash });
             return OK;
+        }
+        if (!this.allowed('magic-link:global', LIMITS.magicLinkGlobal)) {
+            logger.warn('auth.magic_link_global_cap');
+            return { kind: 'error', code: 'RATE_LIMITED' };
         }
         try {
             await ctx.gateway.sendMagicLink(parsed.data, `${this.deps.config.appUrl}${AUTH_CALLBACK_PATH}`);
@@ -143,13 +155,16 @@ export class AccountService {
         return OK;
     }
 
-    /** E-mail link callback. Always ends with a redirect; every refusal goes to the same generic error page. */
-    async completeSignIn(
-        ctx: AuthContext,
-        params: { code?: string | null; tokenHash?: string | null; type?: string | null; next?: string | null }
-    ): Promise<FlowResult> {
+    /**
+     * E-mail link callback (PKCE `code` only). Always ends with a redirect; every refusal goes to the same generic error
+     * page. A request that brings no valid code (none, malformed, throttled, rejected by the provider) changes nothing:
+     * no session of this browser is ended, so a cross-site GET cannot sign anybody out.
+     */
+    async completeSignIn(ctx: AuthContext, params: { code?: string | null; next?: string | null }): Promise<FlowResult> {
         const { gateway, session, client } = ctx;
         const ipHash = this.hash(client.ip);
+        // Set once the code exchange opened a provider session: only that session is dropped by a refusal.
+        let linkConsumed = false;
         const refuse = async (reason: string, authUserId?: string): Promise<FlowResult> => {
             logger.warn('auth.sign_in_refused', { reason, ipHash });
             if (authUserId) {
@@ -157,20 +172,21 @@ export class AccountService {
                     audit(this.deps, db, SYSTEM, 'auth.sign_in_refused', { type: 'auth_user', id: authUserId }, { metadata: { reason } })
                 );
             }
-            // Drop any provider session the link may have opened: a refused sign-in leaves nothing behind.
-            await gateway?.signOut().catch(() => undefined);
+            // A refused sign-in leaves nothing behind: the provider session this very link opened is dropped.
+            if (linkConsumed) await gateway?.signOut().catch(() => undefined);
             return { kind: 'redirect', to: SIGN_IN_ERROR_PATH };
         };
         if (!gateway) return refuse('provider_disabled');
         if (!this.allowed(`auth-callback:${ipHash}`, LIMITS.callbackPerIp)) return refuse('rate_limited');
-        if ([params.code, params.tokenHash].some((v) => (v?.length ?? 0) > MAX_LINK_PARAM_LENGTH)) return refuse('invalid_request');
+        if (!params.code || params.code.length > MAX_LINK_PARAM_LENGTH) return refuse('invalid_request');
+        if (!this.allowed('auth-callback:global', LIMITS.callbackGlobal)) return refuse('rate_limited_global');
         try {
-            if (params.code) await gateway.exchangeCode(params.code);
-            else if (params.tokenHash && isEmailLinkType(params.type)) await gateway.verifyEmailLink(params.tokenHash, params.type);
-            else return refuse('invalid_request');
+            await gateway.exchangeCode(params.code);
         } catch (error) {
+            // A failed exchange stores no session: the browser's existing one, if any, is untouched.
             return refuse(`link_rejected:${reasonOf(error)}`);
         }
+        linkConsumed = true;
 
         let identity;
         try {
@@ -181,20 +197,45 @@ export class AccountService {
         if (!identity) return refuse('no_identity');
         const authUserId = identity.authUserId;
         if (!identity.emailConfirmed) return refuse('email_unconfirmed', authUserId);
-        const email = identity.email.toLowerCase();
-        const { user, sameEmail } = await this.deps.uow.run(async (db) => ({
-            user: await db.users.get(authUserId),
-            sameEmail: await db.users.findOne({ email })
-        }));
-        if (user) {
-            if (user.status !== 'ACTIVE') return refuse('account_suspended', authUserId);
-            await this.openSession(ctx, user, 'email_link');
+        let outcome: { user?: User; refused?: string };
+        try {
+            outcome = await this.deps.uow.run((db) => this.matchProfile(db, authUserId, identity.email.toLowerCase()));
+        } catch (error) {
+            // Concurrent change of the same address: the unique index on lower(email) decides.
+            if (!(error instanceof Error && error.name === 'UniqueViolationError')) throw error;
+            outcome = { refused: 'email_belongs_to_another_account' };
+        }
+        if (outcome.refused) return refuse(outcome.refused, authUserId);
+        if (outcome.user) {
+            await this.openSession(ctx, outcome.user, 'email_link');
             return { kind: 'redirect', to: safeRedirectPath(params.next) ?? '/dashboard' };
         }
-        // No silent account linking: a profile with this address but another identity (e.g. a demo persona) is refused.
-        if (sameEmail) return refuse('email_belongs_to_another_account', authUserId);
+        await this.endOtherUserSession(ctx, authUserId);
         await session.startOnboarding(authUserId);
         return { kind: 'redirect', to: '/onboarding' };
+    }
+
+    /**
+     * Profile of a verified identity (inside the caller's unit of work). The profile address follows the provider's
+     * verified one: it is the key of in-app invitations, so a stale address must never keep authorising anything.
+     */
+    private async matchProfile(db: Db, authUserId: string, email: string): Promise<{ user?: User; refused?: string }> {
+        const user = await db.users.get(authUserId);
+        const sameEmail = await db.users.findOne({ email });
+        // No silent account linking: a profile with this address but another identity (e.g. a demo persona) is refused.
+        if (sameEmail && sameEmail.id !== authUserId) return { refused: 'email_belongs_to_another_account' };
+        if (!user) return {};
+        if (user.status !== 'ACTIVE') return { refused: 'account_suspended' };
+        if (user.email.toLowerCase() === email) return { user };
+        const updated = await db.users.update(user.id, { email });
+        // Pseudonymised addresses only (same keyed hash as the sign-in logs): the audit chain never holds a raw address.
+        const metadata = {
+            previousEmailHash: this.emailHash(user.email.toLowerCase()),
+            emailHash: this.emailHash(email),
+            provider: 'supabase'
+        };
+        await audit(this.deps, db, actorFor(updated), 'user.email_synced', { type: 'user', id: user.id }, { metadata });
+        return { user: updated };
     }
 
     /** Creates the TrustCargo profile of a verified identity that has none yet, then opens the session. */
@@ -330,6 +371,7 @@ export class AccountService {
     }
 
     private async openSession(ctx: AuthContext, user: User, method: 'email_link' | 'onboarding') {
+        await this.endOtherUserSession(ctx, user.id);
         await ctx.session.start(user.id);
         await this.risk.recordSession(user.id, {
             // Honest values only: the profile country (no IP geolocation) and keyed hashes of the user agent and IP.
@@ -340,6 +382,16 @@ export class AccountService {
         await this.deps.uow.run((db) =>
             audit(this.deps, db, actorFor(user), 'auth.signed_in', { type: 'user', id: user.id }, { metadata: { method } })
         );
+    }
+
+    /** A TrustCargo session of another user in this browser is ended and audited, never silently replaced. */
+    private async endOtherUserSession(ctx: AuthContext, nextUserId: string): Promise<void> {
+        const current = await ctx.session.currentUserId();
+        if (!current || current === nextUserId) return;
+        await ctx.session.end();
+        const metadata = { reason: 'another_account_signed_in' };
+        await this.deps.uow.run((db) => audit(this.deps, db, SYSTEM, 'auth.session_ended', { type: 'user', id: current }, { metadata }));
+        logger.info('auth.session_replaced', { ipHash: this.hash(ctx.client.ip) });
     }
 
     /** The provider session must belong to the very user of the TrustCargo session (no cross-account step-up). */
@@ -381,5 +433,9 @@ export class AccountService {
 
     private hash(value: string): string {
         return pseudonymize(this.deps.config.sessionSecret, value);
+    }
+
+    private emailHash(email: string): string {
+        return this.hash(`email:${email}`);
     }
 }
