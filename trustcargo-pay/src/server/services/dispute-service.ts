@@ -5,7 +5,7 @@ import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
 import { hasRole, mfaIsRecent } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
-import { accessTransaction, audit, notify, notifyRole, securitySettings, type Deps } from './context';
+import { accessTransaction, audit, notify, notifyRole, requireStaffRole, securitySettings, type Deps } from './context';
 import type { PaymentService } from './payment-service';
 import type { Workflow } from './workflow';
 
@@ -86,7 +86,10 @@ export class DisputeService {
     private async loadForParticipant(db: Db, actor: Actor, disputeId: string) {
         const dispute = await db.disputes.get(disputeId);
         if (!dispute) throw notFound('Dispute');
-        if (hasRole(actor, 'dispute_manager')) return { dispute, authorRole: 'PLATFORM' as const };
+        if (hasRole(actor, 'dispute_manager') || actor.pendingPlatformRoles?.includes('dispute_manager')) {
+            await requireStaffRole(this.deps, actor, ['dispute_manager'], db);
+            return { dispute, authorRole: 'PLATFORM' as const };
+        }
         const { party } = await accessTransaction(db, actor, dispute.transactionId, { roles: ['SELLER', 'BUYER'], write: true });
         return { dispute, authorRole: party!.role as 'SELLER' | 'BUYER' };
     }
@@ -132,7 +135,7 @@ export class DisputeService {
     }
 
     async assign(actor: Actor, disputeId: string) {
-        if (!hasRole(actor, 'dispute_manager')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['dispute_manager']);
         return this.deps.uow.run(async (db) => {
             const dispute = await db.disputes.get(disputeId);
             if (!dispute) throw notFound('Dispute');
@@ -180,7 +183,7 @@ export class DisputeService {
      * nothing is paid or refunded until the partner confirms through a signed event.
      */
     async decide(actor: Actor, disputeId: string, rawInput: unknown) {
-        if (!hasRole(actor, 'dispute_manager')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['dispute_manager']);
         const parsed = disputeDecisionSchema.safeParse(rawInput);
         if (!parsed.success) throw new AppError('VALIDATION', 'Invalid decision', { issues: parsed.error.issues });
         const input = parsed.data;
@@ -317,7 +320,7 @@ export class DisputeService {
     }
 
     async archive(actor: Actor, disputeId: string) {
-        if (!hasRole(actor, 'dispute_manager')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['dispute_manager']);
         return this.deps.uow.run(async (db) => {
             const d = await db.disputes.get(disputeId);
             if (!d) throw notFound('Dispute');
@@ -329,7 +332,7 @@ export class DisputeService {
     }
 
     async listAll(actor: Actor) {
-        if (!hasRole(actor, 'dispute_manager', 'auditor', 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['dispute_manager', 'auditor', 'compliance_analyst']);
         return this.deps.uow.run(async (db) =>
             Promise.all(
                 (await db.disputes.list())

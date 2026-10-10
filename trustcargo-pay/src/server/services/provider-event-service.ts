@@ -18,11 +18,11 @@ import type { ProviderEvent, Transaction } from '@/domain/model';
 import type { Db } from '@/server/ports/db';
 import type { VerifiedProviderEvent } from '@/server/ports/payment-provider';
 import type { Actor, SystemActor } from '@/server/auth/actor';
-import { SYSTEM, hasRole } from '@/server/auth/actor';
-import { AppError, forbidden, notFound } from '@/server/errors';
+import { SYSTEM } from '@/server/auth/actor';
+import { AppError, notFound } from '@/server/errors';
 import { truncateText } from '@/server/text';
 import { buildReversal } from '@/domain/ledger/ledger';
-import { audit, notifyRole, type Deps } from './context';
+import { audit, notifyRole, requireStaffRole, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
 import { isCurrentInstruction, type PaymentService } from './payment-service';
 import type { Workflow } from './workflow';
@@ -123,7 +123,7 @@ export class ProviderEventService {
 
     /** Manual recovery (finance operators) of FAILED events and of events left RECEIVED past the grace period. */
     async reprocess(actor: Actor, eventId: string) {
-        if (!hasRole(actor, 'finance_operator')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['finance_operator']);
         const record = await this.deps.uow.run(async (db) => {
             const found = await db.providerEvents.get(eventId);
             if (!found) throw notFound('Event');

@@ -4,10 +4,11 @@ import { checkVin } from '@/domain/vehicle/vin';
 import { diffTerms } from '@/domain/transaction/contract';
 import { isTerminal, PRE_FUNDING_STATUSES } from '@/domain/transaction/state-machine';
 import type { TransactionView } from '@/lib/dto';
+import type { PlatformRole } from '@/domain/model';
 import type { Actor } from '@/server/auth/actor';
 import { hasRole } from '@/server/auth/actor';
 import type { MockPaymentProvider } from '@/server/adapters/mock/mock-payment-provider';
-import { accessTransaction, type Deps } from './context';
+import { accessTransaction, staffMfaIsRecent, type Deps } from './context';
 import type { DocumentService } from './document-service';
 import type { PaymentService } from './payment-service';
 import type { RiskService } from './risk-service';
@@ -31,10 +32,14 @@ export class ViewService {
         return this.deps.uow.run(async (db) => {
             const access = await accessTransaction(db, actor, transactionId);
             const { tx, party } = access;
+            // Staff visibility in this view needs the same recent MFA as the back office (defence in depth: getActor
+            // already strips roles without it).
+            const staffOk = await staffMfaIsRecent(db, actor, this.deps.clock.now());
+            const staffRole = (...roles: PlatformRole[]) => staffOk && hasRole(actor, ...roles);
             const me = (await db.users.get(actor.userId))!;
             const role = party?.role;
             const isPrincipal = role === 'SELLER' || role === 'BUYER';
-            const staffPayments = hasRole(actor, 'finance_operator', 'compliance_analyst', 'dispute_manager', 'auditor');
+            const staffPayments = staffRole('finance_operator', 'compliance_analyst', 'dispute_manager', 'auditor');
             const parties = await db.transactionParties.findBy({ transactionId });
             const vehicle = await db.vehicles.findOne({ transactionId });
             const corridor = await db.corridors.get(tx.corridorId);
@@ -59,7 +64,7 @@ export class ViewService {
             const viewDocs = [];
             for (const d of docs.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))) {
                 const canOpen = await this.documents.canView(db, actor, d);
-                if (!canOpen && !hasRole(actor, 'auditor')) continue;
+                if (!canOpen && !staffRole('auditor')) continue;
                 viewDocs.push({
                     id: d.id,
                     logicalId: d.logicalId,
@@ -166,9 +171,9 @@ export class ViewService {
                     openDispute: isPrincipal && ['FUNDS_CONFIRMED', 'IN_PROGRESS', 'MILESTONE_REVIEW'].includes(tx.status) && !openDispute,
                     cancel: isPrincipal && (PRE_FUNDING_STATUSES as readonly string[]).includes(tx.status) && !ctx.fundingStarted,
                     viewPayments: canSeePayments,
-                    viewRisk: hasRole(actor, 'compliance_analyst', 'auditor', 'dispute_manager'),
+                    viewRisk: staffRole('compliance_analyst', 'auditor', 'dispute_manager'),
                     simulatePartner:
-                        Boolean(this.simulator) && this.deps.config.mode === 'demo' && (isPrincipal || hasRole(actor, 'finance_operator'))
+                        Boolean(this.simulator) && this.deps.config.mode === 'demo' && (isPrincipal || staffRole('finance_operator'))
                 },
                 blockedReasons: [
                     ...(activeHold ? ['UNDER_COMPLIANCE_REVIEW'] : []),
@@ -262,7 +267,7 @@ export class ViewService {
                       }
                     : undefined,
                 disputes:
-                    isPrincipal || hasRole(actor, 'dispute_manager', 'auditor', 'compliance_analyst')
+                    isPrincipal || staffRole('dispute_manager', 'auditor', 'compliance_analyst')
                         ? await Promise.all(
                               disputes.map(async (d) => {
                                   const decision = (await db.disputeDecisions.findBy({ disputeId: d.id }))[0];
@@ -300,7 +305,7 @@ export class ViewService {
                               })
                           )
                         : [],
-                risk: hasRole(actor, 'compliance_analyst', 'auditor', 'dispute_manager')
+                risk: staffRole('compliance_analyst', 'auditor', 'dispute_manager')
                     ? (await db.riskAlerts.findBy({ transactionId })).map((a) => ({
                           id: a.id,
                           ruleId: a.ruleId,
@@ -312,7 +317,7 @@ export class ViewService {
                           createdAt: a.createdAt
                       }))
                     : undefined,
-                holds: hasRole(actor, 'compliance_analyst', 'auditor')
+                holds: staffRole('compliance_analyst', 'auditor')
                     ? holds.map((h) => ({ id: h.id, type: h.type, status: h.status, reference: h.reference, placedAt: h.placedAt }))
                     : undefined,
                 timeline: audits

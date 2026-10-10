@@ -11,10 +11,10 @@ import type { Milestone, PaymentInstruction, Payout, Refund, Transaction } from 
 import type { Db } from '@/server/ports/db';
 import { isProviderError } from '@/server/ports/payment-provider';
 import type { Actor, AnyActor } from '@/server/auth/actor';
-import { SYSTEM, hasRole } from '@/server/auth/actor';
-import { AppError, forbidden, notFound } from '@/server/errors';
+import { SYSTEM } from '@/server/auth/actor';
+import { AppError, notFound } from '@/server/errors';
 import { truncateText } from '@/server/text';
-import { accessTransaction, audit, notify, notifyRole, securitySettings, type Deps } from './context';
+import { accessTransaction, audit, notify, notifyRole, requireStaffRole, securitySettings, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
 import type { RiskService } from './risk-service';
 
@@ -423,7 +423,7 @@ export class PaymentService {
      * - re-submits REQUESTED transfers that failed to reach the partner.
      */
     async retryBlockedReleases(actor: AnyActor, transactionId: string) {
-        if (actor.kind === 'USER' && !hasRole(actor, 'finance_operator', 'compliance_analyst')) throw forbidden();
+        if (actor.kind === 'USER') await requireStaffRole(this.deps, actor, ['finance_operator', 'compliance_analyst']);
         const result = await this.deps.uow.run(async (db) => {
             const tx = await db.transactions.get(transactionId);
             if (!tx) throw notFound('Transaction');
