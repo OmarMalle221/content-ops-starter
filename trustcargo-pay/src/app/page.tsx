@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { Lock } from 'lucide-react';
-import { loginAsPersona } from '@/app/actions/auth';
+import { loginAsPersona, requestMagicLink } from '@/app/actions/auth';
 import { Brand } from '@/components/app/brand';
+import { EmailSignIn } from '@/components/app/email-sign-in';
 import { LocaleSwitch } from '@/components/app/locale-switch';
 import { PersonaPicker } from '@/components/app/persona-picker';
 import { Alert } from '@/components/ui/alert';
@@ -11,11 +12,14 @@ import { getActor } from '@/server/auth/session';
 import { loadConfig } from '@/server/config';
 import { PERSONAS } from '@/server/demo/personas';
 
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: Promise<{ auth?: string }> }) {
     const actor = await getActor();
     if (actor) redirect(actor.platformRoles.length ? '/admin' : '/dashboard');
     const { t, locale, dict } = await getI18n();
     const config = loadConfig();
+    const { auth } = await searchParams;
+    // Email sign-in (Supabase Auth) and the demo persona picker can coexist in demo mode; production has no personas.
+    const emailSignIn = config.auth.provider === 'supabase';
     return (
         <div className="min-h-dvh bg-gradient-to-b from-primary-soft/60 to-background">
             <header className="mx-auto flex max-w-6xl items-center justify-between px-4 py-5">
@@ -52,29 +56,44 @@ export default async function Home() {
                         <p className="mt-1 font-medium">{t('app.notABank')}</p>
                     </Alert>
                 </section>
-                <Card className="self-start">
-                    <CardHeader className="block">
-                        <CardTitle className="text-base">{t('landing.choosePersona')}</CardTitle>
-                        <p className="text-sm text-muted-foreground">{t('landing.choosePersonaHelp')}</p>
-                    </CardHeader>
-                    <CardContent>
-                        {config.personaLogin ? (
-                            <PersonaPicker
-                                action={loginAsPersona}
-                                personas={PERSONAS.map((p) => ({
-                                    key: p.key,
-                                    fullName: p.fullName,
-                                    headline: p.headline[locale],
-                                    city: p.city,
-                                    country: p.country,
-                                    staff: p.platformRoles.length > 0
-                                }))}
-                            />
-                        ) : (
-                            <Alert tone="info">Supabase Auth sign-in is not configured in this environment.</Alert>
-                        )}
-                    </CardContent>
-                </Card>
+                <div className="space-y-6 self-start">
+                    {(auth === 'error' || auth === 'expired') && (
+                        <Alert tone={auth === 'error' ? 'danger' : 'warning'}>{t(auth === 'error' ? 'auth.error' : 'auth.expired')}</Alert>
+                    )}
+                    {emailSignIn && (
+                        <Card>
+                            <CardHeader className="block">
+                                <CardTitle className="text-base">{t('auth.signInTitle')}</CardTitle>
+                                <p className="text-sm text-muted-foreground">{t('auth.signInHelp')}</p>
+                            </CardHeader>
+                            <CardContent>
+                                <EmailSignIn action={requestMagicLink} />
+                            </CardContent>
+                        </Card>
+                    )}
+                    {config.personaLogin && (
+                        <Card>
+                            <CardHeader className="block">
+                                <CardTitle className="text-base">{t('landing.choosePersona')}</CardTitle>
+                                <p className="text-sm text-muted-foreground">{t('landing.choosePersonaHelp')}</p>
+                            </CardHeader>
+                            <CardContent>
+                                <PersonaPicker
+                                    action={loginAsPersona}
+                                    personas={PERSONAS.map((p) => ({
+                                        key: p.key,
+                                        fullName: p.fullName,
+                                        headline: p.headline[locale],
+                                        city: p.city,
+                                        country: p.country,
+                                        staff: p.platformRoles.length > 0
+                                    }))}
+                                />
+                            </CardContent>
+                        </Card>
+                    )}
+                    {!emailSignIn && !config.personaLogin && <Alert tone="info">{t('auth.notConfigured')}</Alert>}
+                </div>
             </main>
         </div>
     );

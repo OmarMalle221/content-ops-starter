@@ -94,7 +94,41 @@ export const en: Dictionary = {
         verify: 'Verify',
         demoHint: 'Demo: current code for this fictitious profile',
         invalid: 'Invalid or expired code.',
-        why: 'Required for the back office and sensitive actions (dispute decisions, payout details, freezes).'
+        why: 'Required for the back office and sensitive actions (dispute decisions, payout details, freezes).',
+        start: 'Continue',
+        startHelp: 'Verification uses an authenticator app (6-digit TOTP code).',
+        enrolTitle: 'Set up your authenticator app',
+        enrolHelp: 'Scan this QR code with your authenticator app, or enter the key below, then type the 6-digit code it shows.',
+        qrAlt: 'Authenticator app setup QR code',
+        secretLabel: 'Manual setup key',
+        unavailable: 'Two-step verification is not available for this account in this environment.'
+    },
+    auth: {
+        signInTitle: 'Sign in',
+        signInHelp: 'Get a single-use sign-in link by e-mail. No password.',
+        email: 'E-mail address',
+        sendLink: 'Send me a sign-in link',
+        linkSentTitle: 'Check your inbox',
+        linkSent:
+            'If this address can receive a sign-in link, an e-mail has just been sent. The link is single-use and expires quickly; open it in this browser.',
+        error: 'Sign-in could not be completed. Request a new sign-in link.',
+        expired: 'Your session has expired. Please sign in again.',
+        notConfigured: 'E-mail sign-in is not configured in this environment.'
+    },
+    onboarding: {
+        title: 'Create your profile',
+        subtitle: 'Your e-mail address is verified. Complete your profile to access TrustCargo Pay.',
+        emailNote: 'The verified e-mail address of your sign-in link will be used; it cannot be changed here.',
+        fullName: 'Full name',
+        country: 'Country',
+        countryHint: '2-letter ISO code, for example CA or SN.',
+        city: 'City',
+        phone: 'Phone',
+        locale: 'Language',
+        localeFr: 'Français',
+        localeEn: 'English',
+        submit: 'Create my profile',
+        rolesNote: 'No TrustCargo staff role is granted at sign-up.'
     },
     status: {
         DRAFT: 'Draft',
@@ -326,7 +360,10 @@ export const en: Dictionary = {
         RATE_LIMITED: 'Too many attempts. Try again shortly.',
         PROVIDER_ERROR: 'The financial partner is temporarily unavailable. Please retry.',
         INVALID_SIGNATURE: 'Invalid signature.',
-        INTERNAL: 'An unexpected error occurred.'
+        INTERNAL: 'An unexpected error occurred.',
+        MFA_UNAVAILABLE: 'Two-step verification is not available for this account.',
+        AUTH_UNAVAILABLE: 'The authentication service is temporarily unavailable. Please retry.',
+        ACCOUNT_EXISTS: 'A TrustCargo profile already exists for this address or account. Please contact support.'
     },
     nextAction: {
         sendInvitations: 'Send the invitation to the buyer',

@@ -39,14 +39,14 @@ TrustCargo Pay **ne doit traiter aucun fonds réel** tant que les étapes ci-des
   - les données de démonstration sont créées au premier démarrage sur une base vide (jamais en production) ; la réinitialisation de la démo est refusée sur Postgres (enregistrements en ajout seul). En production, les données de référence (corridors, connexion partenaire) sont à provisionner par migration ou procédure d'exploitation ;
   - premier démarrage : un seul processus, sinon deux instances peuvent tenter le même amorçage (l'une échoue sur les contraintes d'unicité).
 - [ ] Appliquer les migrations sur un projet Supabase de **staging**, exécuter `supabase/tests/rls_test.sql` et les contrôles `supabase db lint`, puis appliquer en production.
-- [ ] Supabase Auth + MFA (AAL2) ; supprimer la connexion par profil (`DEMO_ALLOW_PERSONA_LOGIN=false`).
+- [ ] Supabase Auth + MFA (AAL2) ; supprimer la connexion par profil (`DEMO_ALLOW_PERSONA_LOGIN=false`). Code branché (`AUTH_PROVIDER=supabase`), testé avec des doublures seulement : à valider sur un projet Supabase **dédié** (voir [DEPLOYMENT](DEPLOYMENT.md#supabase-auth-et-supabase-storage)).
 - [ ] Adaptateur `PaymentProvider` du partenaire réel :
   - signatures webhook selon sa spécification ;
   - mTLS si proposé ;
   - liste d'IP ;
   - idempotence ;
   - relevés de réconciliation quotidiens.
-- [ ] Supabase Storage privé, antivirus réel, chiffrement au repos (natif), durées des URL signées.
+- [ ] Supabase Storage privé, antivirus réel, chiffrement au repos (natif), durées des URL signées. Adaptateur branché (`STORAGE_PROVIDER=supabase`), testé avec un faux `fetch` seulement.
 - [ ] Limitation de débit distribuée, file de tâches pour les relances (outbox), tâches planifiées : réconciliation quotidienne, expiration des invitations, relances des versements `REQUESTED`.
 - [ ] Observabilité : journaux structurés centralisés, métriques, alertes. Points à surveiller :
   - balance du registre ;

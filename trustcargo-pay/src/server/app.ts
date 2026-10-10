@@ -9,6 +9,7 @@ import { createFileStorage } from './adapters/storage';
 import { UuidV7Generator } from './adapters/uuid-v7';
 import type { ServerConfig } from './config';
 import { InMemoryRateLimiter } from './security/rate-limit';
+import { AccountService } from './services/account-service';
 import { AdminService, ComplianceService, NotificationService, ReconciliationService } from './services/admin-services';
 import type { Deps } from './services/context';
 import { DisputeService } from './services/dispute-service';
@@ -59,6 +60,7 @@ export function createApp(config: ServerConfig) {
         await payments.retryBlockedReleases({ kind: 'SYSTEM', id: 'system' }, txId);
     };
     mockProvider.setDelivery((raw, header) => providerEvents.ingest(raw, header));
+    const rateLimiter = new InMemoryRateLimiter();
 
     return {
         config,
@@ -66,13 +68,14 @@ export function createApp(config: ServerConfig) {
         persistence,
         clock,
         mockProvider,
-        rateLimiter: new InMemoryRateLimiter(),
+        rateLimiter,
         ledger,
         workflow,
         risk,
         payments,
         transactions,
         identity,
+        accounts: new AccountService(deps, rateLimiter, risk),
         paymentAccounts,
         documents,
         milestones,

@@ -25,14 +25,19 @@ Ce document distingue **ce qui est implémenté et testé** de **ce qui reste à
 | Fuite de secrets ou de données bancaires | Aucun numéro de carte ni de compte stocké (identifiant masqué + jeton) ; secrets via variables d'environnement ; seule la référence du secret partenaire est stockée ; logs JSON sans données sensibles | Revue de code, CHECK SQL sur `masked_identifier` |
 | Données de démonstration | Profils fictifs, domaine `.test`, fichiers marqués « FICTIF » ; le mode production refuse le fournisseur simulé | `config.ts` |
 | Confusion entre partenaire simulé et livres de TrustCargo | Enregistrements du faux partenaire isolés dans `trustcargo_sim` (aucune clé étrangère vers `trustcargo`, références et montants uniquement) ; `service_role` seul, aucun privilège pour `anon` / `authenticated`, RLS active, montants et relevé non modifiables ; écritures hors unité de travail | `rls_test.sql`, `simulated-partner.test.ts` |
+| Énumération de comptes à la connexion | Lien magique Supabase (aucun mot de passe) ; réponse identique quelle que soit l'adresse, y compris en cas de limite par adresse atteinte ou d'échec du fournisseur ; limitation par IP et par adresse pseudonymisée (HMAC) ; adresse brute jamais journalisée | `account-service.test.ts` (« magic link request ») — doublures uniquement |
+| Rattachement silencieux de comptes | Le profil TrustCargo porte l'identifiant de l'utilisateur Supabase ; e-mail confirmé obligatoire ; une adresse déjà utilisée par un autre profil (par ex. un profil de démonstration) est refusée ; l'adresse du profil vient de l'identité vérifiée, jamais du formulaire ; aucun rôle du personnel à l'inscription | `account-service.test.ts` (« e-mail link callback », « onboarding ») — doublures uniquement |
+| Redirection ouverte (`next`, `back`) | `safeRedirectPath` : chemin relatif de même origine uniquement ; refus de `//`, `/\`, des antislashs, des schémas, des caractères de contrôle et de leurs variantes encodées ; résultat normalisé revérifié ; utilisé par le callback, la MFA et le changement de langue | `safe-redirect.test.ts` |
+| Contournement de la MFA (comptes réels) | Session TrustCargo marquée « MFA » seulement après `challengeAndVerify` Supabase **et** un niveau `aal2` lu dans le jeton que le serveur Auth valide (`GET /user`) ; la session Supabase doit appartenir au même utilisateur que la session TrustCargo ; 5 essais / 5 min ; audit des succès et échecs | `account-service.test.ts` (« step-up MFA »), `supabase-auth.test.ts` — doublures uniquement |
+| Documents exposés par le stockage | Bucket privé, clé secrète côté serveur uniquement ; aucune URL signée Supabase remise au navigateur (téléchargement par la route applicative, qui ré-autorise, journalise et vérifie le SHA-256) ; `upsert: false` (objets immuables) ; clés d'objet en liste blanche ; erreurs reconstruites sans clé, jeton ni message du fournisseur ; délai d'expiration des requêtes | `supabase-storage.test.ts` — faux `fetch` uniquement |
 
 ## Ce qui reste à faire (bloquant pour la production)
 
-1. **Authentification réelle** : Supabase Auth (vérification d'e-mail, MFA AAL2, rotation des sessions, verrouillage de compte), en remplacement des profils de démonstration.
+1. **Authentification réelle** : le parcours Supabase Auth (lien magique, profil, MFA TOTP AAL2) est implémenté mais **n'a jamais été exécuté contre un projet Supabase réel**. Restent : validation sur un projet dédié, révocation de la session TrustCargo quand la session Supabase est révoquée ailleurs, verrouillage de compte, procédure de réinitialisation du second facteur (codes de secours).
 2. **Adaptateur Postgres** : branché (transactions SQL, `service_role`, verrou global). Reste à le valider sur un projet Supabase de staging et à remplacer le verrou global par des verrous ciblés avant une charge réelle. Le client Supabase est réservé aux lectures sous RLS.
 3. **Limitation de débit distribuée** (Redis/Upstash) : l'implémentation actuelle est en mémoire.
 4. **Antivirus réel** (ClamAV, ou service géré) : l'implémentation actuelle détecte seulement la signature EICAR.
-5. **Stockage chiffré** : Supabase Storage privé + URLs signées. Politiques déjà écrites en SQL, non testées sur Supabase réel.
+5. **Stockage** : adaptateur Supabase Storage privé implémenté, testé avec un faux `fetch` seulement ; politiques SQL écrites, non testées sur Supabase réel. `DocumentService` écrit l'objet à l'intérieur de l'unité de travail : avec l'adaptateur Postgres, un échec de transaction après l'envoi laisse un objet orphelin, et une nouvelle tentative de la même version heurterait `upsert: false` (à revoir avec la persistance).
 6. **Gestion des secrets** (coffre, rotation) et clés distinctes par environnement.
 7. **Chiffrement applicatif** des champs KYC sensibles si des données d'identité sont conservées hors du fournisseur KYC.
 8. **Politique de rétention et suppression** conforme aux obligations applicables (LCB-FT, protection des données). À définir avec un conseil juridique.
@@ -40,3 +45,35 @@ Ce document distingue **ce qui est implémenté et testé** de **ce qui reste à
 10. **Tests d'intrusion** et revue de sécurité indépendante ; programme de divulgation responsable.
 11. **Supervision** : alertes sur les événements partenaires en échec, la balance du registre, la rupture de la chaîne d'audit, les écarts de réconciliation.
 12. **CSP** : les styles inline sont autorisés pour Radix UI. Évaluer une alternative.
+
+## Supabase Auth et Supabase Storage
+
+> **Rien de cette section n'a été exécuté contre un projet Supabase réel.** L'environnement où ce code a été écrit bloque l'accès réseau à `*.supabase.co`. Les comportements décrits sont implémentés et testés avec des doublures : un faux `AuthGateway` pour les parcours, et le vrai code `@supabase/ssr` / `@supabase/supabase-js` branché sur un faux serveur Auth et un faux `fetch` Storage. Les formats de réponse de ces doublures sont tirés du code source des bibliothèques, pas d'un serveur réel.
+
+### Principes
+
+- **Côté serveur uniquement.** Aucune clé Supabase n'est envoyée au navigateur : pas de variable `NEXT_PUBLIC_*`, pas de client Supabase côté navigateur. La clé publiable sert à Auth, depuis le serveur ; la clé secrète sert uniquement à Storage.
+- **Cookies.** La session Supabase vit dans des cookies `HttpOnly`, `SameSite=Lax`, `Secure` en production, sous un nom dédié (`tc-sb-auth*`) pour ne jamais être partagée avec une autre application du même hôte.
+- **Pas d'appel Supabase pendant le rendu d'une page.** Supabase n'est appelé que depuis des Route Handlers et des Server Actions, qui peuvent écrire des cookies : un rafraîchissement de jeton (refresh token à usage unique) est toujours renvoyé au navigateur. Les pages `/onboarding` et `/mfa` n'appellent pas Supabase pendant leur rendu.
+- **Deux sessions, une seule autorité.** La session TrustCargo (`tc_session`, signée HMAC, 12 h) reste la source de vérité pour l'autorisation ; rôles et statut sont relus en base à chaque requête. La session Supabase ne prouve que l'adresse e-mail et le second facteur.
+- **Logique testable.** Les parcours sont dans `src/server/services/account-service.ts`, derrière le port `AuthGateway` (`src/server/ports/auth-gateway.ts`) ; l'implémentation Supabase est `src/server/adapters/supabase/supabase-auth.ts`. Les actions serveur et la route `/auth/callback` ne font que traduire le résultat.
+
+### Parcours
+
+1. **Demande de lien** (`requestMagicLink`) : adresse validée (zod), limites de 10 demandes / 15 min par IP et de 3 envois / 15 min par adresse pseudonymisée. La limite par adresse est **silencieuse** (même réponse, aucun envoi) pour ne rien révéler. `shouldCreateUser: true`, `emailRedirectTo = APP_URL/auth/callback`.
+2. **Callback** (`GET /auth/callback`) : `code` (PKCE, même navigateur) ou `token_hash` + `type` (`email`, `magiclink`, `signup` seulement). E-mail confirmé obligatoire. Profil existant et actif → session TrustCargo, événement de session (pays du profil, empreintes HMAC de l'IP et de l'agent utilisateur), audit `auth.signed_in`, redirection vers un `next` sûr ou `/dashboard`. Pas de profil → `/onboarding`. Adresse portée par un autre profil, profil suspendu, lien invalide ou toute autre erreur → déconnexion Supabase, audit `auth.sign_in_refused` quand l'identité est connue, et `/?auth=error` (message générique).
+3. **Profil** (`/onboarding`) : accessible avec un marqueur signé `tc_onboarding` (30 min) posé par le callback ; l'action revérifie l'identité auprès de Supabase et exige qu'elle corresponde au marqueur. Le profil est créé avec l'identifiant Supabase, l'adresse de l'identité vérifiée, `isDemo = false`, `kycStatus = NOT_STARTED`, aucun rôle, statut `ACTIVE`, dans une unité de travail avec l'événement d'audit `user.registered`.
+4. **MFA** (`/mfa`) : les profils de démonstration gardent le TOTP local fictif. Les comptes réels utilisent Supabase : sans facteur TOTP vérifié, enrôlement (QR code SVG ré-encodé en `data:` base64 dans une balise `<img>`, déjà autorisé par `img-src` de la CSP, et clé affichée pour une saisie manuelle) ; puis `challengeAndVerify` ; la session TrustCargo n'est marquée « MFA » que si le niveau courant est `aal2`. Session Supabase absente, expirée ou appartenant à un autre utilisateur → fin des deux sessions et `/?auth=expired`.
+5. **Déconnexion** : déconnexion Supabase de l'appareil (`scope: 'local'`), puis suppression de la session TrustCargo, même si Supabase ne répond pas.
+
+### Rôles du personnel
+
+Aucun rôle n'est attribué à l'inscription et l'application n'a pas encore d'écran de gestion des rôles. Les rôles sont attribués en SQL (premier administrateur, puis les suivants avec `granted_by`) : voir [DEPLOYMENT](DEPLOYMENT.md#premier-administrateur-plateforme). Ces attributions SQL n'apparaissent pas dans la chaîne d'audit applicative : les consigner à part.
+
+### Limites connues
+
+- Avec le modèle d'e-mail par défaut (`code` PKCE), le lien doit être ouvert dans le navigateur qui l'a demandé. Le modèle `token_hash` lève cette contrainte (voir DEPLOYMENT).
+- auth-js laisse dans le navigateur les cookies de vérificateur PKCE par flux après l'échange (sans valeur une fois le code consommé) ; leur nombre est borné par la bibliothèque.
+- La limitation de débit est en mémoire, par processus.
+- Pas de codes de secours MFA ni de procédure de réinitialisation du second facteur.
+- Une session TrustCargo déjà ouverte survit jusqu'à 12 h à une révocation de la session Supabase faite ailleurs ; la suspension du profil TrustCargo, elle, prend effet à la requête suivante.
