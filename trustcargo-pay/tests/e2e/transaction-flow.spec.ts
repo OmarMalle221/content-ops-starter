@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { confirmDialog, loginAs, pdfFile } from './helpers';
 
-test.describe.configure({ mode: 'serial' });
+// One journey across several tests on a single in-memory server: a retry would replay it on top of the
+// state left by the failed attempt (e.g. an identity already verified), so retries are disabled here.
+test.describe.configure({ mode: 'serial', retries: 0 });
 
 let transactionUrl = '';
 let inviteUrl = '';
@@ -124,15 +126,22 @@ test('seller provides evidence, buyer approves, partner executes the payout', as
     await expect(page.getByTestId('milestone-1').getByText('Versé')).toBeVisible();
 });
 
-test('documents open through short-lived signed links only', async ({ page, request }) => {
+test('documents open through short-lived signed links only', async ({ page, playwright, baseURL }) => {
     await loginAs(page, 'buyer2');
     await page.goto(`${transactionUrl}?tab=documents`);
-    const popup = page.waitForEvent('popup');
+    // Assert on the signed request rather than on a rendered PDF tab: the headless shell used in CI
+    // has no PDF viewer, so the popup turns into a download and never fires "load".
+    const contentRequest = page.context().waitForEvent('request', (r) => r.url().includes('/content?exp='));
     await page.getByRole('button', { name: 'Ouvrir' }).first().click();
-    const doc = await popup;
-    await doc.waitForLoadState();
-    expect(doc.url()).toMatch(/\/api\/v1\/documents\/.+\/content\?exp=\d+&sig=[0-9a-f]{64}/);
+    const url = (await contentRequest).url();
+    expect(url).toMatch(/\/api\/v1\/documents\/.+\/content\?exp=\d+&sig=[0-9a-f]{64}/);
+
+    const withSession = await page.request.get(url);
+    expect(withSession.status()).toBe(200);
+    expect(withSession.headers()['content-type']).toBe('application/pdf');
+
     // Same URL without the session cookie is refused.
-    const anonymous = await request.get(doc.url(), { headers: { cookie: '' } });
-    expect(anonymous.status()).toBe(401);
+    const anonymous = await playwright.request.newContext({ baseURL });
+    expect((await anonymous.get(url)).status()).toBe(401);
+    await anonymous.dispose();
 });
