@@ -74,7 +74,7 @@ describe('isolation between users and organisations', () => {
         );
         await app.deps.uow.run(async (db) => {
             await db.organizationMembers.insert({
-                id: 'm-colleague',
+                id: app.deps.ids.id(),
                 organizationId: dealerOrg,
                 userId: a.forwarder.userId,
                 role: 'MEMBER',

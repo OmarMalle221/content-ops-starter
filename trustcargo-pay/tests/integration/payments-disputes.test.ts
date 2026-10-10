@@ -77,7 +77,7 @@ describe('release controls and recovery', () => {
         const { txId } = await toInProgress(app, a.seller, a.buyer);
         const id = await submitMilestone(app, a.seller, txId, 0);
         await app.milestones.review(a.buyer, txId, id, { decision: 'APPROVE' });
-        const [transfer] = app.mockProvider.pendingTransfers();
+        const [transfer] = await app.mockProvider.pendingTransfers();
         await app.mockProvider.simulateTransferOutcome(transfer!.reference, 'FAILED', 'Compte bénéficiaire fermé (simulation)');
         let v = await app.views.transaction(a.finance, txId);
         expect(v.payment!.payouts[0]!.status).toBe('FAILED');

@@ -7,7 +7,9 @@
 --     Every business write (state transitions, payments, ledger, audit, risk) goes through the server
 --     using service_role, which runs the TypeScript state machine and writes the audit chain in the
 --     same unit of work. There are NO insert/update policies for authenticated on financial tables.
---   * service_role: full table access (BYPASSRLS), ledger only via post_ledger_journal().
+--   * service_role: full table access (BYPASSRLS) for the server's unit of work; the ledger and audit
+--     tables stay append-only and balanced through triggers whichever path writes them.
+--   * trustcargo_private tables (counters, demo_mfa_secrets): service_role only, RLS enabled, no policy.
 --
 -- Helper functions are SECURITY DEFINER (owned by the migration role, which owns the tables and is
 -- therefore not subject to their RLS), STABLE and pinned to an empty search_path. Policies that need
@@ -18,16 +20,7 @@
 -- Helpers
 -- -----------------------------------------------------------------------------------------------------
 
-create or replace function trustcargo_private.try_uuid(p_value text)
-returns uuid
-language sql
-immutable
-set search_path = ''
-as $$
-    select case
-        when p_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_value::uuid
-    end;
-$$;
+-- trustcargo_private.try_uuid(text) is defined in the core schema migration (used by generated columns).
 
 create or replace function trustcargo_private.has_platform_role(p_role text)
 returns boolean
@@ -146,7 +139,9 @@ grant execute on function
     trustcargo_private.party_roles(uuid),
     trustcargo_private.party_role(uuid),
     trustcargo_private.is_transaction_party(uuid),
-    trustcargo_private.is_principal_party(uuid)
+    trustcargo_private.is_principal_party(uuid),
+    -- evaluated by the transactions trigger when a DRAFT creator renames their transaction
+    trustcargo_private.transaction_transition_allowed(text, text)
 to authenticated;
 
 -- -----------------------------------------------------------------------------------------------------
@@ -166,6 +161,12 @@ grant usage, select on all sequences in schema trustcargo to service_role;
 -- Reads are filtered by RLS; tables without a matching policy return no rows.
 grant select on all tables in schema trustcargo to authenticated;
 
+-- Private tables: the server (service_role) only. Counters are never deleted; demo secrets may be removed.
+revoke all on all tables in schema trustcargo_private from public, anon, authenticated;
+alter default privileges in schema trustcargo_private revoke all on tables from public, anon, authenticated;
+grant select, insert, update on trustcargo_private.counters to service_role;
+grant select, insert, update, delete on trustcargo_private.demo_mfa_secrets to service_role;
+
 -- Self-service writes, column-scoped (kyc_status, status, roles, email... are NOT updatable).
 grant update (full_name, phone, city, locale) on trustcargo.users to authenticated;
 grant update (read_at) on trustcargo.notifications to authenticated;
@@ -177,7 +178,7 @@ grant update (
 ) on trustcargo.security_settings to authenticated;                      -- platform_admin via policy
 
 -- -----------------------------------------------------------------------------------------------------
--- Enable RLS on every table in trustcargo
+-- Enable RLS on every table in trustcargo and trustcargo_private
 -- -----------------------------------------------------------------------------------------------------
 
 do $$
@@ -185,12 +186,12 @@ declare
     r record;
 begin
     for r in
-        select c.relname
+        select n.nspname, c.relname
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname = 'trustcargo' and c.relkind in ('r', 'p')
+        where n.nspname in ('trustcargo', 'trustcargo_private') and c.relkind in ('r', 'p')
     loop
-        execute format('alter table trustcargo.%I enable row level security', r.relname);
+        execute format('alter table %I.%I enable row level security', r.nspname, r.relname);
     end loop;
 end;
 $$;

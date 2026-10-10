@@ -1,13 +1,5 @@
 import { randomToken, sha256Hex } from '@/server/security/crypto';
-import type {
-    Clock,
-    FileScanner,
-    FileStorage,
-    IdentityVerificationProvider,
-    IdGenerator,
-    ScreeningProvider
-} from '@/server/ports/providers';
-import { randomUUID } from 'node:crypto';
+import type { Clock, FileScanner, FileStorage, IdentityVerificationProvider, ScreeningProvider } from '@/server/ports/providers';
 
 export class SystemClock implements Clock {
     private offsetMs = 0;
@@ -25,12 +17,6 @@ export class SystemClock implements Clock {
     }
     unfreeze() {
         this.frozen = undefined;
-    }
-}
-
-export class UuidGenerator implements IdGenerator {
-    id(): string {
-        return randomUUID();
     }
 }
 

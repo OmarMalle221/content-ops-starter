@@ -106,6 +106,6 @@ export async function submitMilestone(app: App, seller: Actor, txId: string, ind
 }
 
 export async function payAllSubmitted(app: App) {
-    for (const t of app.mockProvider.pendingTransfers().filter((x) => x.status === 'SUBMITTED'))
+    for (const t of (await app.mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
         await app.mockProvider.simulateTransferOutcome(t.reference, 'PAID');
 }

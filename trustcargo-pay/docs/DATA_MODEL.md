@@ -3,15 +3,18 @@
 Sources :
 
 - Types TypeScript : `src/domain/model.ts`
-- Schéma SQL : `supabase/migrations/` (40 tables, testées sur PostgreSQL 16)
+- Schéma SQL : `supabase/migrations/` (40 tables dans `trustcargo`, 2 tables réservées au serveur dans `trustcargo_private`, 3 tables du partenaire simulé dans `trustcargo_sim`, testées sur PostgreSQL 16)
+- Correspondance TypeScript ↔ SQL : `src/server/adapters/postgres/tables.ts` (une spécification déclarative par table, aller-retour sans perte)
 
 ## Conventions
 
 - **Montants** : `amount_minor bigint` + `currency` (domaine `currency_code` : CAD, USD, EUR, XOF). Jamais de flottant. XOF a 0 décimale, les autres 2.
-- **Identifiants** : UUID. Références lisibles `TC-AAAA-NNNNN` (unique).
+- **Identifiants** : UUIDv7 générés par le serveur (ordonnés dans le temps). Références lisibles `TC-AAAA-NNNNN` (unique, compteur sans trou `trustcargo_private.counters`).
 - **Horodatages** : `timestamptz`, ISO 8601 UTC côté TypeScript.
 - **Verrou optimiste** : `transactions.version`.
-- **Ajout seul (append-only)** : `ledger_journals`, `ledger_entries`, `audit_events`, `contract_acceptances`, `document_verifications`, `document_access_logs`, `risk_reviews`, `dispute_messages`, `dispute_decisions`, `reconciliations`, `session_events`. `provider_events` n'est ni supprimable ni modifiable, sauf pour son statut de traitement.
+- **Ajout seul (append-only)** : `ledger_journals`, `ledger_entries`, `audit_events`, `contract_acceptances`, `document_verifications`, `document_access_logs`, `risk_reviews`, `dispute_messages`, `dispute_decisions`, `reconciliations` (et `reconciliation_items`), `session_events`, imposé par des déclencheurs SQL. `provider_events` n'est ni supprimable ni modifiable, sauf pour son statut de traitement.
+- **Partenaire simulé (SIMULATION uniquement)** : `trustcargo_sim.instructions`, `trustcargo_sim.transfers` (une ligne par clé d'idempotence, unicité imposée) et `trustcargo_sim.statement_lines` (relevé en ajout seul) sont les enregistrements du **faux** partenaire (`MockPaymentProvider`), pas ceux de TrustCargo : aucune clé étrangère avec `trustcargo`, références et montants uniquement (ni nom du payeur ni coordonnées bancaires), `service_role` seulement, seuls les statuts sont modifiables. La réconciliation compare ce relevé au registre. Aucun fonds réel.
+- **Profils** : `users` n'a pas de clé étrangère vers `auth.users` (les profils de démonstration n'ont pas de compte Supabase Auth) ; un utilisateur réel doit avoir un compte `auth.users`. Le secret TOTP fictif des profils de démonstration est dans `trustcargo_private.demo_mfa_secrets`.
 
 ## Domaines fonctionnels
 
@@ -27,7 +30,7 @@ Sources :
 | Litiges | `disputes`, `dispute_messages`, `dispute_decisions` |
 | Paiements | `payment_instructions`, `payouts`, `refunds`, `provider_events` (unique `(provider, external_event_id)`), `provider_connections` (référence du secret uniquement) |
 | Registre | `ledger_accounts`, `ledger_journals` (clé d'idempotence unique), `ledger_entries`, `reconciliations`, `reconciliation_items` |
-| Transverse | `audit_events` (séquence + chaîne d'empreintes), `notifications`, `security_settings` |
+| Transverse | `audit_events` (séquence + chaîne d'empreintes), `notifications`, `security_settings` (une seule ligne, id TypeScript `'default'`) |
 
 ## Relations clés
 

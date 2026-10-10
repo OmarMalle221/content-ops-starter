@@ -88,10 +88,94 @@ grant execute on all functions in schema tst to anon, authenticated, service_rol
 
 \echo '== structural checks'
 
--- Every table in trustcargo has RLS enabled.
-select tst.eq('tables in trustcargo without RLS', (
+-- Every table in trustcargo, trustcargo_private and trustcargo_sim has RLS enabled.
+select tst.eq('tables in trustcargo / trustcargo_private / trustcargo_sim without RLS', (
     select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'trustcargo' and c.relkind in ('r', 'p') and not c.relrowsecurity), 0);
+    where n.nspname in ('trustcargo', 'trustcargo_private', 'trustcargo_sim') and c.relkind in ('r', 'p') and not c.relrowsecurity), 0);
+
+-- The target Supabase project is shared with another application: the migrations create nothing in
+-- `public` (the shim does not either; the tst schema below is created after this check).
+select tst.eq('relations (tables, views, sequences, indexes...) in public', (
+    select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public'), 0);
+select tst.eq('types and domains in public', (
+    select count(*) from pg_type t join pg_namespace n on n.oid = t.typnamespace where n.nspname = 'public'), 0);
+select tst.eq('functions and procedures in public', (
+    select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'), 0);
+
+-- Private tables (counters, demo TOTP secrets): service_role only.
+select tst.eq('anon/authenticated privileges on trustcargo_private tables', (
+    select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    cross join (values ('anon'), ('authenticated')) as r (rolname)
+    where n.nspname = 'trustcargo_private' and c.relkind in ('r', 'p')
+      and (has_table_privilege(r.rolname, c.oid, 'SELECT') or has_table_privilege(r.rolname, c.oid, 'INSERT')
+           or has_table_privilege(r.rolname, c.oid, 'UPDATE') or has_table_privilege(r.rolname, c.oid, 'DELETE'))), 0);
+-- (has_table_privilege with a list is true when ANY privilege is held: check them one by one.)
+select tst.ok('service_role can read and write demo TOTP secrets',
+    has_table_privilege('service_role', 'trustcargo_private.demo_mfa_secrets', 'SELECT')
+    and has_table_privilege('service_role', 'trustcargo_private.demo_mfa_secrets', 'INSERT')
+    and has_table_privilege('service_role', 'trustcargo_private.demo_mfa_secrets', 'UPDATE')
+    and has_table_privilege('service_role', 'trustcargo_private.demo_mfa_secrets', 'DELETE'));
+select tst.ok('service_role can increment counters but not delete them',
+    has_table_privilege('service_role', 'trustcargo_private.counters', 'SELECT')
+    and has_table_privilege('service_role', 'trustcargo_private.counters', 'INSERT')
+    and has_table_privilege('service_role', 'trustcargo_private.counters', 'UPDATE')
+    and not has_table_privilege('service_role', 'trustcargo_private.counters', 'DELETE'));
+
+-- Simulated partner (SIMULATION ONLY, fake partner's records): service_role only, nothing for anon / authenticated.
+select tst.eq('trustcargo_sim tables', (
+    select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'trustcargo_sim' and c.relkind in ('r', 'p')), 3);
+select tst.ok('anon/authenticated have no usage on schema trustcargo_sim',
+    not has_schema_privilege('anon', 'trustcargo_sim', 'USAGE') and not has_schema_privilege('authenticated', 'trustcargo_sim', 'USAGE')
+    and not has_schema_privilege('anon', 'trustcargo_sim', 'CREATE') and not has_schema_privilege('authenticated', 'trustcargo_sim', 'CREATE'));
+select tst.eq('anon/authenticated table privileges on trustcargo_sim', (
+    select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    cross join (values ('anon'), ('authenticated')) as r (rolname)
+    cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) as p (priv)
+    where n.nspname = 'trustcargo_sim' and c.relkind in ('r', 'p', 'v', 'm', 'f')
+      and has_table_privilege(r.rolname, c.oid, p.priv)), 0);
+select tst.eq('anon/authenticated column privileges on trustcargo_sim', (
+    select count(*) from information_schema.column_privileges
+    where table_schema = 'trustcargo_sim' and grantee in ('anon', 'authenticated', 'PUBLIC')), 0);
+select tst.eq('anon/authenticated sequence privileges on trustcargo_sim', (
+    select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    cross join (values ('anon'), ('authenticated')) as r (rolname)
+    cross join (values ('USAGE'), ('SELECT'), ('UPDATE')) as p (priv)
+    where n.nspname = 'trustcargo_sim' and c.relkind = 'S' and has_sequence_privilege(r.rolname, c.oid, p.priv)), 0);
+select tst.eq('functions in trustcargo_sim', (
+    select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'trustcargo_sim'), 0);
+select tst.ok('service_role reads and records the simulated partner state but cannot delete it', (
+    select bool_and(has_table_privilege('service_role', format('trustcargo_sim.%I', t), 'SELECT')
+                    and has_table_privilege('service_role', format('trustcargo_sim.%I', t), 'INSERT')
+                    and not has_table_privilege('service_role', format('trustcargo_sim.%I', t), 'DELETE')
+                    and not has_table_privilege('service_role', format('trustcargo_sim.%I', t), 'TRUNCATE'))
+    from unnest(array['instructions', 'transfers', 'statement_lines']) as t));
+select tst.ok('service_role may only update simulated statuses (amounts, references, statement are immutable)',
+    has_column_privilege('service_role', 'trustcargo_sim.instructions', 'status', 'UPDATE')
+    and has_column_privilege('service_role', 'trustcargo_sim.transfers', 'status', 'UPDATE')
+    and not has_column_privilege('service_role', 'trustcargo_sim.instructions', 'amount_minor', 'UPDATE')
+    and not has_column_privilege('service_role', 'trustcargo_sim.instructions', 'reference', 'UPDATE')
+    and not has_column_privilege('service_role', 'trustcargo_sim.transfers', 'amount_minor', 'UPDATE')
+    and not has_column_privilege('service_role', 'trustcargo_sim.transfers', 'idempotency_key', 'UPDATE')
+    and not has_table_privilege('service_role', 'trustcargo_sim.statement_lines', 'UPDATE'));
+-- The fake partner is an external system: no foreign key between its records and TrustCargo's.
+select tst.eq('foreign keys from or to trustcargo_sim', (
+    select count(*) from pg_constraint con
+    where con.contype = 'f'
+      and (con.connamespace = 'trustcargo_sim'::regnamespace
+           or con.confrelid in (select c.oid from pg_class c where c.relnamespace = 'trustcargo_sim'::regnamespace))), 0);
+
+-- No foreign key from trustcargo.users to auth.users (demo personas have no Supabase Auth account).
+select tst.eq('foreign keys from trustcargo tables to auth.users', (
+    select count(*) from pg_constraint con
+    where con.contype = 'f' and con.confrelid = 'auth.users'::regclass), 0);
+
+-- Defaults of the single security_settings row = DEFAULT_SECURITY_SETTINGS (src/server/services/context.ts).
+select tst.ok('security_settings defaults match the TypeScript defaults', (
+    select admin_mfa_max_age_minutes = 720 and sensitive_action_mfa_max_age_minutes = 15
+       and payout_account_cooling_off_hours = 72 and invitation_ttl_hours = 168
+       and signed_url_ttl_seconds = 300 and max_upload_bytes = 10485760
+    from trustcargo.security_settings where id));
 
 -- anon has no privilege at all on trustcargo tables / views.
 select tst.eq('anon privileges on trustcargo relations', (
@@ -297,13 +381,13 @@ insert into trustcargo.notifications (user_id, type, transaction_id) values
     ('c0000000-0000-4000-8000-00000000000c', 'transaction.invitations_sent', '22222222-2222-4222-8222-222222222222');
 
 -- Audit chain: genesis (no transaction), a T1 transaction event, an internal T1 risk event.
-insert into trustcargo.audit_events (actor_type, action, entity_type, entity_id, previous_hash, hash) values
-    ('SYSTEM', 'system.seeded', 'system', 'seed', repeat('0', 64), encode(sha256('e1'::bytea), 'hex'));
-insert into trustcargo.audit_events (actor_type, actor_id, action, entity_type, entity_id, transaction_id, previous_hash, hash) values
-    ('USER', 'a0000000-0000-4000-8000-00000000000a', 'transaction.invitations_sent', 'transaction', '11111111-1111-4111-8111-111111111111',
+insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash) values
+    (1, 'SYSTEM', 'system', 'system.seeded', 'system', 'seed', repeat('0', 64), encode(sha256('e1'::bytea), 'hex'));
+insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, transaction_id, previous_hash, hash) values
+    (2, 'USER', 'a0000000-0000-4000-8000-00000000000a', 'transaction.invitations_sent', 'transaction', '11111111-1111-4111-8111-111111111111',
      '11111111-1111-4111-8111-111111111111', encode(sha256('e1'::bytea), 'hex'), encode(sha256('e2'::bytea), 'hex'));
-insert into trustcargo.audit_events (actor_type, action, entity_type, entity_id, transaction_id, previous_hash, hash) values
-    ('SYSTEM', 'risk.alert_raised', 'risk_alert', '7a000000-0000-4000-8000-000000000001',
+insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, transaction_id, previous_hash, hash) values
+    (3, 'SYSTEM', 'system', 'risk.alert_raised', 'risk_alert', '7a000000-0000-4000-8000-000000000001',
      '11111111-1111-4111-8111-111111111111', encode(sha256('e2'::bytea), 'hex'), encode(sha256('e3'::bytea), 'hex'));
 
 -- Ledger: funds reported received for T1 (accounts opened on first use).
@@ -322,8 +406,8 @@ insert into trustcargo.ledger_accounts (code, name, type, currency) values
 
 insert into trustcargo.reconciliations (id, provider, run_by, status) values
     ('9f000000-0000-4000-8000-000000000001', 'sim', 'f0000000-0000-4000-8000-00000000000f', 'MATCHED');
-insert into trustcargo.reconciliation_items (reconciliation_id, external_reference, kind, provider_amount_minor, ledger_amount_minor, currency, result) values
-    ('9f000000-0000-4000-8000-000000000001', 'SIM-PI-0001', 'FUNDS', 1850000, 1850000, 'CAD', 'MATCHED');
+insert into trustcargo.reconciliation_items (reconciliation_id, ordinal, external_reference, kind, provider_amount_minor, ledger_amount_minor, currency, result) values
+    ('9f000000-0000-4000-8000-000000000001', 0, 'SIM-PI-0001', 'FUNDS', 1850000, 1850000, 'CAD', 'MATCHED');
 
 commit;
 
@@ -418,7 +502,9 @@ select tst.denied('B cannot insert provider events',
     $q$insert into trustcargo.provider_events (provider, external_event_id, type, payload, signature_verified, occurred_at)
        values ('sim', 'evt_forged', 'funds.confirmed', '{}', true, now())$q$);
 select tst.denied('B cannot insert audit events',
-    $q$insert into trustcargo.audit_events (actor_type, action, entity_type, entity_id, previous_hash, hash) values ('SYSTEM', 'x', 'x', 'x', repeat('0', 64), repeat('1', 64))$q$);
+    $q$insert into trustcargo.audit_events (sequence, actor_type, action, entity_type, entity_id, previous_hash, hash) values (4, 'SYSTEM', 'x', 'x', 'x', encode(sha256('e3'::bytea), 'hex'), repeat('1', 64))$q$);
+select tst.denied('B cannot read the counters', 'select * from trustcargo_private.counters');
+select tst.denied('B cannot read demo TOTP secrets', 'select * from trustcargo_private.demo_mfa_secrets');
 select tst.denied('B cannot insert risk alerts',
     $q$insert into trustcargo.risk_alerts (rule_id, category, severity, subject_user_id, fingerprint, recommended_action) values ('r', 'USER', 'LOW', 'b0000000-0000-4000-8000-00000000000b', 'f', 'x')$q$);
 select tst.denied('B cannot change transaction status',
@@ -662,11 +748,23 @@ set local role service_role;
 select tst.fails('UPDATE audit_events forbidden', $q$update trustcargo.audit_events set action = 'tampered'$q$, '42501');
 select tst.fails('DELETE audit_events forbidden', 'delete from trustcargo.audit_events', '42501');
 select tst.fails('audit chain: wrong previous_hash rejected',
-    $q$insert into trustcargo.audit_events (actor_type, action, entity_type, entity_id, previous_hash, hash)
-       values ('SYSTEM', 'x.y', 'x', 'x', encode(sha256('e1'::bytea), 'hex'), encode(sha256('fork'::bytea), 'hex'))$q$, '40001');
-select tst.ok('audit chain: correct previous_hash accepted', tst.affected(
-    $q$insert into trustcargo.audit_events (actor_type, action, entity_type, entity_id, previous_hash, hash)
-       values ('SYSTEM', 'x.y', 'x', 'x', encode(sha256('e3'::bytea), 'hex'), encode(sha256('e4'::bytea), 'hex'))$q$) = 1);
+    $q$insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash)
+       values (4, 'SYSTEM', 'system', 'x.y', 'x', 'x', encode(sha256('e1'::bytea), 'hex'), encode(sha256('fork'::bytea), 'hex'))$q$, '40001');
+select tst.fails('audit chain: sequence gap rejected',
+    $q$insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash)
+       values (5, 'SYSTEM', 'system', 'x.y', 'x', 'x', encode(sha256('e3'::bytea), 'hex'), encode(sha256('gap'::bytea), 'hex'))$q$, '40001');
+select tst.fails('audit chain: replayed sequence rejected',
+    $q$insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash)
+       values (3, 'SYSTEM', 'system', 'x.y', 'x', 'x', encode(sha256('e3'::bytea), 'hex'), encode(sha256('replay'::bytea), 'hex'))$q$, '40001');
+select tst.fails('audit chain: sequence is required',
+    $q$insert into trustcargo.audit_events (actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash)
+       values ('SYSTEM', 'system', 'x.y', 'x', 'x', encode(sha256('e3'::bytea), 'hex'), encode(sha256('none'::bytea), 'hex'))$q$, '23502');
+select tst.fails('audit: a USER event needs a user id as actor',
+    $q$insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash)
+       values (4, 'USER', 'system', 'x.y', 'x', 'x', encode(sha256('e3'::bytea), 'hex'), encode(sha256('e4'::bytea), 'hex'))$q$, '23514');
+select tst.ok('audit chain: next sequence with correct previous_hash accepted (SYSTEM actor label, non-uuid entity id)', tst.affected(
+    $q$insert into trustcargo.audit_events (sequence, actor_type, actor_id, action, entity_type, entity_id, previous_hash, hash)
+       values (4, 'PROVIDER', 'mock', 'provider_event.rejected', 'provider_event', 'unverified', encode(sha256('e3'::bytea), 'hex'), encode(sha256('e4'::bytea), 'hex'))$q$) = 1);
 select tst.fails('duplicate provider event rejected (replay protection)',
     $q$insert into trustcargo.provider_events (provider, external_event_id, type, payload, signature_verified, occurred_at)
        values ('sim', 'evt_0001', 'funds.confirmed', '{}', true, now())$q$, '23505');
@@ -723,6 +821,179 @@ select tst.fails('second open dispute on a transaction rejected',
 select tst.fails('webhook secret ref must be a name, not a secret value',
     $q$insert into trustcargo.provider_connections (provider, display_name, webhook_secret_ref, regulatory_status_note)
        values ('other', 'x', 'whsec_live abc:def', 'x')$q$, '23514');
+rollback;
+
+-- =====================================================================================================
+\echo '== storage of the TypeScript model (service_role)'
+begin;
+set local role service_role;
+
+-- Users: demo personas need no auth account; real users must have one.
+select tst.ok('demo persona without auth.users account accepted', tst.affected(
+    $q$insert into trustcargo.users (id, email, full_name, country, is_demo)
+       values ('0d000000-0000-7000-8000-000000000001', 'persona@demo.trustcargo.test', 'Demo Persona', 'CA', true)$q$) = 1);
+select tst.fails('non-demo user without auth.users account rejected',
+    $q$insert into trustcargo.users (id, email, full_name, country, is_demo)
+       values ('0e000000-0000-7000-8000-000000000001', 'real@example.test', 'Real User', 'CA', false)$q$, '23503');
+select tst.ok('non-demo user with an auth.users account accepted', tst.affected(
+    $q$insert into trustcargo.users (id, email, full_name, country, is_demo)
+       values ('c0000000-0000-4000-8000-00000000000c', 'dup@example.test', 'x', 'CA', false)
+       on conflict (id) do update set is_demo = false$q$) = 1);
+
+-- Demo TOTP secrets: demo personas only.
+select tst.ok('TOTP secret stored for a demo persona', tst.affected(
+    $q$insert into trustcargo_private.demo_mfa_secrets (user_id, totp_secret) values ('0d000000-0000-7000-8000-000000000001', 'JBSWY3DPEHPK3PXP')$q$) = 1);
+select tst.fails('TOTP secret refused for a real user',
+    $q$insert into trustcargo_private.demo_mfa_secrets (user_id, totp_secret) values ('c0000000-0000-4000-8000-00000000000c', 'JBSWY3DPEHPK3PXP')$q$, '42501');
+select tst.fails('a demo persona with a TOTP secret cannot silently become a real user',
+    $q$update trustcargo.users set is_demo = false where id = '0d000000-0000-7000-8000-000000000001'$q$);
+
+-- Counters: atomic, transactional upsert-increment.
+with x as (insert into trustcargo_private.counters as c (name, value) values ('transaction_reference', 1)
+           on conflict (name) do update set value = c.value + 1 returning value)
+select tst.eq('counter starts at 1', (select max(value) from x), 1);
+with x as (insert into trustcargo_private.counters as c (name, value) values ('transaction_reference', 1)
+           on conflict (name) do update set value = c.value + 1 returning value)
+select tst.eq('counter increments', (select max(value) from x), 2);
+
+-- Session pseudonyms: HMAC hex (pseudonymize() keeps 128 bits), never a raw identifier.
+select tst.ok('128-bit pseudonymised session identifiers accepted', tst.affected(
+    $q$insert into trustcargo.session_events (user_id, country, device_fingerprint_hash, ip_hash)
+       values ('b0000000-0000-4000-8000-00000000000b', 'SN', repeat('ab', 16), repeat('cd', 16))$q$) = 1);
+select tst.fails('raw device identifier rejected',
+    $q$insert into trustcargo.session_events (user_id, country, device_fingerprint_hash, ip_hash)
+       values ('b0000000-0000-4000-8000-00000000000b', 'SN', 'dev-awa-phone', repeat('cd', 16))$q$, '23514');
+
+-- Append-only records of the Db port.
+select tst.fails('session_events are append-only', $q$update trustcargo.session_events set country = 'CA'$q$, '42501');
+select tst.fails('contract_acceptances are append-only', $q$update trustcargo.contract_acceptances set comment = 'edited'$q$, '42501');
+select tst.fails('contract_acceptances cannot be deleted', 'delete from trustcargo.contract_acceptances', '42501');
+select tst.fails('document_verifications are append-only', $q$update trustcargo.document_verifications set notes = 'edited'$q$, '42501');
+select tst.fails('document_access_logs cannot be truncated', 'truncate trustcargo.document_access_logs', '42501');
+select tst.fails('risk_reviews cannot be deleted', 'delete from trustcargo.risk_reviews', '42501');
+select tst.fails('risk_reviews are append-only', $q$update trustcargo.risk_reviews set notes = 'edited'$q$, '42501');
+select tst.fails('dispute_messages are append-only', $q$update trustcargo.dispute_messages set body = 'edited'$q$, '42501');
+select tst.fails('reconciliations are append-only', $q$update trustcargo.reconciliations set status = 'DISCREPANCIES'$q$, '42501');
+select tst.fails('reconciliation_items cannot be deleted', 'delete from trustcargo.reconciliation_items', '42501');
+select tst.fails('reconciliation item positions are unique',
+    $q$insert into trustcargo.reconciliation_items (reconciliation_id, ordinal, external_reference, kind, provider_amount_minor, currency, result)
+       values ('9f000000-0000-4000-8000-000000000001', 0, 'X', 'FUNDS', 1, 'CAD', 'MISSING_IN_LEDGER')$q$, '23505');
+
+-- Payout / refund lifecycles = PAYOUT_TRANSITIONS / REFUND_TRANSITIONS (the full matrix is compared with
+-- TypeScript in tests/integration/postgres-adapter.test.ts).
+select tst.ok('payout FAILED -> CANCELLED allowed', trustcargo_private.settlement_transition_allowed('payouts', 'FAILED', 'CANCELLED'));
+select tst.ok('payout FAILED -> REQUESTED refused', not trustcargo_private.settlement_transition_allowed('payouts', 'FAILED', 'REQUESTED'));
+select tst.ok('refund FAILED -> CANCELLED allowed', trustcargo_private.settlement_transition_allowed('refunds', 'FAILED', 'CANCELLED'));
+select tst.ok('refund FAILED -> REQUESTED refused', not trustcargo_private.settlement_transition_allowed('refunds', 'FAILED', 'REQUESTED'));
+select tst.eq('payout REQUESTED -> FAILED -> CANCELLED', tst.affected($q$
+    update trustcargo.payouts set status = 'FAILED', failure_reason = 'Reported failed by partner';
+    update trustcargo.payouts set status = 'CANCELLED'$q$), 1);
+select tst.fails('payout amount immutable even without a status change', 'update trustcargo.payouts set amount_minor = amount_minor + 1', '42501');
+select tst.eq('refund REQUESTED -> FAILED -> CANCELLED', tst.affected($q$
+    update trustcargo.refunds set status = 'FAILED', failure_reason = 'Reported failed by partner';
+    update trustcargo.refunds set status = 'CANCELLED'$q$), 1);
+
+-- requested_by: a user id or 'system' (automatic re-attempts), user ids still checked against users.
+select tst.ok('payout requested by the system accepted', tst.affected(
+    $q$insert into trustcargo.payouts (transaction_id, milestone_id, payee_party_id, payment_account_id, amount_minor, currency, provider, idempotency_key, requested_by)
+       values ('11111111-1111-4111-8111-111111111111', '1d000000-0000-4000-8000-000000000002', '1e000000-0000-4000-8000-000000000001',
+               '9a000000-0000-4000-8000-000000000001', 1, 'CAD', 'sim', 'payout:system-retry', 'system')$q$) = 1);
+select tst.fails('payout requested_by must be a user id or system',
+    $q$insert into trustcargo.payouts (transaction_id, payee_party_id, payment_account_id, amount_minor, currency, provider, idempotency_key, requested_by)
+       values ('11111111-1111-4111-8111-111111111111', '1e000000-0000-4000-8000-000000000001',
+               '9a000000-0000-4000-8000-000000000001', 1, 'CAD', 'sim', 'payout:bad-requester', 'somebody')$q$, '23514');
+select tst.fails('payout requested_by user must exist',
+    $q$insert into trustcargo.payouts (transaction_id, payee_party_id, payment_account_id, amount_minor, currency, provider, idempotency_key, requested_by)
+       values ('11111111-1111-4111-8111-111111111111', '1e000000-0000-4000-8000-000000000001',
+               '9a000000-0000-4000-8000-000000000001', 1, 'CAD', 'sim', 'payout:ghost', '99999999-9999-4999-8999-999999999999')$q$, '23503');
+
+-- Transactions: the price can still be amended in AWAITING_FUNDING (CONTRACT_AMENDED), not once funding started.
+update trustcargo.transactions set status = 'AWAITING_PARTIES' where id = '33333333-3333-4333-8333-333333333333';
+update trustcargo.transactions set status = 'IDENTITY_VERIFICATION' where id = '33333333-3333-4333-8333-333333333333';
+update trustcargo.transactions set status = 'AWAITING_AGREEMENT' where id = '33333333-3333-4333-8333-333333333333';
+update trustcargo.transactions set status = 'AWAITING_FUNDING' where id = '33333333-3333-4333-8333-333333333333';
+select tst.eq('amendment in AWAITING_FUNDING may change the amount', tst.affected(
+    $q$update trustcargo.transactions set status = 'AWAITING_AGREEMENT', amount_minor = 2300000 where id = '33333333-3333-4333-8333-333333333333'$q$), 1);
+update trustcargo.transactions set status = 'AWAITING_FUNDING' where id = '33333333-3333-4333-8333-333333333333';
+update trustcargo.transactions set status = 'FUNDING_PENDING' where id = '33333333-3333-4333-8333-333333333333';
+select tst.fails('amount frozen once funding started',
+    $q$update trustcargo.transactions set amount_minor = 1 where id = '33333333-3333-4333-8333-333333333333'$q$, '42501');
+select tst.eq('version incremented by 1 on every update (7 updates)', (select version from trustcargo.transactions where id = '33333333-3333-4333-8333-333333333333'), 8);
+
+-- updated_at: application-owned columns keep the writer's value; DB-owned columns are always now().
+with u as (update trustcargo.transactions set title = 'Lexus RX 2020 (a)', updated_at = '2026-01-02T03:04:05.678Z'
+           where id = '33333333-3333-4333-8333-333333333333' returning updated_at)
+select tst.ok('explicit updated_at kept', (select count(*) = 1 and bool_and(updated_at = '2026-01-02T03:04:05.678Z') from u));
+with u as (update trustcargo.transactions set title = 'Lexus RX 2020 (b)' where id = '33333333-3333-4333-8333-333333333333' returning updated_at)
+select tst.ok('unchanged updated_at set to now() for other writers', (select count(*) = 1 and bool_and(updated_at = now()) from u));
+select set_config('trustcargo.app_managed_updated_at', 'on', true);
+with u as (update trustcargo.transactions set title = 'Lexus RX 2020 (c)', updated_at = '2026-01-02T03:04:05.678Z'
+           where id = '33333333-3333-4333-8333-333333333333' returning updated_at)
+select tst.ok('server unit of work: explicit updated_at kept', (select count(*) = 1 and bool_and(updated_at = '2026-01-02T03:04:05.678Z') from u));
+with u as (update trustcargo.transactions set title = 'Lexus RX 2020 (d)', updated_at = '2026-01-02T03:04:05.678Z'
+           where id = '33333333-3333-4333-8333-333333333333' returning updated_at)
+select tst.ok('server unit of work: the same instant written twice is kept',
+    (select count(*) = 1 and bool_and(updated_at = '2026-01-02T03:04:05.678Z') from u));
+with u as (update trustcargo.users set city = 'Dakar', updated_at = '2000-01-01T00:00:00Z'
+           where id = 'b0000000-0000-4000-8000-00000000000b' returning updated_at)
+select tst.ok('database-owned updated_at is always now()', (select count(*) = 1 and bool_and(updated_at = now()) from u));
+rollback;
+
+-- =====================================================================================================
+\echo '== simulated partner records (trustcargo_sim)'
+begin;
+set local role anon;
+select tst.denied('anon cannot read simulated instructions', 'select * from trustcargo_sim.instructions');
+select tst.denied('anon cannot read the simulated statement', 'select * from trustcargo_sim.statement_lines');
+rollback;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000f","role":"authenticated"}', true);
+set local role authenticated;
+select tst.denied('finance operator F cannot read simulated transfers', 'select * from trustcargo_sim.transfers');
+select tst.denied('finance operator F cannot add a simulated statement line',
+    $q$insert into trustcargo_sim.statement_lines (external_reference, kind, amount_minor, currency, occurred_at)
+       values ('sim_pi_forged', 'FUNDS_RECEIVED', 1850000, 'CAD', now())$q$);
+rollback;
+
+begin;
+set local role service_role;
+select tst.ok('service_role records a simulated instruction', tst.affected(
+    $q$insert into trustcargo_sim.instructions (reference, idempotency_key, amount_minor, currency)
+       values ('sim_pi_AbC-12_xyz', 'fund:sim-test', 1850000, 'CAD')$q$) = 1);
+select tst.fails('one simulated instruction per idempotency key',
+    $q$insert into trustcargo_sim.instructions (reference, idempotency_key, amount_minor, currency)
+       values ('sim_pi_other', 'fund:sim-test', 1850000, 'CAD')$q$, '23505');
+select tst.eq('a replayed key is ignored by ON CONFLICT DO NOTHING', tst.affected(
+    $q$insert into trustcargo_sim.instructions (reference, idempotency_key, amount_minor, currency)
+       values ('sim_pi_other', 'fund:sim-test', 1, 'USD') on conflict (idempotency_key) do nothing$q$), 0);
+select tst.fails('simulated references carry the sim_ prefix',
+    $q$insert into trustcargo_sim.instructions (reference, idempotency_key, amount_minor, currency)
+       values ('PI-REAL-0001', 'fund:not-sim', 1850000, 'CAD')$q$, '23514');
+select tst.fails('simulated amounts are positive integers',
+    $q$insert into trustcargo_sim.instructions (reference, idempotency_key, amount_minor, currency)
+       values ('sim_pi_zero', 'fund:zero', 0, 'CAD')$q$, '23514');
+select tst.eq('service_role moves a simulated status', tst.affected(
+    $q$update trustcargo_sim.instructions set status = 'FUNDED', updated_at = now() where reference = 'sim_pi_AbC-12_xyz'$q$), 1);
+select tst.fails('unknown simulated status rejected',
+    $q$update trustcargo_sim.instructions set status = 'SETTLED' where reference = 'sim_pi_AbC-12_xyz'$q$, '23514');
+select tst.denied('simulated amounts cannot be rewritten',
+    $q$update trustcargo_sim.instructions set amount_minor = 1 where reference = 'sim_pi_AbC-12_xyz'$q$);
+select tst.denied('simulated instructions cannot be deleted', 'delete from trustcargo_sim.instructions');
+select tst.ok('service_role records a simulated payout', tst.affected(
+    $q$insert into trustcargo_sim.transfers (reference, kind, idempotency_key, amount_minor, currency)
+       values ('sim_po_AbC123', 'PAYOUT', 'payout:sim-test', 185000, 'CAD')$q$) = 1);
+select tst.fails('one simulated transfer per idempotency key',
+    $q$insert into trustcargo_sim.transfers (reference, kind, idempotency_key, amount_minor, currency)
+       values ('sim_po_other', 'PAYOUT', 'payout:sim-test', 185000, 'CAD')$q$, '23505');
+select tst.fails('transfer reference prefix matches its kind',
+    $q$insert into trustcargo_sim.transfers (reference, kind, idempotency_key, amount_minor, currency)
+       values ('sim_po_mismatch', 'REFUND', 'refund:sim-test', 185000, 'CAD')$q$, '23514');
+select tst.ok('service_role appends to the simulated statement', tst.affected(
+    $q$insert into trustcargo_sim.statement_lines (external_reference, kind, amount_minor, currency, occurred_at)
+       values ('sim_pi_AbC-12_xyz', 'FUNDS_RECEIVED', 1850000, 'CAD', now())$q$) = 1);
+select tst.denied('the simulated statement is append-only (update)', 'update trustcargo_sim.statement_lines set amount_minor = 1');
+select tst.denied('the simulated statement is append-only (delete)', 'delete from trustcargo_sim.statement_lines');
 rollback;
 
 -- Cleanup of test helpers.

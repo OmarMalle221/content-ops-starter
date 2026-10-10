@@ -3,9 +3,10 @@
  * Swapping the in-memory database or the mock providers for real adapters happens here only.
  */
 import { MockPaymentProvider } from './adapters/mock/mock-payment-provider';
-import { EicarOnlyScanner, MockIdentityProvider, MockScreeningProvider, SystemClock, UuidGenerator } from './adapters/mock/mock-providers';
+import { EicarOnlyScanner, MockIdentityProvider, MockScreeningProvider, SystemClock } from './adapters/mock/mock-providers';
 import { createPersistence } from './adapters/persistence';
 import { createFileStorage } from './adapters/storage';
+import { UuidV7Generator } from './adapters/uuid-v7';
 import type { ServerConfig } from './config';
 import { InMemoryRateLimiter } from './security/rate-limit';
 import { AdminService, ComplianceService, NotificationService, ReconciliationService } from './services/admin-services';
@@ -26,11 +27,12 @@ import { Workflow } from './services/workflow';
 export function createApp(config: ServerConfig) {
     const persistence = createPersistence(config);
     const clock = new SystemClock();
-    const mockProvider = new MockPaymentProvider(config.webhookSecret, clock);
+    // SIMULATION ONLY: the fake partner keeps its records in its own store (memory or schema trustcargo_sim).
+    const mockProvider = new MockPaymentProvider(config.webhookSecret, clock, persistence.simulatedPartner);
     const deps: Deps = {
         uow: persistence.uow,
         clock,
-        ids: new UuidGenerator(),
+        ids: new UuidV7Generator(),
         payments: mockProvider,
         identity: new MockIdentityProvider(),
         screening: new MockScreeningProvider(),

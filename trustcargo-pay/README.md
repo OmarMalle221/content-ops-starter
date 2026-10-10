@@ -49,6 +49,7 @@ Ces scénarios ne sont pas insérés en base « à la main ». Ils sont produits
 | `npm run build && npm start` | Build et serveur de production |
 | `npm test` | Tests unitaires et d'intégration (Vitest) |
 | `npm run test:db` | Schéma Supabase, RLS et intégrité du registre sur PostgreSQL 16 |
+| `npm run test:pg` | Suite d'intégration sur l'adaptateur Postgres (PostgreSQL 16 local + migrations, une base par test) |
 | `npm run test:e2e` | Parcours critiques, sécurité, accessibilité (axe) et mobile (Playwright) |
 | `npm run typecheck` / `npm run lint` | TypeScript strict, ESLint |
 
@@ -59,7 +60,7 @@ src/
   domain/          Règles métier pures : monnaie (bigint), VIN, machine à états, registre, antifraude, documents
   server/
     ports/         Interfaces : base de données, PaymentProvider, KYC, filtrage, stockage, antivirus
-    adapters/      Mémoire (démo/tests), MockPaymentProvider et autres fournisseurs simulés
+    adapters/      Mémoire (démo/tests), Postgres (schéma Supabase), MockPaymentProvider et autres fournisseurs simulés
     services/      Services métier : autorisation côté serveur, unité de travail, audit chaîné
     security/      HMAC, TOTP, signatures webhook, URL signées, limitation de débit
     demo/          Profils et scénarios fictifs
@@ -83,7 +84,7 @@ docs/              Architecture, workflows, données, sécurité, déploiement, 
 
 ## État du MVP et limites connues
 
-- **Persistance.** La démo et les tests utilisent un adaptateur mémoire transactionnel. Le schéma Supabase (40 tables, RLS) est écrit et testé sur PostgreSQL 16, mais l'**adaptateur Postgres/Supabase des services n'est pas encore branché**. La démo doit donc tourner sur **un seul processus Node** : elle n'est pas compatible avec un hébergement serverless multi-instances.
+- **Persistance.** Par défaut, la démo et les tests utilisent un adaptateur mémoire transactionnel : la démo doit alors tourner sur **un seul processus Node**. Avec `DATABASE_URL`, l'adaptateur Postgres utilise le schéma Supabase (RLS, registre et audit en ajout seul) ; la même suite d'intégration passe sur les deux adaptateurs. Il a été testé sur PostgreSQL 16 local et en CI, **pas encore sur un projet Supabase réel**. Ses unités de travail sont sérialisées par un verrou global (débit limité, voir [mise en production](docs/PRODUCTION_READINESS.md)). Les enregistrements fictifs du partenaire simulé y sont conservés dans un schéma séparé (`trustcargo_sim`), qui ne fait pas partie des livres de TrustCargo.
 - **Authentification.** La connexion par profil de démonstration et le TOTP sont implémentés. L'intégration Supabase Auth (comptes réels, MFA AAL2) n'est pas branchée.
 - **Fournisseurs.** Paiement, KYC, filtrage sanctions, antivirus et stockage sont des adaptateurs simulés derrière des interfaces. Aucun fournisseur réel n'est intégré.
 - **Courriels.** Les invitations sont des liens à usage unique affichés une seule fois. Les invitations destinées à un compte existant apparaissent aussi dans son tableau de bord. Aucun e-mail n'est envoyé.

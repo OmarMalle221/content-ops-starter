@@ -4,6 +4,12 @@
  * Simulates the partner side of the integration: it keeps its own records, answers API calls and
  * emits SIGNED webhook events that go through exactly the same verification pipeline as a real
  * partner's events. The simulator controls (demo UI, tests) drive it via `simulate*` methods.
+ *
+ * Its records (instructions, transfers, statement) live in a SimulatedPartnerStore: in memory by default,
+ * in schema `trustcargo_sim` with Postgres persistence, so they survive restarts and are shared by every
+ * instance. Store writes are committed before the corresponding webhook is emitted. The simulated outage
+ * counter (`simulateOutage`) stays in process memory: with several instances, only the instance that
+ * received the request fails its next partner calls.
  */
 import type { Money } from '@/domain/money';
 import { randomToken } from '@/server/security/crypto';
@@ -23,37 +29,21 @@ import {
     type VerifiedProviderEvent
 } from '@/server/ports/payment-provider';
 import type { Clock } from '@/server/ports/providers';
+import { MemorySimulatedPartnerStore, type SimulatedPartnerStore, type TransferKind } from './simulated-partner-store';
 
 type Delivery = (rawBody: string, signatureHeader: string) => Promise<unknown>;
-
-interface PartnerInstruction {
-    reference: string;
-    request: PaymentInstructionRequest;
-    status: FundingStatus;
-}
-interface PartnerTransfer {
-    reference: string;
-    kind: 'PAYOUT' | 'REFUND';
-    amount: Money;
-    status: ProviderPayoutStatus;
-    idempotencyKey: string;
-}
 
 export class MockPaymentProvider implements PaymentProvider {
     readonly name = 'mock';
     readonly simulated = true;
-    private readonly instructions = new Map<string, PartnerInstruction>();
-    private readonly instructionsByKey = new Map<string, string>();
-    private readonly transfers = new Map<string, PartnerTransfer>();
-    private readonly transfersByKey = new Map<string, string>();
-    private readonly statement: StatementLine[] = [];
     private deliver: Delivery | undefined;
-    /** Number of upcoming API calls that will fail with a (retryable) partner error. */
+    /** Number of upcoming API calls that will fail with a (retryable) partner error. Per process (not persisted). */
     private pendingFailures = 0;
 
     constructor(
         private readonly webhookSecret: string,
-        private readonly clock: Clock
+        private readonly clock: Clock,
+        private readonly store: SimulatedPartnerStore = new MemorySimulatedPartnerStore()
     ) {}
 
     setDelivery(deliver: Delivery): void {
@@ -74,12 +64,13 @@ export class MockPaymentProvider implements PaymentProvider {
 
     async createPaymentInstruction(request: PaymentInstructionRequest): Promise<PaymentInstructionResult> {
         this.maybeFail('createPaymentInstruction');
-        const existing = this.instructionsByKey.get(request.idempotencyKey);
-        const reference = existing ?? `sim_pi_${randomToken(9)}`;
-        if (!existing) {
-            this.instructions.set(reference, { reference, request, status: 'CREATED' });
-            this.instructionsByKey.set(request.idempotencyKey, reference);
-        }
+        // Idempotent: a known key returns the instruction already issued for it.
+        const { reference } = await this.store.createInstruction({
+            reference: `sim_pi_${randomToken(9)}`,
+            idempotencyKey: request.idempotencyKey,
+            amount: request.amount,
+            status: 'CREATED'
+        });
         return {
             providerReference: reference,
             expiresAt: new Date(this.clock.now().getTime() + 14 * 86_400_000).toISOString(),
@@ -95,7 +86,7 @@ export class MockPaymentProvider implements PaymentProvider {
     }
 
     async getFundingStatus(providerReference: string): Promise<FundingStatus> {
-        return this.instructions.get(providerReference)?.status ?? 'EXPIRED';
+        return (await this.store.getInstruction(providerReference))?.status ?? 'EXPIRED';
     }
 
     async confirmProviderEvent(rawBody: string, signatureHeader: string | null) {
@@ -127,23 +118,26 @@ export class MockPaymentProvider implements PaymentProvider {
         return this.submitTransfer('REFUND', request.amount, request.idempotencyKey);
     }
 
-    private submitTransfer(kind: 'PAYOUT' | 'REFUND', amount: Money, idempotencyKey: string): ProviderSubmission {
-        const existing = this.transfersByKey.get(idempotencyKey);
-        if (existing) return { providerReference: existing, status: 'SUBMITTED' };
-        const reference = `sim_${kind === 'PAYOUT' ? 'po' : 'rf'}_${randomToken(9)}`;
-        this.transfers.set(reference, { reference, kind, amount, status: 'SUBMITTED', idempotencyKey });
-        this.transfersByKey.set(idempotencyKey, reference);
+    /** Idempotent: a known key returns the transfer already accepted for it (reported as SUBMITTED, as before). */
+    private async submitTransfer(kind: TransferKind, amount: Money, idempotencyKey: string): Promise<ProviderSubmission> {
+        const { reference } = await this.store.createTransfer({
+            reference: `sim_${kind === 'PAYOUT' ? 'po' : 'rf'}_${randomToken(9)}`,
+            kind,
+            idempotencyKey,
+            amount,
+            status: 'SUBMITTED'
+        });
         return { providerReference: reference, status: 'SUBMITTED' };
     }
 
     async getPayoutStatus(providerReference: string): Promise<ProviderPayoutStatus> {
-        const t = this.transfers.get(providerReference);
+        const t = await this.store.getTransfer(providerReference);
         if (!t) throw new ProviderError('Unknown payout reference', false);
         return t.status;
     }
 
     async reconcileTransactions(range: { from: string; to: string }): Promise<StatementLine[]> {
-        return this.statement.filter((l) => l.occurredAt >= range.from && l.occurredAt <= range.to).map((l) => ({ ...l }));
+        return this.store.statement(range);
     }
 
     /* ------------------------------------------------------------------ simulator controls */
@@ -163,17 +157,16 @@ export class MockPaymentProvider implements PaymentProvider {
 
     /** Buyer "sends" funds: initiated → pending → confirmed. `amountMinor` lets tests simulate a wrong amount. */
     async simulateFunding(instructionReference: string, options: { amountMinor?: bigint; stopAt?: 'initiated' | 'pending' } = {}) {
-        const instruction = this.instructions.get(instructionReference);
+        const instruction = await this.store.getInstruction(instructionReference);
         if (!instruction) throw new ProviderError('Unknown instruction', false);
-        const amount = options.amountMinor ?? instruction.request.amount.amountMinor;
-        const base = { instructionReference, currency: instruction.request.amount.currency };
+        const amount = options.amountMinor ?? instruction.amount.amountMinor;
+        const base = { instructionReference, currency: instruction.amount.currency };
         await this.emit('payment.initiated', base);
-        instruction.status = 'PENDING';
+        await this.store.setInstructionStatus(instructionReference, 'PENDING');
         if (options.stopAt === 'initiated') return;
         await this.emit('payment.pending', base);
         if (options.stopAt === 'pending') return;
-        instruction.status = 'FUNDED';
-        this.statement.push({
+        await this.store.setInstructionStatus(instructionReference, 'FUNDED', {
             externalReference: instructionReference,
             kind: 'FUNDS_RECEIVED',
             amountMinor: amount.toString(),
@@ -184,26 +177,27 @@ export class MockPaymentProvider implements PaymentProvider {
     }
 
     async simulateFundingFailure(instructionReference: string, reason = 'Virement rejeté par la banque émettrice (simulation)') {
-        const instruction = this.instructions.get(instructionReference);
-        if (!instruction) throw new ProviderError('Unknown instruction', false);
-        instruction.status = 'FAILED';
+        await this.store.setInstructionStatus(instructionReference, 'FAILED'); // unknown reference → ProviderError
         await this.emit('payment.failed', { instructionReference, reason });
     }
 
     async simulateTransferOutcome(providerReference: string, outcome: 'PAID' | 'FAILED', reason?: string) {
-        const t = this.transfers.get(providerReference);
+        const t = await this.store.getTransfer(providerReference);
         if (!t) throw new ProviderError('Unknown transfer', false);
-        t.status = outcome;
         const key = t.kind === 'PAYOUT' ? 'payoutReference' : 'refundReference';
-        if (outcome === 'PAID') {
-            this.statement.push({
-                externalReference: providerReference,
-                kind: t.kind === 'PAYOUT' ? 'PAYOUT_PAID' : 'REFUND_PAID',
-                amountMinor: t.amount.amountMinor.toString(),
-                currency: t.amount.currency,
-                occurredAt: this.clock.now().toISOString()
-            });
-        }
+        await this.store.setTransferStatus(
+            providerReference,
+            outcome,
+            outcome === 'PAID'
+                ? {
+                      externalReference: providerReference,
+                      kind: t.kind === 'PAYOUT' ? 'PAYOUT_PAID' : 'REFUND_PAID',
+                      amountMinor: t.amount.amountMinor.toString(),
+                      currency: t.amount.currency,
+                      occurredAt: this.clock.now().toISOString()
+                  }
+                : undefined
+        );
         const type: ProviderEventType =
             t.kind === 'PAYOUT'
                 ? outcome === 'PAID'
@@ -227,11 +221,12 @@ export class MockPaymentProvider implements PaymentProvider {
     }
 
     /** Adds a statement line with no ledger counterpart — used to demonstrate reconciliation exceptions. */
-    injectStatementDiscrepancy(line: StatementLine) {
-        this.statement.push(line);
+    async injectStatementDiscrepancy(line: StatementLine): Promise<void> {
+        await this.store.appendStatementLine(line);
     }
 
-    pendingTransfers(): { reference: string; kind: 'PAYOUT' | 'REFUND'; status: ProviderPayoutStatus }[] {
-        return [...this.transfers.values()].map((t) => ({ reference: t.reference, kind: t.kind, status: t.status }));
+    /** Every transfer known to the partner, in creation order (filter on `status` for the pending ones). */
+    async pendingTransfers(): Promise<{ reference: string; kind: TransferKind; status: ProviderPayoutStatus }[]> {
+        return (await this.store.listTransfers()).map((t) => ({ reference: t.reference, kind: t.kind, status: t.status }));
     }
 }

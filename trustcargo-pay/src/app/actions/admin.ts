@@ -110,7 +110,7 @@ export async function injectDiscrepancyAction(_: ActionState) {
         async ({ app, actor }) => {
             if (app.config.mode !== 'demo' || !actor.platformRoles.includes('finance_operator'))
                 throw new AppError('FORBIDDEN', 'Demo only');
-            app.mockProvider.injectStatementDiscrepancy({
+            await app.mockProvider.injectStatementDiscrepancy({
                 externalReference: `sim_unknown_${Date.now()}`,
                 kind: 'FUNDS_RECEIVED',
                 amountMinor: '250000',

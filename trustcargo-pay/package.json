@@ -16,6 +16,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:db": "bash scripts/test-db.sh",
+        "test:pg": "bash scripts/test-integration-pg.sh",
         "test:e2e": "playwright test"
     },
     "dependencies": {

@@ -24,11 +24,12 @@ Ce document distingue **ce qui est implémenté et testé** de **ce qui reste à
 | Signalement prématuré (tipping-off) | Les parties ne voient ni les alertes, ni les gels, ni la conformité ; seulement un message générique « en revue » | `security.test.ts` |
 | Fuite de secrets ou de données bancaires | Aucun numéro de carte ni de compte stocké (identifiant masqué + jeton) ; secrets via variables d'environnement ; seule la référence du secret partenaire est stockée ; logs JSON sans données sensibles | Revue de code, CHECK SQL sur `masked_identifier` |
 | Données de démonstration | Profils fictifs, domaine `.test`, fichiers marqués « FICTIF » ; le mode production refuse le fournisseur simulé | `config.ts` |
+| Confusion entre partenaire simulé et livres de TrustCargo | Enregistrements du faux partenaire isolés dans `trustcargo_sim` (aucune clé étrangère vers `trustcargo`, références et montants uniquement) ; `service_role` seul, aucun privilège pour `anon` / `authenticated`, RLS active, montants et relevé non modifiables ; écritures hors unité de travail | `rls_test.sql`, `simulated-partner.test.ts` |
 
 ## Ce qui reste à faire (bloquant pour la production)
 
 1. **Authentification réelle** : Supabase Auth (vérification d'e-mail, MFA AAL2, rotation des sessions, verrouillage de compte), en remplacement des profils de démonstration.
-2. **Adaptateur Postgres** des services, avec transactions SQL. Le client Supabase est réservé aux lectures sous RLS.
+2. **Adaptateur Postgres** : branché (transactions SQL, `service_role`, verrou global). Reste à le valider sur un projet Supabase de staging et à remplacer le verrou global par des verrous ciblés avant une charge réelle. Le client Supabase est réservé aux lectures sous RLS.
 3. **Limitation de débit distribuée** (Redis/Upstash) : l'implémentation actuelle est en mémoire.
 4. **Antivirus réel** (ClamAV, ou service géré) : l'implémentation actuelle détecte seulement la signature EICAR.
 5. **Stockage chiffré** : Supabase Storage privé + URLs signées. Politiques déjà écrites en SQL, non testées sur Supabase réel.

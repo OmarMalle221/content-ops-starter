@@ -774,6 +774,8 @@ export const fr = {
         maxUpload: 'Taille maximale des fichiers (octets)',
         resetDemo: 'Réinitialiser la démo',
         resetDemoConfirm: 'Toutes les données de démonstration seront recréées. Continuer ?',
+        resetDemoUnavailable:
+            'La réinitialisation de la démo n’est pas disponible avec la base Postgres : le journal d’audit, le registre et les événements du partenaire sont en ajout seul et ne sont jamais effacés. Utilisez une nouvelle base pour repartir de zéro.',
         accessLog: 'Journal d’accès'
     }
 };

@@ -768,6 +768,8 @@ export const en: Dictionary = {
         maxUpload: 'Maximum file size (bytes)',
         resetDemo: 'Reset demo',
         resetDemoConfirm: 'All demo data will be recreated. Continue?',
+        resetDemoUnavailable:
+            'Demo reset is not available with the Postgres database: the audit trail, ledger and partner events are append-only and are never deleted. Use a new database to start over.',
         accessLog: 'Access log'
     }
 };

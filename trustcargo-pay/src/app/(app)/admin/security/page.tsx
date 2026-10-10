@@ -1,5 +1,6 @@
 import { ResetDemo, SecurityForm } from '@/components/admin/forms';
 import { PageHeader, KeyValue } from '@/components/app/layout-bits';
+import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getI18n } from '@/i18n/server';
 import { hasRole } from '@/server/auth/actor';
@@ -40,7 +41,12 @@ export default async function SecurityPage() {
                             <CardTitle>{t('admin.resetDemo')}</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <ResetDemo />
+                            {/* Append-only records (audit chain, ledger, partner events) cannot be wiped in Postgres. */}
+                            {app.persistence.kind === 'postgres' ? (
+                                <Alert tone="info">{t('admin.resetDemoUnavailable')}</Alert>
+                            ) : (
+                                <ResetDemo />
+                            )}
                         </CardContent>
                     </Card>
                 )}

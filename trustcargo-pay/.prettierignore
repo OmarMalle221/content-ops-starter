@@ -3,3 +3,5 @@ node_modules
 playwright-report
 test-results
 coverage
+# Markdown documents keep their compact tables (not reformatted).
+*.md

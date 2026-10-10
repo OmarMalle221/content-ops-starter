@@ -3,7 +3,8 @@
 --
 -- Source of truth: src/domain/model.ts, src/domain/money.ts, src/domain/transaction/state-machine.ts.
 -- Conventions:
---   * snake_case tables/columns, uuid primary keys (gen_random_uuid()).
+--   * snake_case tables/columns, uuid primary keys. The server supplies time-ordered UUIDv7 ids
+--     (src/server/adapters/uuid-v7.ts); gen_random_uuid() is only the default for SQL-side inserts.
 --   * Money is ALWAYS `amount_minor bigint` (integer minor units) + `currency trustcargo.currency_code`.
 --     No numeric/float column ever holds an amount.
 --   * Status vocabularies that are central to authorization are Postgres enums; the others are text
@@ -12,6 +13,7 @@
 --     (`*_user_id` / `*_organization_id`) with a CHECK that exactly the right one is set.
 --   * TrustCargo never holds funds: the payment tables mirror instructions sent to, and events
 --     reported by, the licensed payment partner. The MVP runs in SIMULATION mode only.
+--   * Nothing is created in `public`: the target Supabase project is shared with another application.
 -- =====================================================================================================
 
 create schema if not exists extensions;
@@ -82,9 +84,22 @@ create type trustcargo.document_type as enum (
 );
 
 -- -----------------------------------------------------------------------------------------------------
--- Generic trigger: updated_at
+-- Generic helpers
 -- -----------------------------------------------------------------------------------------------------
 
+-- Lenient uuid parser (null when the text is not a uuid). Used by generated columns and storage policies.
+create or replace function trustcargo_private.try_uuid(p_value text)
+returns uuid
+language sql
+immutable
+set search_path = ''
+as $$
+    select case
+        when p_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p_value::uuid
+    end;
+$$;
+
+-- updated_at owned by the database (the TypeScript entity has no updatedAt): always now().
 create or replace function trustcargo_private.set_updated_at()
 returns trigger
 language plpgsql
@@ -96,12 +111,33 @@ begin
 end;
 $$;
 
+-- updated_at owned by the application (the TypeScript entity has updatedAt, set from the server clock):
+-- the writer's value is kept; now() is only used when the writer left updated_at unchanged. The server's
+-- unit of work sets `trustcargo.app_managed_updated_at = on` (transaction-local) because it may
+-- legitimately write the same instant twice (two writes in one millisecond, demo clock frozen).
+create or replace function trustcargo_private.touch_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if new.updated_at is not distinct from old.updated_at
+       and coalesce(current_setting('trustcargo.app_managed_updated_at', true), '') <> 'on' then
+        new.updated_at := now();
+    end if;
+    return new;
+end;
+$$;
+
 -- =====================================================================================================
 -- Identity & organizations
 -- =====================================================================================================
 
+-- No foreign key to auth.users: demo personas (is_demo) have no Supabase Auth account and must not get one
+-- (the shared project's other application provisions its own profiles from auth.users). A real user's id
+-- must be an auth.users id (trigger below); RLS keys on auth.uid() = users.id.
 create table trustcargo.users (
-    id          uuid primary key references auth.users (id) on delete cascade,
+    id          uuid primary key,
     email       text not null check (position('@' in email) > 1),
     full_name   text not null check (length(btrim(full_name)) between 1 and 200),
     phone       text check (phone is null or phone ~ '^\+?[0-9 ().-]{6,20}$'),
@@ -115,7 +151,7 @@ create table trustcargo.users (
     updated_at  timestamptz not null default now()
 );
 comment on table trustcargo.users is
-    'Application profile keyed to auth.users. MFA/TOTP secrets are NOT stored here: MFA is delegated to Supabase Auth.';
+    'Application profile. Real users: id = auth.users.id, MFA delegated to Supabase Auth. Demo personas: no auth account, fictitious TOTP secret in trustcargo_private.demo_mfa_secrets.';
 create unique index users_email_lower_key on trustcargo.users (lower(email));
 create index users_kyc_status_idx on trustcargo.users (kyc_status);
 create index users_created_at_idx on trustcargo.users (created_at);
@@ -123,12 +159,64 @@ create index users_created_at_idx on trustcargo.users (created_at);
 create table trustcargo.user_platform_roles (
     user_id    uuid not null references trustcargo.users (id) on delete cascade,
     role       trustcargo.platform_role not null,
+    -- Position in User.platformRoles, so the list reads back in the order it was written.
+    ordinal    smallint not null default 0 check (ordinal >= 0),
     granted_by uuid references trustcargo.users (id),
     granted_at timestamptz not null default now(),
     primary key (user_id, role)
 );
 create index user_platform_roles_role_idx on trustcargo.user_platform_roles (role);
 create index user_platform_roles_granted_by_idx on trustcargo.user_platform_roles (granted_by);
+
+-- A non-demo profile must belong to a Supabase Auth account; demo personas never get one.
+create or replace function trustcargo_private.users_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+    if not new.is_demo and not exists (select 1 from auth.users a where a.id = new.id) then
+        raise exception 'trustcargo.users: a non-demo user must have an auth.users account (id %)', new.id
+            using errcode = '23503';
+    end if;
+    if tg_op = 'UPDATE' and old.is_demo and not new.is_demo
+       and exists (select 1 from trustcargo_private.demo_mfa_secrets s where s.user_id = new.id) then
+        raise exception 'trustcargo.users: remove the demo TOTP secret before converting a demo persona'
+            using errcode = '42501';
+    end if;
+    return new;
+end;
+$$;
+
+create trigger users_guard
+    before insert or update of id, is_demo on trustcargo.users
+    for each row execute function trustcargo_private.users_guard();
+
+-- Fictitious TOTP secrets of demo personas only (real users' MFA is delegated to Supabase Auth).
+-- service_role only: no privilege for anon/authenticated, RLS without policies.
+create table trustcargo_private.demo_mfa_secrets (
+    user_id     uuid primary key references trustcargo.users (id) on delete cascade,
+    totp_secret text not null check (totp_secret ~ '^[A-Z2-7]{16,64}$')
+);
+
+create or replace function trustcargo_private.demo_mfa_secrets_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+    if not exists (select 1 from trustcargo.users u where u.id = new.user_id and u.is_demo) then
+        raise exception 'TOTP secrets are only stored for demo personas (user %)', new.user_id using errcode = '42501';
+    end if;
+    return new;
+end;
+$$;
+
+create trigger demo_mfa_secrets_guard
+    before insert or update on trustcargo_private.demo_mfa_secrets
+    for each row execute function trustcargo_private.demo_mfa_secrets_guard();
 
 create table trustcargo.organizations (
     id                  uuid primary key default gen_random_uuid(),
@@ -242,8 +330,9 @@ create table trustcargo.session_events (
     user_id                 uuid not null references trustcargo.users (id) on delete cascade,
     at                      timestamptz not null default now(),
     country                 trustcargo.country_code not null,
-    device_fingerprint_hash trustcargo.sha256_hex not null,
-    ip_hash                 trustcargo.sha256_hex not null
+    -- Keyed pseudonyms (HMAC-SHA-256, truncated to 128 bits by pseudonymize()); never the raw value.
+    device_fingerprint_hash text not null check (device_fingerprint_hash ~ '^[0-9a-f]{32,64}$'),
+    ip_hash                 text not null check (ip_hash ~ '^[0-9a-f]{32,64}$')
 );
 create index session_events_user_id_at_idx on trustcargo.session_events (user_id, at desc);
 
@@ -269,14 +358,15 @@ create table trustcargo.corridors (
 );
 create index corridors_updated_by_idx on trustcargo.corridors (updated_by);
 
+-- Single row (TypeScript id 'default'). Defaults = DEFAULT_SECURITY_SETTINGS in src/server/services/context.ts.
 create table trustcargo.security_settings (
     id                                   boolean primary key default true check (id), -- single row
-    admin_mfa_max_age_minutes            integer not null default 15 check (admin_mfa_max_age_minutes between 1 and 1440),
-    sensitive_action_mfa_max_age_minutes integer not null default 5 check (sensitive_action_mfa_max_age_minutes between 1 and 1440),
-    payout_account_cooling_off_hours     integer not null default 48 check (payout_account_cooling_off_hours between 0 and 720),
-    invitation_ttl_hours                 integer not null default 72 check (invitation_ttl_hours between 1 and 720),
-    signed_url_ttl_seconds               integer not null default 60 check (signed_url_ttl_seconds between 10 and 3600),
-    max_upload_bytes                     bigint  not null default 15728640 check (max_upload_bytes between 1024 and 104857600),
+    admin_mfa_max_age_minutes            integer not null default 720 check (admin_mfa_max_age_minutes between 1 and 1440),
+    sensitive_action_mfa_max_age_minutes integer not null default 15 check (sensitive_action_mfa_max_age_minutes between 1 and 1440),
+    payout_account_cooling_off_hours     integer not null default 72 check (payout_account_cooling_off_hours between 0 and 720),
+    invitation_ttl_hours                 integer not null default 168 check (invitation_ttl_hours between 1 and 720),
+    signed_url_ttl_seconds               integer not null default 300 check (signed_url_ttl_seconds between 10 and 3600),
+    max_upload_bytes                     bigint  not null default 10485760 check (max_upload_bytes between 1024 and 104857600),
     updated_at                           timestamptz not null default now(),
     updated_by                           uuid references trustcargo.users (id)
 );
@@ -716,7 +806,10 @@ create table trustcargo.payouts (
     provider            text not null,
     provider_reference  text,
     idempotency_key     text not null unique,
-    requested_by        uuid not null references trustcargo.users (id),
+    -- A user id, or 'system' when the release is re-attempted automatically (alert cleared, hold lifted).
+    requested_by        text not null check (requested_by = 'system' or trustcargo_private.try_uuid(requested_by) is not null),
+    requested_by_user_id uuid generated always as (trustcargo_private.try_uuid(requested_by)) stored
+                        references trustcargo.users (id),
     requested_at        timestamptz not null default now(),
     updated_at          timestamptz not null default now(),
     attempts            integer not null default 0 check (attempts >= 0), -- partner submission attempts (retry policy)
@@ -731,7 +824,7 @@ create index payouts_milestone_tx_idx on trustcargo.payouts (milestone_id, trans
 create index payouts_dispute_decision_id_idx on trustcargo.payouts (dispute_decision_id);
 create index payouts_payee_party_tx_idx on trustcargo.payouts (payee_party_id, transaction_id);
 create index payouts_payment_account_id_idx on trustcargo.payouts (payment_account_id);
-create index payouts_requested_by_idx on trustcargo.payouts (requested_by);
+create index payouts_requested_by_user_id_idx on trustcargo.payouts (requested_by_user_id);
 create index payouts_status_idx on trustcargo.payouts (status);
 
 create table trustcargo.refunds (
@@ -745,7 +838,9 @@ create table trustcargo.refunds (
     provider            text not null,
     provider_reference  text,
     idempotency_key     text not null unique,
-    requested_by        uuid not null references trustcargo.users (id),
+    requested_by        text not null check (requested_by = 'system' or trustcargo_private.try_uuid(requested_by) is not null),
+    requested_by_user_id uuid generated always as (trustcargo_private.try_uuid(requested_by)) stored
+                        references trustcargo.users (id),
     requested_at        timestamptz not null default now(),
     updated_at          timestamptz not null default now(),
     attempts            integer not null default 0 check (attempts >= 0), -- partner submission attempts (retry policy)
@@ -757,7 +852,7 @@ create unique index refunds_provider_reference_key on trustcargo.refunds (provid
 create index refunds_transaction_id_idx on trustcargo.refunds (transaction_id);
 create index refunds_dispute_decision_id_idx on trustcargo.refunds (dispute_decision_id);
 create index refunds_payer_party_tx_idx on trustcargo.refunds (payer_party_id, transaction_id);
-create index refunds_requested_by_idx on trustcargo.refunds (requested_by);
+create index refunds_requested_by_user_id_idx on trustcargo.refunds (requested_by_user_id);
 create index refunds_status_idx on trustcargo.refunds (status);
 
 create table trustcargo.provider_connections (
@@ -860,6 +955,7 @@ create index reconciliations_run_at_idx on trustcargo.reconciliations (run_at de
 create table trustcargo.reconciliation_items (
     id                    uuid primary key default gen_random_uuid(),
     reconciliation_id     uuid not null references trustcargo.reconciliations (id) on delete cascade,
+    ordinal               integer not null check (ordinal >= 0), -- position in Reconciliation.items
     external_reference    text not null,
     kind                  text not null,
     provider_amount_minor bigint,
@@ -868,9 +964,9 @@ create table trustcargo.reconciliation_items (
     result                text not null check (result in ('MATCHED', 'MISSING_IN_LEDGER', 'MISSING_AT_PROVIDER', 'AMOUNT_MISMATCH')),
     check (result <> 'MATCHED' or provider_amount_minor = ledger_amount_minor),
     check (result <> 'MISSING_IN_LEDGER' or ledger_amount_minor is null),
-    check (result <> 'MISSING_AT_PROVIDER' or provider_amount_minor is null)
+    check (result <> 'MISSING_AT_PROVIDER' or provider_amount_minor is null),
+    unique (reconciliation_id, ordinal)
 );
-create index reconciliation_items_reconciliation_id_idx on trustcargo.reconciliation_items (reconciliation_id);
 create index reconciliation_items_result_idx on trustcargo.reconciliation_items (result);
 
 -- =====================================================================================================
@@ -879,10 +975,12 @@ create index reconciliation_items_result_idx on trustcargo.reconciliation_items 
 
 create table trustcargo.audit_events (
     id             uuid primary key default gen_random_uuid(),
-    sequence       bigserial not null unique,
+    -- Chain position, supplied by the writer (it is part of the hashed body); the chain trigger checks it.
+    sequence       bigint not null unique check (sequence >= 1),
     at             timestamptz not null default now(),
     actor_type     text not null check (actor_type in ('USER', 'SYSTEM', 'PROVIDER')),
-    actor_id       uuid,
+    -- USER: the user id. SYSTEM / PROVIDER: a label ('system', the provider name). Part of the hashed body.
+    actor_id       text,
     action         text not null check (action ~ '^[a-z0-9_.]+$'),
     entity_type    text not null,
     entity_id      text not null,
@@ -891,7 +989,7 @@ create table trustcargo.audit_events (
     -- Tamper evidence: hash = SHA-256(previous_hash + canonical event). Genesis previous_hash = 64 zeros.
     previous_hash  trustcargo.sha256_hex not null,
     hash           trustcargo.sha256_hex not null unique,
-    check (actor_type <> 'USER' or actor_id is not null)
+    check (actor_type <> 'USER' or trustcargo_private.try_uuid(actor_id) is not null)
 );
 create index audit_events_transaction_id_idx on trustcargo.audit_events (transaction_id, sequence);
 create index audit_events_entity_idx on trustcargo.audit_events (entity_type, entity_id);
@@ -911,6 +1009,13 @@ create index notifications_user_id_created_at_idx on trustcargo.notifications (u
 create index notifications_unread_idx on trustcargo.notifications (user_id) where read_at is null;
 create index notifications_transaction_id_idx on trustcargo.notifications (transaction_id);
 
+-- Named gap-free counters (e.g. 'transaction_reference'), incremented inside the writer's transaction.
+-- The audit sequence is not stored here: it is derived from audit_events under the unit-of-work lock.
+create table trustcargo_private.counters (
+    name  text primary key check (name ~ '^[a-z][a-z0-9_]{0,62}$'),
+    value bigint not null check (value >= 1)
+);
+
 -- =====================================================================================================
 -- updated_at triggers
 -- =====================================================================================================
@@ -919,15 +1024,24 @@ do $$
 declare
     t text;
 begin
+    -- Database-owned updated_at (no updatedAt in the TypeScript entity).
     foreach t in array array[
         'users', 'organizations', 'identity_verifications', 'beneficial_owners', 'payment_accounts',
-        'corridors', 'security_settings', 'transactions', 'transaction_parties', 'vehicles', 'milestones',
-        'documents', 'risk_alerts', 'disputes', 'payment_instructions', 'payouts', 'refunds',
-        'provider_connections'
+        'transaction_parties', 'vehicles', 'milestones', 'documents', 'provider_connections'
     ] loop
         execute format(
             'create trigger %I before update on trustcargo.%I for each row execute function trustcargo_private.set_updated_at()',
             t || '_set_updated_at', t);
+    end loop;
+    -- Application-owned updated_at (Corridor, SecuritySettings, Transaction, RiskAlert, Dispute,
+    -- PaymentInstruction, Payout, Refund carry updatedAt).
+    foreach t in array array[
+        'corridors', 'security_settings', 'transactions', 'risk_alerts', 'disputes', 'payment_instructions',
+        'payouts', 'refunds'
+    ] loop
+        execute format(
+            'create trigger %I before update on trustcargo.%I for each row execute function trustcargo_private.touch_updated_at()',
+            t || '_touch_updated_at', t);
     end loop;
 end;
 $$;
@@ -935,6 +1049,29 @@ $$;
 -- =====================================================================================================
 -- Transactions: optimistic locking + state machine guard (defense in depth for the TS engine)
 -- =====================================================================================================
+
+-- Status changes allowed by TRANSITIONS in src/domain/transaction/state-machine.ts (the integration test
+-- tests/integration/postgres-adapter.test.ts compares every pair with the TypeScript definition).
+create or replace function trustcargo_private.transaction_transition_allowed(p_from text, p_to text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+    select (p_from, p_to) in (
+        ('DRAFT', 'AWAITING_PARTIES'), ('DRAFT', 'CANCELLED'),
+        ('AWAITING_PARTIES', 'IDENTITY_VERIFICATION'), ('AWAITING_PARTIES', 'CANCELLED'),
+        ('IDENTITY_VERIFICATION', 'AWAITING_AGREEMENT'), ('IDENTITY_VERIFICATION', 'CANCELLED'),
+        ('AWAITING_AGREEMENT', 'AWAITING_FUNDING'), ('AWAITING_AGREEMENT', 'CANCELLED'),
+        ('AWAITING_FUNDING', 'AWAITING_AGREEMENT'), ('AWAITING_FUNDING', 'FUNDING_PENDING'),
+        ('AWAITING_FUNDING', 'FUNDS_CONFIRMED'), ('AWAITING_FUNDING', 'CANCELLED'),
+        ('FUNDING_PENDING', 'FUNDS_CONFIRMED'), ('FUNDING_PENDING', 'AWAITING_FUNDING'),
+        ('FUNDS_CONFIRMED', 'IN_PROGRESS'), ('FUNDS_CONFIRMED', 'DISPUTED'),
+        ('IN_PROGRESS', 'MILESTONE_REVIEW'), ('IN_PROGRESS', 'COMPLETED'), ('IN_PROGRESS', 'DISPUTED'),
+        ('MILESTONE_REVIEW', 'IN_PROGRESS'), ('MILESTONE_REVIEW', 'DISPUTED'),
+        ('DISPUTED', 'IN_PROGRESS'), ('DISPUTED', 'MILESTONE_REVIEW'), ('DISPUTED', 'REFUND_PENDING'),
+        ('REFUND_PENDING', 'REFUNDED'));
+$$;
 
 create or replace function trustcargo_private.transactions_before_update()
 returns trigger
@@ -955,30 +1092,16 @@ begin
         raise exception 'transactions.id/reference/created_by are immutable' using errcode = '42501';
     end if;
 
-    if old.status in ('AWAITING_FUNDING', 'FUNDING_PENDING', 'FUNDS_CONFIRMED', 'IN_PROGRESS', 'MILESTONE_REVIEW',
+    -- AWAITING_FUNDING is not frozen: the seller may still amend the price (CONTRACT_AMENDED, guarded by
+    -- "no funding started"); from FUNDING_PENDING on, the amount can no longer change.
+    if old.status in ('FUNDING_PENDING', 'FUNDS_CONFIRMED', 'IN_PROGRESS', 'MILESTONE_REVIEW',
                       'DISPUTED', 'COMPLETED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED')
        and (new.amount_minor <> old.amount_minor or new.currency <> old.currency) then
-        raise exception 'transaction amount is frozen once funding can start' using errcode = '42501';
+        raise exception 'transaction amount is frozen once funding has started' using errcode = '42501';
     end if;
 
-    if new.status is distinct from old.status and not exists (
-        select 1
-        from (values
-            ('DRAFT', 'AWAITING_PARTIES'), ('DRAFT', 'CANCELLED'),
-            ('AWAITING_PARTIES', 'IDENTITY_VERIFICATION'), ('AWAITING_PARTIES', 'CANCELLED'),
-            ('IDENTITY_VERIFICATION', 'AWAITING_AGREEMENT'), ('IDENTITY_VERIFICATION', 'CANCELLED'),
-            ('AWAITING_AGREEMENT', 'AWAITING_FUNDING'), ('AWAITING_AGREEMENT', 'CANCELLED'),
-            ('AWAITING_FUNDING', 'AWAITING_AGREEMENT'), ('AWAITING_FUNDING', 'FUNDING_PENDING'),
-            ('AWAITING_FUNDING', 'FUNDS_CONFIRMED'), ('AWAITING_FUNDING', 'CANCELLED'),
-            ('FUNDING_PENDING', 'FUNDS_CONFIRMED'), ('FUNDING_PENDING', 'AWAITING_FUNDING'),
-            ('FUNDS_CONFIRMED', 'IN_PROGRESS'), ('FUNDS_CONFIRMED', 'DISPUTED'),
-            ('IN_PROGRESS', 'MILESTONE_REVIEW'), ('IN_PROGRESS', 'COMPLETED'), ('IN_PROGRESS', 'DISPUTED'),
-            ('MILESTONE_REVIEW', 'IN_PROGRESS'), ('MILESTONE_REVIEW', 'DISPUTED'),
-            ('DISPUTED', 'IN_PROGRESS'), ('DISPUTED', 'MILESTONE_REVIEW'), ('DISPUTED', 'REFUND_PENDING'),
-            ('REFUND_PENDING', 'REFUNDED')
-        ) as allowed (from_status, to_status)
-        where allowed.from_status = old.status::text and allowed.to_status = new.status::text
-    ) then
+    if new.status is distinct from old.status
+       and not trustcargo_private.transaction_transition_allowed(old.status::text, new.status::text) then
         raise exception 'invalid transaction status transition % -> %', old.status, new.status
             using errcode = '23514';
     end if;
@@ -991,37 +1114,43 @@ create trigger transactions_before_update
     before update on trustcargo.transactions
     for each row execute function trustcargo_private.transactions_before_update();
 
--- Payout / refund lifecycles (mirror of PAYOUT_TRANSITIONS / REFUND_TRANSITIONS).
+-- Payout / refund lifecycles (mirror of PAYOUT_TRANSITIONS / REFUND_TRANSITIONS in state-machine.ts).
+-- A FAILED transfer is never resubmitted as-is: it is CANCELLED and a new record is created.
+create or replace function trustcargo_private.settlement_transition_allowed(p_table text, p_from text, p_to text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+    select case p_table
+        when 'payouts' then (p_from, p_to) in (
+            ('REQUESTED', 'SUBMITTED'), ('REQUESTED', 'FAILED'), ('REQUESTED', 'CANCELLED'),
+            ('SUBMITTED', 'PROCESSING'), ('SUBMITTED', 'PAID'), ('SUBMITTED', 'FAILED'),
+            ('PROCESSING', 'PAID'), ('PROCESSING', 'FAILED'),
+            ('FAILED', 'CANCELLED'))
+        when 'refunds' then (p_from, p_to) in (
+            ('REQUESTED', 'SUBMITTED'), ('REQUESTED', 'FAILED'), ('REQUESTED', 'CANCELLED'),
+            ('SUBMITTED', 'PROCESSING'), ('SUBMITTED', 'REFUNDED'), ('SUBMITTED', 'FAILED'),
+            ('PROCESSING', 'REFUNDED'), ('PROCESSING', 'FAILED'),
+            ('FAILED', 'CANCELLED'))
+        else false
+    end;
+$$;
+
 create or replace function trustcargo_private.settlement_status_guard()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
-declare
-    v_ok boolean;
 begin
-    if new.status = old.status then
-        return new;
-    end if;
-    if tg_table_name = 'payouts' then
-        v_ok := (old.status, new.status) in (
-            ('REQUESTED', 'SUBMITTED'), ('REQUESTED', 'FAILED'), ('REQUESTED', 'CANCELLED'),
-            ('SUBMITTED', 'PROCESSING'), ('SUBMITTED', 'PAID'), ('SUBMITTED', 'FAILED'),
-            ('PROCESSING', 'PAID'), ('PROCESSING', 'FAILED'),
-            ('FAILED', 'REQUESTED'));
-    else
-        v_ok := (old.status, new.status) in (
-            ('REQUESTED', 'SUBMITTED'), ('REQUESTED', 'FAILED'), ('REQUESTED', 'CANCELLED'),
-            ('SUBMITTED', 'PROCESSING'), ('SUBMITTED', 'REFUNDED'), ('SUBMITTED', 'FAILED'),
-            ('PROCESSING', 'REFUNDED'), ('PROCESSING', 'FAILED'),
-            ('FAILED', 'REQUESTED'));
-    end if;
-    if not v_ok then
-        raise exception 'invalid % status transition % -> %', tg_table_name, old.status, new.status
-            using errcode = '23514';
-    end if;
+    -- Checked on every update (previously only when the status changed).
     if new.amount_minor <> old.amount_minor or new.currency <> old.currency then
         raise exception '% amount is immutable', tg_table_name using errcode = '42501';
+    end if;
+    if new.status <> old.status
+       and not trustcargo_private.settlement_transition_allowed(tg_table_name, old.status, new.status) then
+        raise exception 'invalid % status transition % -> %', tg_table_name, old.status, new.status
+            using errcode = '23514';
     end if;
     return new;
 end;

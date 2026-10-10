@@ -32,7 +32,12 @@ TrustCargo Pay **ne doit traiter aucun fonds réel** tant que les étapes ci-des
 
 ## 3. Technique
 
-- [ ] **Adaptateur de persistance Postgres** implémentant `Db`/`UnitOfWork` (transactions SQL, verrou optimiste, `post_ledger_journal`, chaîne d'audit avec retry sur `40001`), testé contre la même suite d'intégration que l'adaptateur mémoire.
+- [x] **Adaptateur de persistance Postgres** (`src/server/adapters/postgres/`) implémentant `Db`/`UnitOfWork` : transaction SQL par unité de travail, rôle `service_role`, verrou optimiste, chaîne d'audit vérifiée par la base, nouvelle tentative sur `40001`/`40P01`. La même suite d'intégration passe sur les deux adaptateurs (`npm test` en mémoire, `npm run test:pg` sur PostgreSQL 16 + migrations, aussi en CI). Testé uniquement sur PostgreSQL 16 local et le service CI, **pas encore sur un projet Supabase**. Limites connues du MVP :
+  - un verrou consultatif global sérialise toutes les unités de travail (même garantie que l'adaptateur mémoire, entre processus) : le débit est d'une unité de travail à la fois par base. À remplacer par des verrous ciblés (par transaction) avant une charge réelle ;
+  - une erreur SQL annule toute l'unité de travail (pas de reprise partielle dans une même unité) ;
+  - les enregistrements du **partenaire simulé** (instructions, virements, relevé) sont conservés dans le schéma `trustcargo_sim` (migration `20261010000001_simulated_partner.sql`) : ils survivent à un redémarrage et sont partagés entre instances. Ce sont les données **fictives du faux partenaire, jamais les livres de TrustCargo**, écrites dans leurs propres transactions courtes (pool de connexions séparé), hors de toute unité de travail. Seul le compteur de panne simulée (`simulateOutage`) reste en mémoire du processus : avec plusieurs instances, seule l'instance qui a reçu la demande échoue à ses prochains appels. Ce schéma disparaît avec l'adaptateur du partenaire réel ;
+  - les données de démonstration sont créées au premier démarrage sur une base vide (jamais en production) ; la réinitialisation de la démo est refusée sur Postgres (enregistrements en ajout seul). En production, les données de référence (corridors, connexion partenaire) sont à provisionner par migration ou procédure d'exploitation ;
+  - premier démarrage : un seul processus, sinon deux instances peuvent tenter le même amorçage (l'une échoue sur les contraintes d'unicité).
 - [ ] Appliquer les migrations sur un projet Supabase de **staging**, exécuter `supabase/tests/rls_test.sql` et les contrôles `supabase db lint`, puis appliquer en production.
 - [ ] Supabase Auth + MFA (AAL2) ; supprimer la connexion par profil (`DEMO_ALLOW_PERSONA_LOGIN=false`).
 - [ ] Adaptateur `PaymentProvider` du partenaire réel :

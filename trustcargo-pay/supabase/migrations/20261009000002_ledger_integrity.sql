@@ -3,12 +3,18 @@
 --
 --   * ledger_journals / ledger_entries / audit_events are append-only (UPDATE, DELETE, TRUNCATE raise).
 --     Ledger corrections are made by posting a REVERSAL journal (reverses_journal_id).
+--   * The other records the TypeScript Db port declares append-only (session events, contract acceptances,
+--     document verifications / access logs, risk reviews, dispute messages / decisions, reconciliations)
+--     are protected the same way.
 --   * A DEFERRABLE INITIALLY DEFERRED constraint trigger checks, at commit, that each journal has
 --     >= 2 entries and that debits = credits per currency.
 --   * An entry's currency must equal its account's currency.
---   * trustcargo.post_ledger_journal(...) is the single, idempotent write path (service_role only).
+--   * trustcargo.post_ledger_journal(...) is an idempotent write path for SQL clients (service_role only).
+--     The server's unit of work inserts journals and entries directly (service_role); the same triggers
+--     (deferred balance, currency, reversal rules, append-only) apply to both paths.
 --   * provider_events can never be deleted, and their signed content is immutable.
---   * audit_events form a hash chain: previous_hash must equal the hash of the latest event.
+--   * audit_events form a hash chain: sequence must follow the latest event and previous_hash must equal
+--     its hash.
 -- =====================================================================================================
 
 -- -----------------------------------------------------------------------------------------------------
@@ -47,6 +53,25 @@ create trigger audit_events_append_only
 create trigger audit_events_no_truncate
     before truncate on trustcargo.audit_events
     for each statement execute function trustcargo_private.forbid_mutation();
+
+-- Same set as the append-only tables of the Db port (src/server/ports/db.ts).
+do $$
+declare
+    t text;
+begin
+    foreach t in array array[
+        'session_events', 'contract_acceptances', 'document_verifications', 'document_access_logs',
+        'risk_reviews', 'dispute_messages', 'dispute_decisions', 'reconciliations', 'reconciliation_items'
+    ] loop
+        execute format(
+            'create trigger %I before update or delete on trustcargo.%I for each row execute function trustcargo_private.forbid_mutation()',
+            t || '_append_only', t);
+        execute format(
+            'create trigger %I before truncate on trustcargo.%I for each statement execute function trustcargo_private.forbid_mutation()',
+            t || '_no_truncate', t);
+    end loop;
+end;
+$$;
 
 -- provider_events: never deleted; only the processing outcome may change.
 create trigger provider_events_no_delete
@@ -413,10 +438,11 @@ group by a.id;
 -- -----------------------------------------------------------------------------------------------------
 -- Audit hash chain linkage
 --
--- The application computes hash = SHA-256(previous_hash + canonical event) (canonical form is defined
--- in TypeScript). The database enforces the *linkage*: inserts are serialized, `sequence` is assigned
--- under the lock (so sequence order = chain order) and previous_hash must equal the latest hash
--- (64 zeros for the genesis event). A writer racing on a stale head gets an error and must retry.
+-- The application computes hash = SHA-256(previous_hash + canonical event), where the canonical event
+-- includes `sequence` (canonical form is defined in TypeScript). The database enforces the *linkage*:
+-- inserts are serialized by an advisory lock, `sequence` must be the head's sequence + 1 (1 for the
+-- genesis event) and previous_hash must equal the head's hash (64 zeros for the genesis event).
+-- A writer racing on a stale head gets SQLSTATE 40001 and must retry its whole transaction.
 -- -----------------------------------------------------------------------------------------------------
 
 create or replace function trustcargo_private.audit_events_chain()
@@ -426,14 +452,22 @@ security definer
 set search_path = ''
 as $$
 declare
-    v_head text;
+    v_head_hash     text;
+    v_head_sequence bigint;
 begin
+    if new.sequence is null then
+        raise exception 'audit_events.sequence is supplied by the writer' using errcode = '23502';
+    end if;
     perform pg_advisory_xact_lock(hashtextextended('trustcargo.audit_events.chain', 0));
-    new.sequence := nextval(pg_get_serial_sequence('trustcargo.audit_events', 'sequence'));
-    select a.hash into v_head from trustcargo.audit_events a order by a.sequence desc limit 1;
-    if new.previous_hash <> coalesce(v_head, repeat('0', 64)) then
+    select a.hash, a.sequence into v_head_hash, v_head_sequence
+    from trustcargo.audit_events a order by a.sequence desc limit 1;
+    if new.sequence is distinct from coalesce(v_head_sequence, 0) + 1 then
+        raise exception 'audit chain broken: sequence % does not follow head %', new.sequence, coalesce(v_head_sequence, 0)
+            using errcode = '40001';
+    end if;
+    if new.previous_hash <> coalesce(v_head_hash, repeat('0', 64)) then
         raise exception 'audit chain broken: previous_hash % does not match head %',
-            new.previous_hash, coalesce(v_head, repeat('0', 64))
+            new.previous_hash, coalesce(v_head_hash, repeat('0', 64))
             using errcode = '40001';
     end if;
     if new.hash = new.previous_hash then

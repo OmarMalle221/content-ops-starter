@@ -7,6 +7,7 @@ import { DEFAULT_VEHICLE_MILESTONES } from '@/domain/transaction/contract';
 import type { CreateVehicleTransactionInput } from '@/lib/validation/schemas';
 import type { App } from '@/server/app';
 import type { Actor } from '@/server/auth/actor';
+import { pseudonymize } from '@/server/security/crypto';
 import { DEFAULT_SECURITY_SETTINGS } from '@/server/services/context';
 import { makeDemoPdf, makeDemoPng } from './files';
 import { DEMO_TOTP_SECRET, PERSONAS } from './personas';
@@ -202,13 +203,14 @@ export async function seedReferenceData(app: App) {
             ['buyer2', 'SN', 'dev-cheikh-phone']
         ];
         for (const [key, country, device] of sessions) {
+            // Stored like real sessions: keyed pseudonyms, never the raw device / IP identifiers.
             await db.sessionEvents.insert({
                 id: deps.ids.id(),
                 userId: ids[key]!,
                 at: t0,
                 country,
-                deviceFingerprintHash: device,
-                ipHash: `ip-${key}`
+                deviceFingerprintHash: pseudonymize(app.config.sessionSecret, `demo-device:${device}`),
+                ipHash: pseudonymize(app.config.sessionSecret, `demo-ip:${key}`)
             });
         }
     });
@@ -394,7 +396,7 @@ export async function seedDemoScenarios(app: App) {
             tick(DAY);
             await app.milestones.review(buyer, txId, m1.id, { decision: 'APPROVE' });
             tick(DAY / 2);
-            for (const t of mockProvider.pendingTransfers().filter((x) => x.status === 'SUBMITTED'))
+            for (const t of (await mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
                 await mockProvider.simulateTransferOutcome(t.reference, 'PAID');
         }
 
@@ -454,7 +456,7 @@ export async function seedDemoScenarios(app: App) {
         tick(DAY);
         let hv = await app.views.transaction(seller, highlander);
         await app.milestones.review(buyer, highlander, hv.milestones[1]!.id, { decision: 'APPROVE' });
-        for (const t of mockProvider.pendingTransfers().filter((x) => x.status === 'SUBMITTED'))
+        for (const t of (await mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
             await mockProvider.simulateTransferOutcome(t.reference, 'PAID');
         tick(DAY * 20);
         hv = await app.views.transaction(seller, highlander);
@@ -468,7 +470,7 @@ export async function seedDemoScenarios(app: App) {
         await app.milestones.attachEvidence(seller, highlander, hv.milestones[2]!.id, proof.id);
         await app.milestones.submit(seller, highlander, hv.milestones[2]!.id, 'Véhicule livré.');
         await app.milestones.review(buyer, highlander, hv.milestones[2]!.id, { decision: 'APPROVE' });
-        for (const t of mockProvider.pendingTransfers().filter((x) => x.status === 'SUBMITTED'))
+        for (const t of (await mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
             await mockProvider.simulateTransferOutcome(t.reference, 'PAID');
 
         // 4 — Disputed: shipping documents inconsistent with the vehicle (VIN typo, other consignee)
