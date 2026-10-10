@@ -70,7 +70,7 @@ export class DocumentService {
             }
         }
 
-        return this.deps.uow.run(async (db) => {
+        const checkUpload = async (db: Db) => {
             const settings = await securitySettings(db);
             if (file.bytes.byteLength > settings.maxUploadBytes)
                 throw new AppError('VALIDATION', `File exceeds ${settings.maxUploadBytes} bytes`);
@@ -79,6 +79,22 @@ export class DocumentService {
             if (isTerminal(tx.status)) throw new AppError('PRECONDITION_FAILED', 'The transaction is closed');
             if (!UPLOAD_PERMISSIONS[party!.role].includes(input.type))
                 throw forbidden(`A ${party!.role} cannot upload ${input.type} documents`);
+            return { tx, party: party! };
+        };
+
+        // The object is written to storage BEFORE the unit of work, after the same authorisation checks:
+        // no database lock is held during the network upload, and a retried unit of work never uploads
+        // twice. Its key is unique to this upload (document id + content hash), so a unit of work that
+        // fails afterwards only leaves an unreferenced private object.
+        const id = this.deps.ids.id();
+        const sha256 = sha256Hex(file.bytes);
+        const { tx: checked } = await this.deps.uow.run(checkUpload);
+        const storageKey = `${checked.id}/${id}/${sha256}`;
+        if (scan !== 'INFECTED') await this.deps.storage.put(storageKey, file.bytes, sniffed);
+
+        return this.deps.uow.run(async (db) => {
+            const { tx, party } = await checkUpload(db);
+            if (tx.id !== checked.id) throw notFound('Transaction');
 
             let logicalId = this.deps.ids.id();
             let version = 1;
@@ -91,8 +107,6 @@ export class DocumentService {
                 version = Math.max(...versions.map((v) => v.version)) + 1;
                 for (const v of versions) if (v.status !== 'SUPERSEDED') await db.documents.update(v.id, { status: 'SUPERSEDED' });
             }
-            const sha256 = sha256Hex(file.bytes);
-            const id = this.deps.ids.id();
             const now = this.deps.clock.now().toISOString();
             const doc: Document = {
                 id,
@@ -106,15 +120,14 @@ export class DocumentService {
                 mimeType: sniffed,
                 sizeBytes: file.bytes.byteLength,
                 sha256,
-                storageKey: `${tx.id}/${logicalId}/v${version}-${sha256.slice(0, 12)}`,
+                storageKey,
                 status: scan === 'CLEAN' ? 'PENDING_REVIEW' : scan === 'INFECTED' ? 'QUARANTINED' : 'SCAN_PENDING',
-                visibleToRoles: defaultVisibility(input.type, party!.role),
+                visibleToRoles: defaultVisibility(input.type, party.role),
                 extracted,
                 extractionSource: Object.keys(extracted).length ? 'DECLARED' : 'NONE',
                 scan: { status: scan, engine: this.deps.scanner.engine, scannedAt: now },
                 uploadedAt: now
             };
-            if (scan !== 'INFECTED') await this.deps.storage.put(doc.storageKey, file.bytes, sniffed);
             await db.documents.insert(doc);
             await audit(
                 this.deps,
