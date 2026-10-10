@@ -2,16 +2,10 @@
  * Composition root: wires ports to adapters and services together.
  * Swapping the in-memory database or the mock providers for real adapters happens here only.
  */
-import { MemoryDatabase } from './adapters/memory/memory-db';
 import { MockPaymentProvider } from './adapters/mock/mock-payment-provider';
-import {
-    EicarOnlyScanner,
-    MemoryFileStorage,
-    MockIdentityProvider,
-    MockScreeningProvider,
-    SystemClock,
-    UuidGenerator
-} from './adapters/mock/mock-providers';
+import { EicarOnlyScanner, MockIdentityProvider, MockScreeningProvider, SystemClock, UuidGenerator } from './adapters/mock/mock-providers';
+import { createPersistence } from './adapters/persistence';
+import { createFileStorage } from './adapters/storage';
 import type { ServerConfig } from './config';
 import { InMemoryRateLimiter } from './security/rate-limit';
 import { AdminService, ComplianceService, NotificationService, ReconciliationService } from './services/admin-services';
@@ -30,17 +24,17 @@ import { ViewService } from './services/view-service';
 import { Workflow } from './services/workflow';
 
 export function createApp(config: ServerConfig) {
-    const database = new MemoryDatabase();
+    const persistence = createPersistence(config);
     const clock = new SystemClock();
     const mockProvider = new MockPaymentProvider(config.webhookSecret, clock);
     const deps: Deps = {
-        uow: database,
+        uow: persistence.uow,
         clock,
         ids: new UuidGenerator(),
         payments: mockProvider,
         identity: new MockIdentityProvider(),
         screening: new MockScreeningProvider(),
-        storage: new MemoryFileStorage(),
+        storage: createFileStorage(config),
         scanner: new EicarOnlyScanner(),
         config: { mode: config.mode, sessionSecret: config.sessionSecret, appUrl: config.appUrl }
     };
@@ -67,7 +61,7 @@ export function createApp(config: ServerConfig) {
     return {
         config,
         deps,
-        database,
+        persistence,
         clock,
         mockProvider,
         rateLimiter: new InMemoryRateLimiter(),
