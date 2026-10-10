@@ -470,14 +470,15 @@ create policy notifications_update_own on trustcargo.notifications for update to
     with check (user_id = (select auth.uid()));
 
 -- -----------------------------------------------------------------------------------------------------
--- Storage: private bucket `trustcargo-documents`, objects named '<transaction_id>/...'.
--- Guarded so the migration also runs where the storage schema is absent.
+-- Storage: private bucket `trustcargo-documents`, objects named '<transaction_id>/<document_id>/<sha256>'.
+-- Server-only access (secret key); no storage.objects policy is created, so nothing outside this bucket
+-- row is touched in the storage schema. Guarded so the migration also runs where storage is absent.
 -- -----------------------------------------------------------------------------------------------------
 
 do $$
 begin
     if to_regclass('storage.buckets') is null or to_regclass('storage.objects') is null then
-        raise notice 'storage schema not found: skipping bucket and storage policies';
+        raise notice 'storage schema not found: skipping bucket';
         return;
     end if;
 
@@ -496,33 +497,9 @@ begin
         $sql$;
     end if;
 
-    execute 'drop policy if exists trustcargo_documents_select on storage.objects';
-    execute 'drop policy if exists trustcargo_documents_insert on storage.objects';
-
-    -- Download: party of the transaction in the path prefix (or document staff) AND the object must be
-    -- backed by a documents row the caller can see under documents RLS (role visibility, identity docs).
-    execute $sql$
-        create policy trustcargo_documents_select on storage.objects for select to authenticated
-        using (
-            bucket_id = 'trustcargo-documents'
-            and (
-                trustcargo_private.is_transaction_party(trustcargo_private.try_uuid((storage.foldername(name))[1]))
-                or (select trustcargo_private.has_any_platform_role(array['document_reviewer', 'compliance_analyst', 'dispute_manager']))
-            )
-            and exists (select 1 from trustcargo.documents d where d.storage_key = objects.name)
-        )
-    $sql$;
-
-    -- Upload: only into a transaction folder the caller is a party of, as themselves.
-    -- Uploaded files stay inert until the server scans them and creates the documents row.
-    execute $sql$
-        create policy trustcargo_documents_insert on storage.objects for insert to authenticated
-        with check (
-            bucket_id = 'trustcargo-documents'
-            and owner = (select auth.uid())
-            and trustcargo_private.is_transaction_party(trustcargo_private.try_uuid((storage.foldername(name))[1]))
-        )
-    $sql$;
-    -- No update/delete policies: objects are immutable for end users (new version = new object).
+    -- Deliberately NO policy on storage.objects: only the server reads and writes this bucket, with the
+    -- secret key, after its own checks (authorisation, suspended accounts, malware scan, size, access log,
+    -- SHA-256 integrity). With RLS on storage.objects and no policy, `anon` / `authenticated` JWTs (e.g. a
+    -- user's own Supabase session) get no direct access to TrustCargo objects through the Storage API.
 end;
 $$;

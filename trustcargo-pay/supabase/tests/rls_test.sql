@@ -212,6 +212,11 @@ select tst.ok('post_ledger_journal executable by service_role',
     has_function_privilege('service_role', 'trustcargo.post_ledger_journal(text,text,uuid,text,text,jsonb,text,uuid,uuid)', 'EXECUTE'));
 select tst.ok('trustcargo-documents bucket is private',
     (select not public from storage.buckets where id = 'trustcargo-documents'));
+-- The shared project's storage policies are left untouched: TrustCargo creates none.
+select tst.eq('no storage.objects policy created by TrustCargo', (
+    select count(*) from pg_policies
+    where schemaname = 'storage'
+      and (policyname like 'trustcargo%' or coalesce(qual, '') like '%trustcargo%' or coalesce(with_check, '') like '%trustcargo%')), 0);
 
 \echo '== seeding (superuser)'
 begin;
@@ -466,7 +471,7 @@ select tst.eq('B sees T1 acceptances', tst.cnt('select 1 from trustcargo.contrac
 select tst.eq('B sees T1 documents (invoice, inspection, own photo)', tst.cnt($q$select 1 from trustcargo.documents where transaction_id = '11111111-1111-4111-8111-111111111111'$q$), 3);
 select tst.eq('B sees own identity document', tst.cnt($q$select 1 from trustcargo.documents where type = 'IDENTITY'$q$), 1);
 select tst.eq('B cannot see T2 documents', tst.cnt($q$select 1 from trustcargo.documents where transaction_id = '22222222-2222-4222-8222-222222222222'$q$), 0);
-select tst.eq('B sees T1 storage objects', tst.cnt($q$select 1 from storage.objects where bucket_id = 'trustcargo-documents'$q$), 3);
+select tst.eq('B cannot read TrustCargo storage objects directly (server-only bucket)', tst.cnt($q$select 1 from storage.objects where bucket_id = 'trustcargo-documents'$q$), 0);
 select tst.eq('B sees T1 payment instruction', tst.cnt('select 1 from trustcargo.payment_instructions'), 1);
 select tst.eq('B sees T1 payouts', tst.cnt('select 1 from trustcargo.payouts'), 1);
 select tst.eq('B sees T1 refunds', tst.cnt('select 1 from trustcargo.refunds'), 1);
@@ -530,8 +535,8 @@ select tst.eq('B can mark own notification read', tst.affected('update trustcarg
 select tst.denied('B cannot re-target a notification',
     $q$update trustcargo.notifications set user_id = 'c0000000-0000-4000-8000-00000000000c'$q$);
 select tst.eq('B (not creator) cannot rename T1', tst.affected($q$update trustcargo.transactions set title = 'x' where id = '11111111-1111-4111-8111-111111111111'$q$), 0);
-select tst.eq('B can upload into T1 folder', tst.affected(
-    $q$insert into storage.objects (bucket_id, name, owner) values ('trustcargo-documents', '11111111-1111-4111-8111-111111111111/new/1-proof.pdf', 'b0000000-0000-4000-8000-00000000000b')$q$), 1);
+select tst.denied('B cannot upload directly, even into a T1 folder (server-only bucket)',
+    $q$insert into storage.objects (bucket_id, name, owner) values ('trustcargo-documents', '11111111-1111-4111-8111-111111111111/new/1-proof.pdf', 'b0000000-0000-4000-8000-00000000000b')$q$);
 select tst.denied('B cannot upload as somebody else',
     $q$insert into storage.objects (bucket_id, name, owner) values ('trustcargo-documents', '11111111-1111-4111-8111-111111111111/new/2-proof.pdf', 'a0000000-0000-4000-8000-00000000000a')$q$);
 select tst.denied('B cannot upload outside a transaction folder',
@@ -553,7 +558,7 @@ select tst.eq('D cannot see disputes', tst.cnt('select 1 from trustcargo.dispute
 select tst.eq('D cannot see dispute messages', tst.cnt('select 1 from trustcargo.dispute_messages'), 0);
 select tst.eq('D sees only documents visible to INSPECTOR', tst.cnt('select 1 from trustcargo.documents'), 1);
 select tst.eq('D cannot see the invoice (SELLER/BUYER only)', tst.cnt($q$select 1 from trustcargo.documents where type = 'INVOICE'$q$), 0);
-select tst.eq('D sees only the inspection report object', tst.cnt('select 1 from storage.objects'), 1);
+select tst.eq('D cannot read storage objects directly (server-only bucket)', tst.cnt('select 1 from storage.objects'), 0);
 select tst.eq('D cannot see risk alerts', tst.cnt('select 1 from trustcargo.risk_alerts'), 0);
 select tst.ok('D party_role(T1) = INSPECTOR', trustcargo_private.party_role('11111111-1111-4111-8111-111111111111') = 'INSPECTOR');
 rollback;
