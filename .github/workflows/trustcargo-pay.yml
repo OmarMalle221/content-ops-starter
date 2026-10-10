@@ -1,0 +1,80 @@
+name: TrustCargo Pay CI
+
+on:
+  push:
+    paths: ['trustcargo-pay/**', '.github/workflows/trustcargo-pay.yml']
+  pull_request:
+    paths: ['trustcargo-pay/**', '.github/workflows/trustcargo-pay.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trustcargo-pay-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: trustcargo-pay
+
+jobs:
+  checks:
+    name: Lint, typecheck, unit & integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: trustcargo-pay/package-lock.json
+      - run: npm ci
+      - run: npx prettier --check "src/**/*.{ts,tsx}" "tests/**/*.ts"
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  database:
+    name: Supabase schema, RLS & ledger tests (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trustcargo_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/trustcargo_test
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: bash scripts/test-db.sh
+
+  e2e:
+    name: Build & end-to-end tests (Playwright)
+    runs-on: ubuntu-latest
+    needs: checks
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: trustcargo-pay/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+        env:
+          CI: 'true'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: trustcargo-pay/playwright-report
+          retention-days: 7

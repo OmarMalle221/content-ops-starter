@@ -1,5 +1,7 @@
 # Content Ops Starter
 
+> **TrustCargo Pay** — this repository also hosts the TrustCargo Pay MVP (secure international vehicle transactions, simulation mode only) as a standalone Next.js app in [`trustcargo-pay/`](trustcargo-pay/README.md). The starter below is unchanged.
+
 ![Content Ops Starter](https://assets.stackbit.com/docs/content-ops-starter-thumb.png)
 
 Netlify starter that's made for customization with a flexible content model, component library, [visual editing](https://docs.netlify.com/visual-editor/overview/) and [Git Content Source](https://docs.netlify.com/create/content-sources/git/).
