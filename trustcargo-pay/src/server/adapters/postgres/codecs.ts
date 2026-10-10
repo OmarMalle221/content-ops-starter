@@ -9,11 +9,12 @@
  *     which memory compares by reference) yields `null` = "matches nothing" instead of a database error.
  *
  * Column names only ever come from the static table specs (tables.ts); values are always parameters.
- * Strings (text, text[] and every string of a jsonb document) go through the shared storable-text rule
- * (src/server/text.ts, also applied by the in-memory adapter): lone surrogates become U+FFFD and U+0000
- * is a VALIDATION error, so both adapters store and refuse exactly the same strings.
+ * Strings (text, text[] and every string of a jsonb document, related tables included) go through the shared
+ * storable-text rule (src/server/text.ts, also applied by the in-memory adapter): lone surrogates become U+FFFD
+ * and U+0000 is a VALIDATION error, so both adapters store and refuse exactly the same strings. A text filter
+ * value is compared in its stored form (U+0000: matches nothing).
  */
-import { isStorableString, storableString, storableValue } from '@/server/text';
+import { filterString, storableString, storableValue } from '@/server/text';
 
 export type Row = Record<string, unknown>;
 
@@ -106,8 +107,8 @@ export const types = {
             return storableString(v, field);
         },
         decode: (v) => v,
-        // A string that is never stored as is matches nothing (memory compares the stored, normalised value).
-        filter: (v) => (typeof v === 'string' && isStorableString(v) ? v : NO_MATCH),
+        // Compared in its stored form, as memory does: findBy(x) finds the row insert(x) stored.
+        filter: (v) => (typeof v === 'string' ? (filterString(v) ?? NO_MATCH) : NO_MATCH),
         filterCast: '::text'
     } satisfies ColumnType,
     /** Canonical lowercase uuid (what the generator produces and Postgres returns). */

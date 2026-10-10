@@ -7,6 +7,10 @@
  *   simulated partner connection). The only seed of a database with real accounts (AUTH_PROVIDER=supabase).
  * - seedDemoPersonas / seedDemoScenarios: persona demo only (AUTH_PROVIDER=demo). Personas never share a
  *   database with real accounts (src/server/instance.ts).
+ *
+ * The scenarios' partner records (simulated) are published only once the scenarios have succeeded
+ * (MockPaymentProvider.withStagedWrites), and the seed only ever pays the transfers it submitted itself: partner
+ * records left by an older interrupted seed are never driven, so they cannot fail events or notify anyone.
  */
 import { DEFAULT_VEHICLE_MILESTONES } from '@/domain/transaction/contract';
 import type { CreateVehicleTransactionInput } from '@/lib/validation/schemas';
@@ -297,6 +301,11 @@ function vehicleInput(
 }
 
 export async function seedDemoScenarios(app: App) {
+    // A seed that fails (and rolls back with its unit of work) leaves no partner records behind.
+    await app.mockProvider.withStagedWrites(() => seedScenarios(app));
+}
+
+async function seedScenarios(app: App) {
     const { clock, mockProvider } = app;
     // Scenarios are placed relative to "now" so invitations and deadlines stay valid whenever the demo starts.
     const today = new Date(app.clock.now());
@@ -383,6 +392,14 @@ export async function seedDemoScenarios(app: App) {
             return tx.id;
         }
 
+        /** Pays the transfers submitted for `txId`: its payouts' own references, never another partner record. */
+        async function payTransfers(txId: string) {
+            const references = await app.deps.uow.run(async (db) =>
+                (await db.payouts.findBy({ transactionId: txId, status: 'SUBMITTED' })).map((p) => p.providerReference!)
+            );
+            for (const reference of references) await mockProvider.simulateTransferOutcome(reference, 'PAID');
+        }
+
         async function fund(txId: string) {
             tick(DAY);
             const instruction = await app.payments.requestFundingInstructions(buyer, txId);
@@ -418,8 +435,7 @@ export async function seedDemoScenarios(app: App) {
             tick(DAY);
             await app.milestones.review(buyer, txId, m1.id, { decision: 'APPROVE' });
             tick(DAY / 2);
-            for (const t of (await mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
-                await mockProvider.simulateTransferOutcome(t.reference, 'PAID');
+            await payTransfers(txId);
         }
 
         async function shippingEvidence(txId: string, bol: { vin: string; consignee: string; port: string }, declaredMinorAmount: string) {
@@ -478,8 +494,7 @@ export async function seedDemoScenarios(app: App) {
         tick(DAY);
         let hv = await app.views.transaction(seller, highlander);
         await app.milestones.review(buyer, highlander, hv.milestones[1]!.id, { decision: 'APPROVE' });
-        for (const t of (await mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
-            await mockProvider.simulateTransferOutcome(t.reference, 'PAID');
+        await payTransfers(highlander);
         tick(DAY * 20);
         hv = await app.views.transaction(seller, highlander);
         await app.documents.upload(
@@ -492,8 +507,7 @@ export async function seedDemoScenarios(app: App) {
         await app.milestones.attachEvidence(seller, highlander, hv.milestones[2]!.id, proof.id);
         await app.milestones.submit(seller, highlander, hv.milestones[2]!.id, 'Véhicule livré.');
         await app.milestones.review(buyer, highlander, hv.milestones[2]!.id, { decision: 'APPROVE' });
-        for (const t of (await mockProvider.pendingTransfers()).filter((x) => x.status === 'SUBMITTED'))
-            await mockProvider.simulateTransferOutcome(t.reference, 'PAID');
+        await payTransfers(highlander);
 
         // 4 — Disputed: shipping documents inconsistent with the vehicle (VIN typo, other consignee)
         clock.freeze(new Date(start - 12 * DAY));

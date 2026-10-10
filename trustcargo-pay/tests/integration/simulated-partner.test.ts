@@ -9,7 +9,11 @@
 import pg from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { money } from '@/domain/money';
-import { MemorySimulatedPartnerStore, type SimulatedPartnerStore } from '@/server/adapters/mock/simulated-partner-store';
+import {
+    MemorySimulatedPartnerStore,
+    StagedSimulatedPartnerStore,
+    type SimulatedPartnerStore
+} from '@/server/adapters/mock/simulated-partner-store';
 import { PostgresSimulatedPartnerStore } from '@/server/adapters/postgres/pg-simulated-partner-store';
 import { createApp } from '@/server/app';
 import { loadConfig } from '@/server/config';
@@ -135,6 +139,67 @@ function contract(name: string, enabled: boolean, open: () => Promise<SimulatedP
 
 contract('memory', true, async () => new MemorySimulatedPartnerStore());
 contract('postgres', usePostgres, openPostgresStore);
+contract('staged over memory', true, async () => new StagedSimulatedPartnerStore(new MemorySimulatedPartnerStore()));
+
+/** Writes held back by StagedSimulatedPartnerStore (first-boot demo seed) over each store. */
+function staging(name: string, enabled: boolean, open: () => Promise<SimulatedPartnerStore>) {
+    describe.skipIf(!enabled)(`staged partner writes over ${name}`, () => {
+        it('reach the store only when published, in their original order; until then the store is untouched', async () => {
+            const base = await open();
+            const amount = money(500_000n, 'CAD');
+            const before = {
+                reference: 'sim_po_before',
+                kind: 'PAYOUT' as const,
+                idempotencyKey: 'payout:before',
+                amount,
+                status: 'SUBMITTED' as const
+            };
+            await base.createTransfer(before);
+            const staged = new StagedSimulatedPartnerStore(base);
+            await staged.createInstruction({ reference: 'sim_pi_s', idempotencyKey: 'fund:s', amount, status: 'CREATED' });
+            await staged.setInstructionStatus('sim_pi_s', 'FUNDED', line('sim_pi_s', at(1), '500000'));
+            await staged.createTransfer({ ...before, reference: 'sim_po_s', idempotencyKey: 'payout:s' });
+            await staged.setTransferStatus('sim_po_s', 'PAID', { ...line('sim_po_s', at(2), '500000'), kind: 'PAYOUT_PAID' });
+            await staged.appendStatementLine(line('sim_unknown_1', at(3)));
+            const lines = [
+                line('sim_pi_s', at(1), '500000'),
+                { ...line('sim_po_s', at(2), '500000'), kind: 'PAYOUT_PAID' as const },
+                line('sim_unknown_1', at(3))
+            ];
+            // Reads see the staged writes; the store has none of them.
+            expect((await staged.getInstruction('sim_pi_s'))!.status).toBe('FUNDED');
+            expect((await staged.listTransfers()).map((t) => [t.reference, t.status])).toEqual([
+                ['sim_po_before', 'SUBMITTED'],
+                ['sim_po_s', 'PAID']
+            ]);
+            expect(await staged.statement(ALL)).toEqual(lines);
+            expect(await base.getInstruction('sim_pi_s')).toBeUndefined();
+            expect((await base.listTransfers()).map((t) => t.reference)).toEqual(['sim_po_before']);
+            expect(await base.statement(ALL)).toEqual([]);
+            // A record that predates the staging is written straight through.
+            await staged.setTransferStatus('sim_po_before', 'PROCESSING');
+            expect((await base.getTransfer('sim_po_before'))!.status).toBe('PROCESSING');
+
+            await staged.publish();
+            await staged.publish(); // once only
+            expect((await base.getInstruction('sim_pi_s'))!.status).toBe('FUNDED');
+            expect((await base.listTransfers()).map((t) => [t.reference, t.status])).toEqual([
+                ['sim_po_before', 'PROCESSING'],
+                ['sim_po_s', 'PAID']
+            ]);
+            expect(await base.statement(ALL)).toEqual(lines);
+
+            // A staged key that the store already knows fails the publication instead of being merged silently.
+            const clash = new StagedSimulatedPartnerStore(base);
+            await clash.createInstruction({ reference: 'sim_pi_clash', idempotencyKey: 'fund:s', amount, status: 'CREATED' });
+            await expect(clash.publish()).rejects.toSatisfy(partnerError(false));
+            expect(await base.getInstruction('sim_pi_clash')).toBeUndefined();
+        });
+    });
+}
+
+staging('memory', true, async () => new MemorySimulatedPartnerStore());
+staging('postgres', usePostgres, openPostgresStore);
 
 describe('simulated partner wiring', () => {
     it('keeps the partner in memory without DATABASE_URL', async () => {

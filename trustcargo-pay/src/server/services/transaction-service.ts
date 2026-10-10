@@ -13,7 +13,7 @@ import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
 import { hashCanonical, randomToken, sha256Hex } from '@/server/security/crypto';
 import { AppError, forbidden, notFound } from '@/server/errors';
-import { truncateText } from '@/server/text';
+import { storableValue, truncateText } from '@/server/text';
 import { accessTransaction, audit, notify, securitySettings, type Deps } from './context';
 import type { Workflow } from './workflow';
 import { currentMilestones } from './workflow';
@@ -43,12 +43,16 @@ export class TransactionService {
         return this.deps.clock.now().toISOString();
     }
 
+    /**
+     * The terms as stored (storable-text rule: lone surrogates as U+FFFD, U+0000 refused), so the content hash that
+     * acceptances bind to is the hash of the stored terms, and an unchanged amendment is recognised as such.
+     */
     private buildTerms(
         terms: Omit<ContractTerms, 'totalAmount' | 'milestones'>,
         amount: ReturnType<typeof parseMoney>,
         milestones: MilestoneTerm[]
     ): ContractTerms {
-        return { ...terms, totalAmount: toDTO(amount), milestones };
+        return storableValue({ ...terms, totalAmount: toDTO(amount), milestones }, 'terms');
     }
 
     private async createVersion(
@@ -60,13 +64,14 @@ export class TransactionService {
         createdBy: string,
         changeSummary?: string
     ) {
+        const stored = storableValue(terms, 'terms'); // hashed as stored (buildTerms already did it for its callers)
         const version: ContractVersion = {
             id: this.deps.ids.id(),
             contractId,
             transactionId: tx.id,
             versionNumber,
-            terms,
-            contentHash: hashCanonical(terms),
+            terms: stored,
+            contentHash: hashCanonical(stored),
             status: 'PROPOSED',
             changeSummary,
             createdBy,
@@ -74,10 +79,10 @@ export class TransactionService {
         };
         await db.contractVersions.insert(version);
         const amounts = allocateByBps(
-            fromDTO(terms.totalAmount),
-            terms.milestones.map((m) => m.shareBps)
+            fromDTO(stored.totalAmount),
+            stored.milestones.map((m) => m.shareBps)
         );
-        for (const [i, m] of terms.milestones.entries()) {
+        for (const [i, m] of stored.milestones.entries()) {
             await db.milestones.insert({
                 id: this.deps.ids.id(),
                 transactionId: tx.id,
