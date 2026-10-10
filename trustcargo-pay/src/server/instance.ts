@@ -68,6 +68,10 @@ export async function seedIfEmpty(app: App): Promise<boolean> {
             await seedPlatformReferenceData(app);
             if (personaDemo) {
                 await seedDemoPersonas(app);
+                // The scenarios upload their demo documents from inside this unit of work, by design: those Storage
+                // uploads (Supabase with STORAGE_PROVIDER=supabase) run under the global lock, the one exception to
+                // "no external I/O in a unit of work" (docs/ARCHITECTURE.md), and a seed rolled back after them leaves
+                // their objects behind.
                 await seedDemoScenarios(app);
             }
             const marker = { type: SEED_MARKER.entityType, id: SEED_MARKER.entityId };

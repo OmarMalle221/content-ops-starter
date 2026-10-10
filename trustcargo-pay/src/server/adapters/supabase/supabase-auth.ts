@@ -69,8 +69,10 @@ export function qrCodeToDataUrl(qrCode: string): string | undefined {
 
 export class SupabaseAuthGateway implements AuthGateway {
     private readonly client: ReturnType<typeof createServerClient>;
+    private readonly cookies: CookieJar;
 
     constructor(options: SupabaseAuthOptions) {
+        this.cookies = options.cookies;
         const cookieOptions: CookieOptions & { name: string } = {
             name: SUPABASE_AUTH_COOKIE,
             httpOnly: true,
@@ -98,6 +100,12 @@ export class SupabaseAuthGateway implements AuthGateway {
     async exchangeCode(code: string): Promise<void> {
         const { error } = await this.client.auth.exchangeCodeForSession(code);
         if (error) throw toGatewayError(error);
+    }
+
+    hasCodeVerifier(): boolean {
+        // auth-js keeps it under `<storage key>-code-verifier`; @supabase/ssr may split a long cookie into `.0`, `.1`…
+        const name = `${SUPABASE_AUTH_COOKIE}-code-verifier`;
+        return this.cookies.getAll().some((c) => (c.name === name || c.name === `${name}.0`) && c.value.length > 0);
     }
 
     async currentIdentity(): Promise<VerifiedIdentity | undefined> {

@@ -1,8 +1,8 @@
 import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
-import { SYSTEM, hasRole } from '@/server/auth/actor';
+import { SYSTEM } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
-import { audit, notify, type Deps } from './context';
+import { audit, notify, requireStaffRole, type Deps } from './context';
 import type { Workflow } from './workflow';
 import type { RiskService } from './risk-service';
 
@@ -120,7 +120,7 @@ export class IdentityService {
 
     /** Manual decision by a compliance analyst on a verification flagged for review. */
     async review(actor: Actor, verificationId: string, decision: 'VERIFIED' | 'REJECTED', note: string) {
-        if (!hasRole(actor, 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst']);
         if (note.trim().length < 5) throw new AppError('VALIDATION', 'A justification is required');
         return this.deps.uow.run(async (db) => {
             const v = await db.identityVerifications.get(verificationId);
@@ -168,8 +168,8 @@ export class IdentityService {
     }
 
     async listPending(actor: Actor) {
-        if (!hasRole(actor, 'compliance_analyst', 'auditor')) throw forbidden();
         return this.deps.uow.run(async (db) => {
+            await requireStaffRole(this.deps, actor, ['compliance_analyst', 'auditor'], db);
             const all = await db.identityVerifications.list();
             return Promise.all(
                 all

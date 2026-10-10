@@ -3,7 +3,7 @@ import { AppShell, type NavSection } from '@/components/app/app-shell';
 import { LocaleSwitch } from '@/components/app/locale-switch';
 import type { PlatformRole } from '@/domain/model';
 import { getI18n } from '@/i18n/server';
-import { hasRole } from '@/server/auth/actor';
+import { heldPlatformRoles } from '@/server/auth/actor';
 import { requireActor } from '@/server/auth/session';
 import { getApp } from '@/server/instance';
 
@@ -13,8 +13,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const app = await getApp();
     const user = (await app.deps.uow.run((db) => db.users.get(actor.userId)))!;
     const unread = (await app.notifications.list(actor)).filter((n) => !n.readAt).length;
-    const staff = actor.platformRoles.length > 0;
-    const can = (...roles: PlatformRole[]) => hasRole(actor, ...roles);
+    // Navigation follows every role the account holds: a back-office link of a role still waiting for its MFA
+    // challenge leads to that challenge (requireStaff), never to the data.
+    const held = heldPlatformRoles(actor);
+    const staff = held.length > 0;
+    const can = (...roles: PlatformRole[]) => roles.some((r) => held.includes(r));
 
     const sections: NavSection[] = [];
     if (!staff) {
@@ -59,7 +62,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     return (
         <AppShell
             sections={sections}
-            user={{ name: user.fullName, subtitle: staff ? actor.platformRoles.join(' · ') : user.email }}
+            user={{ name: user.fullName, subtitle: staff ? held.join(' · ') : user.email }}
             signOut={logout}
             signOutLabel={t('nav.signOut')}
             menuLabel={t('nav.menu')}

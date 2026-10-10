@@ -37,16 +37,19 @@ describe('release controls and recovery', () => {
         expect(v.underReview).toBe(true);
 
         app.clock.advance(73 * 3_600_000);
-        const blocking = (await app.risk.listAlerts(a.compliance, { transactionId: txId })).filter(
+        // Three days later the analyst passes the back-office MFA challenge again (their earlier one has expired).
+        await expect(app.risk.listAlerts(a.compliance, { transactionId: txId })).rejects.toMatchObject({ code: 'MFA_REQUIRED' });
+        const compliance = { ...a.compliance, mfaVerifiedAt: app.clock.now().toISOString() };
+        const blocking = (await app.risk.listAlerts(compliance, { transactionId: txId })).filter(
             (x) => x.alert.blocksFundsMovement && x.alert.status === 'OPEN'
         );
         expect(blocking.map((x) => x.alert.ruleId).sort()).toEqual(['BENEFICIARY_CHANGED_RECENTLY', 'PAYMENT_DETAILS_CHANGED_IN_FLIGHT']);
-        await app.risk.review(a.compliance, blocking[0]!.alert.id, {
+        await app.risk.review(compliance, blocking[0]!.alert.id, {
             decision: 'RISK_MITIGATED',
             notes: 'Changement confirmé par téléphone au numéro connu (rappel sortant).'
         });
         expect((await app.views.transaction(a.buyer, txId)).payment!.payouts).toHaveLength(0);
-        await app.risk.review(a.compliance, blocking[1]!.alert.id, {
+        await app.risk.review(compliance, blocking[1]!.alert.id, {
             decision: 'RISK_MITIGATED',
             notes: 'Même vérification, même dossier.'
         });

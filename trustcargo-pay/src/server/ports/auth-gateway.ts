@@ -63,6 +63,11 @@ export interface AuthGateway {
      * another browser opens nothing there. Cross-browser `token_hash` links are deliberately not supported.
      */
     exchangeCode(code: string): Promise<void>;
+    /**
+     * Whether this browser holds the PKCE code verifier that sendMagicLink stored (read from its cookies, no request).
+     * Without it exchangeCode cannot succeed: the callback refuses such a request before spending any shared budget.
+     */
+    hasCodeVerifier(): boolean;
     /** Identity of the current provider session, validated by the provider's server; undefined without a session. */
     currentIdentity(): Promise<VerifiedIdentity | undefined>;
     listTotpFactors(): Promise<TotpFactor[]>;

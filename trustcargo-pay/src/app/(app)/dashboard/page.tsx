@@ -1,17 +1,17 @@
 import Link from 'next/link';
 import { ArrowRight, Inbox, Plus, ShieldCheck, UserCheck } from 'lucide-react';
 import { redirect } from 'next/navigation';
-import { acceptInvitationForPartyAction } from '@/app/actions/transactions';
-import { ActionForm, SubmitButton } from '@/components/app/action-form';
 import { EmptyState, PageHeader, Stat } from '@/components/app/layout-bits';
+import { PendingInvitations } from '@/components/app/pending-invitations';
 import { TransactionStatusBadge } from '@/components/app/status';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatMoney, money } from '@/domain/money';
 import { getI18n } from '@/i18n/server';
-import { fmtDate, fmtMoney } from '@/lib/format';
+import { fmtDate } from '@/lib/format';
 import { nextActionFor } from '@/lib/next-action';
+import { heldPlatformRoles } from '@/server/auth/actor';
 import { requireActor } from '@/server/auth/session';
 import { getApp } from '@/server/instance';
 
@@ -19,13 +19,12 @@ export const metadata = { title: 'Tableau de bord' };
 
 export default async function DashboardPage() {
     const actor = await requireActor();
-    if (actor.platformRoles.length) redirect('/admin');
+    if (heldPlatformRoles(actor).length) redirect('/admin');
     const { t, intl } = await getI18n();
     const app = await getApp();
     const user = (await app.deps.uow.run((db) => db.users.get(actor.userId)))!;
     const list = await app.transactions.listForActor(actor);
     const views = await Promise.all(list.map((x) => app.views.transaction(actor, x.transaction.id)));
-    const invitations = await app.transactions.pendingInvitations(actor);
     const todo = views.map((v) => ({ v, next: nextActionFor(v) })).filter((x) => x.next.mine);
     const active = list.filter((x) => !['COMPLETED', 'CANCELLED', 'REFUNDED', 'DRAFT'].includes(x.transaction.status)).length;
     const completed = list.filter((x) => x.transaction.status === 'COMPLETED');
@@ -60,32 +59,7 @@ export default async function DashboardPage() {
                 <Stat label={t('dashboard.statsDisputes')} value={list.filter((x) => x.transaction.status === 'DISPUTED').length} />
             </div>
 
-            {invitations.length > 0 && (
-                <Card className="mb-6">
-                    <CardHeader>
-                        <CardTitle>{t('dashboard.invitations')}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="divide-y p-0">
-                        {invitations.map((inv) => (
-                            <div key={inv.partyId} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                                <div>
-                                    <p className="text-sm font-medium">
-                                        {inv.title} · <span className="text-muted-foreground">{inv.reference}</span>
-                                    </p>
-                                    <p className="text-sm text-muted-foreground">
-                                        {t('invite.from', { seller: inv.sellerName, role: t(`partyRole.${inv.role}`) })} —{' '}
-                                        {fmtMoney(inv.amount, intl)}
-                                    </p>
-                                </div>
-                                <ActionForm action={acceptInvitationForPartyAction} successMessage={t('common.success')}>
-                                    <input type="hidden" name="partyId" value={inv.partyId} />
-                                    <SubmitButton size="sm">{t('dashboard.acceptInvitation')}</SubmitButton>
-                                </ActionForm>
-                            </div>
-                        ))}
-                    </CardContent>
-                </Card>
-            )}
+            <PendingInvitations />
 
             <div className="grid gap-6 lg:grid-cols-5">
                 <Card className="lg:col-span-2">

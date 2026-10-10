@@ -8,10 +8,13 @@ import pg from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import type { User } from '@/domain/model';
 import { createApp, type App } from '@/server/app';
+import type { Actor } from '@/server/auth/actor';
 import { loadConfig } from '@/server/config';
 import { personaActor, seedReferenceData } from '@/server/demo/seed';
 import type { AuthGateway, VerifiedIdentity } from '@/server/ports/auth-gateway';
 import type { AuthContext, SessionControl } from '@/server/services/account-service';
+import { AuthGatewayError } from '@/server/ports/auth-gateway';
+import { createAndInvite } from './flow';
 import { createTestDatabase, usePostgres } from './pg-test-db';
 
 async function setup(): Promise<{ app: App; addUser(email: string): Promise<User> }> {
@@ -57,6 +60,7 @@ function context(identity: VerifiedIdentity): AuthContext & { started: string[] 
     const started: string[] = [];
     const gateway = {
         exchangeCode: async () => undefined,
+        hasCodeVerifier: () => true,
         currentIdentity: async () => identity,
         signOut: async () => undefined
     } as unknown as AuthGateway;
@@ -92,5 +96,66 @@ describe(`profile e-mail follows the verified provider address (${usePostgres ? 
         expect(await app.accounts.completeSignIn(ctx, { code: 'c' })).toEqual({ kind: 'redirect', to: '/?auth=error' });
         expect(ctx.started).toEqual([]);
         expect((await app.deps.uow.run((db) => db.users.get(user.id)))!.email).toBe('bob@corp.example');
+    });
+
+    describe('before an invitation is listed, accepted or declined (AccountService.withVerifiedEmail)', () => {
+        const actorOf = (user: User): Actor => ({ kind: 'USER', userId: user.id, email: user.email, platformRoles: [], sessionId: 's' });
+
+        async function invitedBob() {
+            const env = await setup();
+            const bob = await env.addUser('bob@corp.example');
+            const seller = await personaActor(env.app, 'seller');
+            await createAndInvite(env.app, seller, { buyer: { fullName: 'Bob Martin', email: 'bob@corp.example' } });
+            return { ...env, bob, stale: actorOf(bob) };
+        }
+
+        it('re-reads the provider address of a session opened before it changed, and matches invitations on it', async () => {
+            const { app, bob, stale } = await invitedBob();
+            const [invitation] = await app.transactions.pendingInvitations(stale);
+            expect(invitation).toBeDefined();
+            // The address moved at the provider (bob@corp.example now belongs to someone else) while Bob's session lived on.
+            const ctx = context({ authUserId: bob.id, email: 'Bob@Mail.Example', emailConfirmed: true });
+            const verified = await app.accounts.withVerifiedEmail(ctx, stale);
+            expect(verified).toEqual({ ...stale, email: 'bob@mail.example' });
+            expect((await app.deps.uow.run((db) => db.users.get(bob.id)))!.email).toBe('bob@mail.example');
+            expect(await app.transactions.pendingInvitations(verified)).toEqual([]);
+            await expect(app.transactions.acceptInvitationForParty(verified, invitation!.partyId)).rejects.toMatchObject({
+                code: 'FORBIDDEN'
+            });
+            const synced = await app.deps.uow.run((db) => db.auditEvents.findBy({ action: 'user.email_synced', entityId: bob.id }));
+            expect(synced).toHaveLength(1);
+            expect(JSON.stringify(synced)).not.toContain('@');
+        });
+
+        it('keeps the actor when the provider confirms the address, and needs no provider for demo personas', async () => {
+            const { app, bob, stale } = await invitedBob();
+            const ctx = context({ authUserId: bob.id, email: 'bob@corp.example', emailConfirmed: true });
+            expect(await app.accounts.withVerifiedEmail(ctx, stale)).toBe(stale);
+            expect(await app.transactions.pendingInvitations(stale)).toHaveLength(1);
+            expect(await app.accounts.withVerifiedEmail({ gateway: undefined }, stale)).toBe(stale);
+        });
+
+        it('refuses, and changes nothing, when another profile holds the verified address (same rule as sign-in)', async () => {
+            const { app, bob, stale, addUser } = await invitedBob();
+            await addUser('bob@mail.example');
+            const ctx = context({ authUserId: bob.id, email: 'bob@mail.example', emailConfirmed: true });
+            await expect(app.accounts.withVerifiedEmail(ctx, stale)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+            expect((await app.deps.uow.run((db) => db.users.get(bob.id)))!.email).toBe('bob@corp.example');
+            const refused = await app.deps.uow.run((db) => db.auditEvents.findBy({ action: 'auth.email_recheck_refused' }));
+            expect(refused.map((e) => e.metadata)).toEqual([{ reason: 'email_belongs_to_another_account' }]);
+        });
+
+        it('refuses without a provider session of this very user, and when the provider is unreachable', async () => {
+            const { app, bob, stale } = await invitedBob();
+            const other = context({ authUserId: randomUUID(), email: 'bob@corp.example', emailConfirmed: true });
+            await expect(app.accounts.withVerifiedEmail(other, stale)).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+            const unconfirmed = context({ authUserId: bob.id, email: 'bob@corp.example', emailConfirmed: false });
+            await expect(app.accounts.withVerifiedEmail(unconfirmed, stale)).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+            const down = context({ authUserId: bob.id, email: 'bob@corp.example', emailConfirmed: true });
+            down.gateway!.currentIdentity = async () => {
+                throw new AuthGatewayError('unavailable');
+            };
+            await expect(app.accounts.withVerifiedEmail(down, stale)).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+        });
     });
 });

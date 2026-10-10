@@ -30,6 +30,8 @@ class FakeGateway implements AuthGateway {
     aal: AssuranceLevel | undefined = 'aal1';
     aalAfterVerify: AssuranceLevel = 'aal2';
     failWith?: AuthGatewayError;
+    /** This browser holds the PKCE verifier cookie of its magic-link request. */
+    verifier = true;
 
     async sendMagicLink(email: string, redirectTo: string) {
         this.calls.push('sendMagicLink');
@@ -39,6 +41,9 @@ class FakeGateway implements AuthGateway {
     async exchangeCode(code: string) {
         this.calls.push(`exchangeCode:${code}`);
         if (this.failWith) throw this.failWith;
+    }
+    hasCodeVerifier() {
+        return this.verifier;
     }
     async currentIdentity() {
         if (this.failWith?.reason === 'unavailable') throw this.failWith;
@@ -100,13 +105,14 @@ class FakeSession implements SessionControl {
     }
 }
 
-async function setup() {
+async function setup(env: Record<string, string> = {}) {
     const app = createApp(
         loadConfig({
             TRUSTCARGO_MODE: 'demo',
             SESSION_SECRET: 'test-session-secret-0123456789-abcdefghij',
             MOCK_PROVIDER_WEBHOOK_SECRET: 'test-webhook-secret-0123456789',
-            APP_URL
+            APP_URL,
+            ...env
         } as unknown as NodeJS.ProcessEnv)
     );
     await seedReferenceData(app);
@@ -205,6 +211,28 @@ describe('magic link request', () => {
         }
         expect(gateway.sent).toHaveLength(20);
         expect(results.slice(20)).toEqual(Array(5).fill({ kind: 'error', code: 'RATE_LIMITED' }));
+    });
+
+    it('takes the per-process cap from MAGIC_LINK_HOURLY_CAP', async () => {
+        const { app, gateway } = await setup({ MAGIC_LINK_HOURLY_CAP: '5' });
+        for (let i = 0; i < 8; i += 1) {
+            await app.accounts.requestMagicLink({ gateway, client: { ip: `198.51.100.${i}`, userAgent: 'x' } }, `u${i}@example.test`);
+        }
+        expect(gateway.sent).toHaveLength(5);
+    });
+
+    it('keys the per-IP limit on the IPv6 /64: rotating addresses inside one prefix shares one bucket', async () => {
+        const { app, gateway } = await setup();
+        const results = [];
+        for (let i = 0; i < 15; i += 1) {
+            const ip = `2001:db8:77:1:${(i + 1).toString(16)}::${i + 7}`;
+            results.push(await app.accounts.requestMagicLink({ gateway, client: { ip, userAgent: 'x' } }, `v${i}@example.test`));
+        }
+        expect(results.filter((r) => r.kind === 'ok')).toHaveLength(10);
+        expect(results.slice(10)).toEqual(Array(5).fill({ kind: 'error', code: 'RATE_LIMITED' }));
+        // Another /64 is another client.
+        const other = { ip: '2001:db8:77:2::1', userAgent: 'x' };
+        expect(await app.accounts.requestMagicLink({ gateway, client: other }, 'w@example.test')).toEqual({ kind: 'ok', data: undefined });
     });
 });
 
@@ -306,13 +334,63 @@ describe('e-mail link callback', () => {
         expect(await auditActions(app)).not.toContain('user.email_synced');
     });
 
-    it('caps code exchanges per process, whatever the client IP', async () => {
+    it('caps the code exchanges the provider rejects per process, whatever the client IP', async () => {
         const { app, gateway, ctx } = await setup();
+        const user = await insertUser(app);
         gateway.failWith = new AuthGatewayError('rejected', 'flow_state_not_found');
         for (let i = 0; i < 130; i += 1) {
             await app.accounts.completeSignIn({ ...ctx, client: { ip: `198.51.100.${i % 250}`, userAgent: 'x' } }, { code: `c${i}` });
         }
         expect(gateway.calls.filter((c) => c.startsWith('exchangeCode'))).toHaveLength(120);
+        // Until the window ends, even a valid link waits: the provider's budget for this server is spent.
+        gateway.failWith = undefined;
+        gateway.identity = identity({ authUserId: user.id });
+        expect(await app.accounts.completeSignIn({ ...ctx, client: { ip: '192.0.2.1', userAgent: 'x' } }, { code: 'ok' })).toEqual({
+            kind: 'redirect',
+            to: '/?auth=error'
+        });
+    });
+
+    it('refuses callbacks without this browser’s PKCE verifier before any shared budget is spent (no anonymous lock-out)', async () => {
+        const { app, gateway, session, ctx } = await setup();
+        const user = await insertUser(app);
+        gateway.identity = identity({ authUserId: user.id });
+        gateway.verifier = false;
+        // e.g. <img src="/auth/callback?code=…"> on a busy page: no cookie, so nothing can be exchanged.
+        for (let i = 0; i < 300; i += 1) {
+            const client = { ip: `198.51.${Math.floor(i / 250)}.${i % 250}`, userAgent: 'x' };
+            expect(await app.accounts.completeSignIn({ ...ctx, client }, { code: `garbage-${i}` })).toEqual({
+                kind: 'redirect',
+                to: '/?auth=error'
+            });
+        }
+        expect(gateway.calls).toEqual([]);
+        gateway.verifier = true;
+        expect(await app.accounts.completeSignIn(ctx, { code: 'valid' })).toEqual({ kind: 'redirect', to: '/dashboard' });
+        expect(session.started).toEqual([user.id]);
+    });
+
+    it('spends nothing of the shared budget on successful exchanges or provider outages', async () => {
+        const { app, gateway, ctx } = await setup();
+        const user = await insertUser(app);
+        gateway.identity = identity({ authUserId: user.id });
+        for (let i = 0; i < 130; i += 1) {
+            const client = { ip: `198.51.100.${i % 250}`, userAgent: 'x' };
+            expect(await app.accounts.completeSignIn({ ...ctx, client }, { code: `ok-${i}` })).toEqual({
+                kind: 'redirect',
+                to: '/dashboard'
+            });
+        }
+        gateway.failWith = new AuthGatewayError('unavailable');
+        for (let i = 0; i < 130; i += 1) {
+            await app.accounts.completeSignIn({ ...ctx, client: { ip: `203.0.113.${i % 250}`, userAgent: 'x' } }, { code: `down-${i}` });
+        }
+        gateway.failWith = undefined;
+        expect(await app.accounts.completeSignIn({ ...ctx, client: { ip: '192.0.2.9', userAgent: 'x' } }, { code: 'ok' })).toEqual({
+            kind: 'redirect',
+            to: '/dashboard'
+        });
+        expect(gateway.calls.filter((c) => c.startsWith('exchangeCode'))).toHaveLength(261);
     });
 
     it('sends a verified identity without profile to onboarding', async () => {

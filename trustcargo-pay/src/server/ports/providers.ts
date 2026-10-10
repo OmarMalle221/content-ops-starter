@@ -41,6 +41,11 @@ export interface ScreeningProvider {
 export interface FileStorage {
     put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
     get(key: string): Promise<Uint8Array | undefined>;
+    /**
+     * Removes an object (no-op when it does not exist). Best effort, used only to clean up the object of an upload
+     * whose unit of work failed: an adapter without it leaves such objects unreferenced in the private store.
+     */
+    delete?(key: string): Promise<void>;
 }
 
 export interface FileScanner {

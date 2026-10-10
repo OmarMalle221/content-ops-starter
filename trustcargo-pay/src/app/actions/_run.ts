@@ -1,11 +1,13 @@
 import 'server-only';
 import { revalidatePath } from 'next/cache';
 import type { App } from '@/server/app';
+import type { PlatformRole } from '@/domain/model';
 import type { Actor } from '@/server/auth/actor';
 import { getActor } from '@/server/auth/session';
 import { AppError, isAppError } from '@/server/errors';
 import { getApp } from '@/server/instance';
 import { logger } from '@/server/logger';
+import { requireStaffRole } from '@/server/services/context';
 import type { ActionState } from '@/lib/action-state';
 
 /** Normalises any thrown error into a safe, localisable ActionState. */
@@ -32,14 +34,19 @@ export function toActionError(error: unknown): ActionState {
     return { ok: false, at: Date.now(), error: { code: 'INTERNAL' } };
 }
 
+/**
+ * `staff`: back-office action reserved to these platform roles, with a recent MFA (MFA_REQUIRED otherwise, so the form
+ * offers the challenge). The services check it again where they can; this covers every back-office action alike.
+ */
 export async function runAction<T>(
     fn: (ctx: { app: App; actor: Actor }) => Promise<T>,
-    options: { revalidate?: string[]; rateLimit?: { key: string; limit: number; windowMs: number } } = {}
+    options: { revalidate?: string[]; rateLimit?: { key: string; limit: number; windowMs: number }; staff?: PlatformRole[] } = {}
 ): Promise<ActionState<T>> {
     try {
         const app = await getApp();
         const actor = await getActor();
         if (!actor) throw new AppError('UNAUTHENTICATED', 'Sign in required');
+        if (options.staff) await requireStaffRole(app.deps, actor, options.staff);
         if (options.rateLimit) {
             const r = app.rateLimiter.consume(
                 `${options.rateLimit.key}:${actor.userId}`,

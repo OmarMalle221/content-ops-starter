@@ -471,8 +471,9 @@ create policy notifications_update_own on trustcargo.notifications for update to
 
 -- -----------------------------------------------------------------------------------------------------
 -- Storage: private bucket `trustcargo-documents`, objects named '<transaction_id>/<document_id>/<sha256>'.
--- Server-only access (secret key); no storage.objects policy is created, so nothing outside this bucket
--- row is touched in the storage schema. Guarded so the migration also runs where storage is absent.
+-- Server-only access (secret key). One RESTRICTIVE storage.objects policy keeps anon / authenticated out of
+-- this bucket whatever permissive policies other apps of the project define; nothing else in the storage
+-- schema is touched. Guarded so the migration also runs where storage is absent.
 -- -----------------------------------------------------------------------------------------------------
 
 do $$
@@ -497,9 +498,22 @@ begin
         $sql$;
     end if;
 
-    -- Deliberately NO policy on storage.objects: only the server reads and writes this bucket, with the
-    -- secret key, after its own checks (authorisation, suspended accounts, malware scan, size, access log,
-    -- SHA-256 integrity). With RLS on storage.objects and no policy, `anon` / `authenticated` JWTs (e.g. a
-    -- user's own Supabase session) get no direct access to TrustCargo objects through the Storage API.
+    -- Only the server reads and writes this bucket, with the secret key (service_role bypasses RLS), after its
+    -- own checks (authorisation, suspended accounts, malware scan, size, access log, SHA-256 integrity). The
+    -- project may be shared: another app's PERMISSIVE storage.objects policies (OR-ed together) would also
+    -- apply to this bucket. This RESTRICTIVE policy is AND-ed with all of them, so no `anon` / `authenticated`
+    -- JWT (e.g. a user's own Supabase session) ever reads or writes a trustcargo-documents object, and it is
+    -- true for every other bucket, which stays governed by its own policies alone. The only storage.objects
+    -- policy TrustCargo creates: created when absent, never dropped or altered.
+    if not exists (select 1 from pg_policies
+                   where schemaname = 'storage' and tablename = 'objects'
+                     and policyname = 'trustcargo_documents_server_only') then
+        create policy trustcargo_documents_server_only on storage.objects
+            as restrictive
+            for all
+            to anon, authenticated
+            using (bucket_id is distinct from 'trustcargo-documents')
+            with check (bucket_id is distinct from 'trustcargo-documents');
+    end if;
 end;
 $$;

@@ -1,3 +1,4 @@
+import { parse as parseConnectionString, type ConnectionOptions } from 'pg-connection-string';
 import { z } from 'zod';
 import { logger } from './logger';
 
@@ -45,6 +46,11 @@ const schema = z.object({
 
     // Supabase Auth / Storage. Server-side only: no key is ever sent to the browser.
     AUTH_PROVIDER: unsetIfBlank(z.enum(['demo', 'supabase']).default('demo')),
+    /**
+     * Sign-in e-mails this process may ask Supabase Auth to send per hour, whatever the client: size it below the
+     * (possibly shared) project's e-mail quota, minus what the other apps of that project need.
+     */
+    MAGIC_LINK_HOURLY_CAP: unsetIfBlank(z.coerce.number().int().min(1).max(100_000).default(20)),
     /** `memory` by default without DATABASE_URL; must be given explicitly with DATABASE_URL. */
     STORAGE_PROVIDER: unsetIfBlank(z.enum(['memory', 'supabase']).optional()),
     SUPABASE_URL: optionalString.pipe(z.string().url().optional()),
@@ -86,7 +92,8 @@ export interface ServerConfig {
     clientIpHeader?: string;
     /** Undefined → in-memory persistence. */
     database?: DatabaseConfig;
-    auth: { provider: 'demo' | 'supabase' };
+    /** magicLinkHourlyCap: sign-in e-mails per process and per hour (MAGIC_LINK_HOURLY_CAP). */
+    auth: { provider: 'demo' | 'supabase'; magicLinkHourlyCap: number };
     storage: { provider: 'memory' | 'supabase'; bucket: string };
     /** Present when SUPABASE_URL is set. */
     supabase?: SupabaseConfig;
@@ -95,34 +102,48 @@ export interface ServerConfig {
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 /** URL settings that turn TLS off or skip the certificate check: refused for a remote database. */
 const TLS_DOWNGRADES: Record<string, string[]> = { sslmode: ['disable', 'no-verify'], ssl: ['0', 'false'] };
+/** URL parameters pg turns into TLS settings; it merges them OVER the explicit `ssl` option (e.g. `ssl=0` → no TLS). */
+export const URL_TLS_PARAMS = ['ssl', 'sslmode', 'sslnegotiation', 'sslcert', 'sslkey', 'sslrootcert', 'sslpassword', 'uselibpqcompat'];
 
 /**
- * Hosts node-postgres connects to, resolved like pg-connection-string: the `host` query parameter wins over the
- * URL host (Unix socket directories are given that way), an empty host falls back to PGHOST, then localhost.
- * The URL itself is never echoed in an error: it may contain a password.
+ * DATABASE_URL exactly as node-postgres reads it: pg-connection-string's own parse() (pg calls the same function), so
+ * the host checked by loadConfig is the host pg connects to. The query string is read with URLSearchParams alone
+ * (never a WHATWG URL holding the credentials):
+ * - a repeated parameter is refused: pg keeps the LAST value, which a check reading the first one would miss
+ *   (`?host=localhost&host=db.example.net`);
+ * - `withoutTls` drops the URL's TLS parameters before parsing (pg-connection-string reads sslcert/sslkey/sslrootcert
+ *   files while parsing; with DATABASE_SSL_CA they are ignored anyway).
+ * Errors never echo the URL: it may contain a password.
  */
+export function parseDatabaseUrl(
+    url: string,
+    options: { withoutTls?: boolean } = {}
+): { connection: ConnectionOptions; params: URLSearchParams } {
+    const q = url.indexOf('?');
+    const params = new URLSearchParams(q === -1 ? '' : url.slice(q + 1).split('#')[0]);
+    const keys = [...params.keys()];
+    const repeated = [...new Set(keys.filter((k, i) => keys.indexOf(k) !== i))];
+    if (repeated.length) {
+        const names = repeated.filter((k) => /^[a-z_]{1,32}$/i.test(k)).join(', ');
+        throw new Error(`Invalid configuration: DATABASE_URL repeats a connection parameter${names ? ` (${names})` : ''}`);
+    }
+    let source = url;
+    if (options.withoutTls && q !== -1) {
+        const kept = new URLSearchParams([...params].filter(([k]) => !URL_TLS_PARAMS.includes(k)));
+        source = `${url.slice(0, q)}${kept.size ? `?${kept}` : ''}`;
+    }
+    try {
+        return { connection: parseConnectionString(source), params };
+    } catch {
+        throw new Error('Invalid configuration: DATABASE_URL is not a valid connection string');
+    }
+}
+
+/** Hosts node-postgres connects to: the parsed host (the `host` query parameter wins), then PGHOST, then localhost. */
 function databaseTarget(url: string, env: NodeJS.ProcessEnv): { hosts: string[]; params: URLSearchParams } {
-    let parsed: URL;
-    let hostname = '';
-    try {
-        parsed = new URL(url);
-        hostname = parsed.hostname;
-    } catch {
-        try {
-            // `postgres://user@/db?host=/socket`: credentials without a host, which pg-connection-string accepts.
-            parsed = new URL(url.replace('@/', '@empty-host/'));
-        } catch {
-            throw new Error('Invalid configuration: DATABASE_URL is not a valid URL');
-        }
-    }
-    let urlHost = hostname.replace(/^\[(.+)\]$/, '$1');
-    try {
-        urlHost = decodeURIComponent(urlHost); // `%2Fvar%2Frun%2Fpostgresql`: URL-encoded socket directory
-    } catch {
-        /* malformed escape: kept as is, hence treated as a remote host */
-    }
-    const host = parsed.searchParams.get('host') || urlHost || env.PGHOST || 'localhost';
-    return { hosts: host.split(',').map((h) => h.trim()), params: parsed.searchParams };
+    const { connection, params } = parseDatabaseUrl(url, { withoutTls: true });
+    const host = connection.host || env.PGHOST || 'localhost';
+    return { hosts: host.split(',').map((h) => h.trim()), params };
 }
 
 /** Loopback addresses and Unix socket paths never leave the machine; every other host does. */
@@ -148,6 +169,9 @@ function normalizePem(value: string | undefined): string | undefined {
 function databaseConfig(e: z.infer<typeof schema>, url: string, env: NodeJS.ProcessEnv): DatabaseConfig {
     const sslCa = normalizePem(e.DATABASE_SSL_CA);
     const { hosts, params } = databaseTarget(url, env);
+    if (sslCa && hosts.some((h) => h.startsWith('/'))) {
+        throw new Error('DATABASE_SSL_CA cannot be used with a Unix socket host: TLS never applies to a local socket (unset it)');
+    }
     if (!hosts.every(isLoopback)) {
         if (!sslCa) {
             throw new Error(
@@ -195,10 +219,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
                 'AUTH_PROVIDER=supabase or STORAGE_PROVIDER=supabase: the public demo fallback would let anyone forge sessions'
         );
     }
-    if (e.DATABASE_URL && (!e.MOCK_PROVIDER_WEBHOOK_SECRET || e.MOCK_PROVIDER_WEBHOOK_SECRET === DEMO_WEBHOOK_SECRET)) {
+    if (realBackends && (!e.MOCK_PROVIDER_WEBHOOK_SECRET || e.MOCK_PROVIDER_WEBHOOK_SECRET === DEMO_WEBHOOK_SECRET)) {
         throw new Error(
-            'MOCK_PROVIDER_WEBHOOK_SECRET (>= 16 random characters) is required with DATABASE_URL: ' +
-                'the public demo fallback would let anyone forge signed partner events'
+            'MOCK_PROVIDER_WEBHOOK_SECRET (>= 16 random characters) is required with DATABASE_URL, AUTH_PROVIDER=supabase ' +
+                'or STORAGE_PROVIDER=supabase: the public demo fallback would let anyone forge signed partner events'
         );
     }
     if (e.AUTH_PROVIDER === 'supabase' && (!e.SUPABASE_URL || !e.SUPABASE_PUBLISHABLE_KEY)) {
@@ -235,7 +259,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         personaLogin: e.TRUSTCARGO_MODE === 'demo' && e.AUTH_PROVIDER === 'demo' && e.DEMO_ALLOW_PERSONA_LOGIN === 'true',
         clientIpHeader: e.CLIENT_IP_HEADER,
         database,
-        auth: { provider: e.AUTH_PROVIDER },
+        auth: { provider: e.AUTH_PROVIDER, magicLinkHourlyCap: e.MAGIC_LINK_HOURLY_CAP },
         storage: { provider: storageProvider, bucket: e.SUPABASE_STORAGE_BUCKET },
         supabase: e.SUPABASE_URL
             ? { url: e.SUPABASE_URL.replace(/\/$/, ''), publishableKey: e.SUPABASE_PUBLISHABLE_KEY, secretKey: e.SUPABASE_SECRET_KEY }

@@ -75,7 +75,7 @@ export function createApp(config: ServerConfig) {
         payments,
         transactions,
         identity,
-        accounts: new AccountService(deps, rateLimiter, risk),
+        accounts: new AccountService(deps, rateLimiter, risk, { magicLinkHourlyCap: config.auth.magicLinkHourlyCap }),
         paymentAccounts,
         documents,
         milestones,

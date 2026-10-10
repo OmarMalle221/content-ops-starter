@@ -176,6 +176,21 @@ describe('Supabase Auth gateway (fake Auth server)', () => {
         expect(jar.names().filter((n) => n.startsWith(SUPABASE_AUTH_COOKIE))).toEqual([]);
     });
 
+    it('tells whether this browser holds the PKCE verifier of a magic-link request, from its cookies only', async () => {
+        const jar = new Jar();
+        const server = fakeAuthServer();
+        expect(gatewayFor(jar, server.fetch).hasCodeVerifier()).toBe(false);
+        await gatewayFor(jar, server.fetch).sendMagicLink('amina.diallo@example.test', 'https://app.trustcargo.test/auth/callback');
+        const calls = server.calls.length;
+        expect(gatewayFor(jar, server.fetch).hasCodeVerifier()).toBe(true);
+        expect(server.calls).toHaveLength(calls);
+        await gatewayFor(jar, server.fetch).exchangeCode('good-code');
+        expect(gatewayFor(jar, server.fetch).hasCodeVerifier()).toBe(false);
+        const empty = new Jar();
+        empty.set(`${SUPABASE_AUTH_COOKIE}-code-verifier`, '', { path: '/' });
+        expect(gatewayFor(empty, server.fetch).hasCodeVerifier()).toBe(false);
+    });
+
     it('has no identity without a session cookie, and makes no request for it', async () => {
         const server = fakeAuthServer();
         const gateway = gatewayFor(new Jar(), server.fetch);

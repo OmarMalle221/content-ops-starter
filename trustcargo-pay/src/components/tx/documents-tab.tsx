@@ -3,6 +3,7 @@ import { EmptyState, Mono } from '@/components/app/layout-bits';
 import { ToneBadge, toneFor } from '@/components/app/status';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table';
+import { EVIDENCE_ROLES } from '@/domain/documents';
 import type { Translator } from '@/i18n';
 import type { TransactionView } from '@/lib/dto';
 import { fmtBytes, fmtDate, shortHash } from '@/lib/format';
@@ -11,9 +12,12 @@ import { OpenDocumentButton } from './document-open';
 import { UploadDocumentForm } from './upload-form';
 
 export function DocumentsTab({ view, t, intl }: { view: TransactionView; t: Translator; intl: string }) {
-    const openMilestones = view.milestones.filter(
-        (m) => m.status === 'ACTIVE' || m.status === 'CHANGES_REQUESTED' || m.status === 'PENDING'
-    );
+    // Only the roles that may attach evidence are offered a milestone (the server refuses the others before storing).
+    const role = view.viewer.partyRole;
+    const openMilestones =
+        role && EVIDENCE_ROLES.includes(role)
+            ? view.milestones.filter((m) => m.status === 'ACTIVE' || m.status === 'CHANGES_REQUESTED' || m.status === 'PENDING')
+            : [];
     return (
         <div className="space-y-6">
             {view.can.uploadDocuments && (

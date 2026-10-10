@@ -66,6 +66,9 @@ export const UPLOAD_PERMISSIONS: Record<PartyRole, DocumentType[]> = {
     FREIGHT_FORWARDER: ['BILL_OF_LADING', 'EXPORT_DECLARATION', 'DELIVERY_PROOF', 'PHOTO']
 };
 
+/** Party roles that may attach a document to a milestone as evidence (the buyer reviews milestones, it never feeds them). */
+export const EVIDENCE_ROLES: PartyRole[] = ['SELLER', 'INSPECTOR', 'FREIGHT_FORWARDER'];
+
 /** Default visibility by type (principle of least privilege for third parties). */
 export function defaultVisibility(type: DocumentType, uploaderRole: PartyRole): PartyRole[] {
     const roles = new Set<PartyRole>(['SELLER', 'BUYER', uploaderRole]);

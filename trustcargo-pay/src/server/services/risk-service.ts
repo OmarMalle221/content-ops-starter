@@ -3,9 +3,9 @@ import type { RiskAlert } from '@/domain/model';
 import { riskReviewSchema } from '@/lib/validation/schemas';
 import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
-import { SYSTEM, hasRole } from '@/server/auth/actor';
-import { AppError, forbidden, notFound } from '@/server/errors';
-import { audit, notifyRole, securitySettings, type Deps } from './context';
+import { SYSTEM } from '@/server/auth/actor';
+import { AppError, notFound } from '@/server/errors';
+import { audit, notifyRole, requireStaffRole, securitySettings, type Deps } from './context';
 
 const OPEN_STATUSES: RiskAlert['status'][] = ['OPEN', 'IN_REVIEW'];
 
@@ -124,7 +124,7 @@ export class RiskService {
     }
 
     async review(actor: Actor, alertId: string, rawInput: unknown) {
-        if (!hasRole(actor, 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst']);
         const parsed = riskReviewSchema.safeParse(rawInput);
         if (!parsed.success) throw new AppError('VALIDATION', 'Invalid review', { issues: parsed.error.issues });
         const input = parsed.data;
@@ -160,8 +160,8 @@ export class RiskService {
     }
 
     async listAlerts(actor: Actor, filter: { status?: RiskAlert['status']; transactionId?: string } = {}) {
-        if (!hasRole(actor, 'compliance_analyst', 'auditor')) throw forbidden();
         return this.deps.uow.run(async (db) => {
+            await requireStaffRole(this.deps, actor, ['compliance_analyst', 'auditor'], db);
             const alerts = await db.riskAlerts.findBy({ status: filter.status, transactionId: filter.transactionId });
             return Promise.all(
                 alerts.map(async (a) => ({

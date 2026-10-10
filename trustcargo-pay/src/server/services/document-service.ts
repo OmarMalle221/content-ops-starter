@@ -2,21 +2,23 @@ import {
     ALLOWED_MIME_TYPES,
     compareReferences,
     defaultVisibility,
+    EVIDENCE_ROLES,
     sanitizeFileName,
     sniffMimeType,
     UPLOAD_PERMISSIONS
 } from '@/domain/documents';
 import { parseMoney, toDTO, type CurrencyCode } from '@/domain/money';
-import type { Document, ExtractedReferences } from '@/domain/model';
+import type { Document, ExtractedReferences, MilestoneStatus } from '@/domain/model';
 import { isTerminal } from '@/domain/transaction/state-machine';
 import { documentReviewSchema, uploadDocumentSchema } from '@/lib/validation/schemas';
 import type { Db } from '@/server/ports/db';
 import type { Actor } from '@/server/auth/actor';
 import { hasRole } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
+import { logger } from '@/server/logger';
 import { sha256Hex } from '@/server/security/crypto';
 import { signDocumentUrl, verifyDocumentUrl } from '@/server/security/signed-url';
-import { accessTransaction, audit, notify, securitySettings, type Deps } from './context';
+import { accessTransaction, audit, notify, requireStaffRole, securitySettings, staffMfaIsRecent, type Deps } from './context';
 import type { RiskService } from './risk-service';
 
 export interface UploadedFile {
@@ -27,6 +29,8 @@ export interface UploadedFile {
 
 /** Staff roles allowed to open document contents (auditors only see metadata). */
 const CONTENT_STAFF = ['document_reviewer', 'compliance_analyst', 'dispute_manager'] as const;
+/** Milestones that still accept evidence (same rule as MilestoneService.attachEvidenceInTx). */
+const EVIDENCE_OPEN_STATUSES: MilestoneStatus[] = ['ACTIVE', 'CHANGES_REQUESTED', 'PENDING'];
 
 export class DocumentService {
     /** Set by the container: attaches an uploaded document to a milestone as evidence. */
@@ -70,6 +74,8 @@ export class DocumentService {
             }
         }
 
+        // Every rule that can refuse the upload runs here, BEFORE the object is written: authorisation, the version
+        // being replaced and the milestone it is attached to. A refused request never reaches storage.
         const checkUpload = async (db: Db) => {
             const settings = await securitySettings(db);
             if (file.bytes.byteLength > settings.maxUploadBytes)
@@ -79,84 +85,119 @@ export class DocumentService {
             if (isTerminal(tx.status)) throw new AppError('PRECONDITION_FAILED', 'The transaction is closed');
             if (!UPLOAD_PERMISSIONS[party!.role].includes(input.type))
                 throw forbidden(`A ${party!.role} cannot upload ${input.type} documents`);
-            return { tx, party: party! };
+            const previous = input.replacesDocumentId ? await db.documents.get(input.replacesDocumentId) : undefined;
+            if (input.replacesDocumentId) {
+                if (!previous || previous.transactionId !== tx.id || previous.type !== input.type) throw notFound('Document to replace');
+                if (previous.ownerUserId !== actor.userId) throw forbidden('Only the original uploader can publish a new version');
+            }
+            // A quarantined file is never attached as evidence (see below), so only a clean upload is held to the milestone.
+            if (input.milestoneId && scan !== 'INFECTED') {
+                if (!EVIDENCE_ROLES.includes(party!.role))
+                    throw new AppError('FORBIDDEN', `This action requires one of the roles: ${EVIDENCE_ROLES.join(', ')}`);
+                const milestone = await db.milestones.get(input.milestoneId);
+                if (!milestone || milestone.transactionId !== tx.id || milestone.contractVersionId !== tx.currentContractVersionId)
+                    throw notFound('Milestone');
+                if (!EVIDENCE_OPEN_STATUSES.includes(milestone.status))
+                    throw new AppError('PRECONDITION_FAILED', 'Evidence can only be added to an open milestone');
+            }
+            return { tx, party: party!, previous };
         };
 
-        // The object is written to storage BEFORE the unit of work, after the same authorisation checks:
-        // no database lock is held during the network upload, and a retried unit of work never uploads
-        // twice. Its key is unique to this upload (document id + content hash), so a unit of work that
-        // fails afterwards only leaves an unreferenced private object.
+        // The object is written to storage BEFORE the main unit of work, after the same checks: no database lock is
+        // held during the network upload, and a retried unit of work never uploads twice. Its key is unique to this
+        // upload (document id + content hash). If the main unit of work still fails (state changed meanwhile, database
+        // error), the object is removed again, best effort. Exception: the first-boot demo seed calls this inside its
+        // single long unit of work, which holds the global lock by design (src/server/instance.ts): its uploads run
+        // under that lock, and a seed rolled back after them leaves their objects behind.
         const id = this.deps.ids.id();
         const sha256 = sha256Hex(file.bytes);
         const { tx: checked } = await this.deps.uow.run(checkUpload);
         const storageKey = `${checked.id}/${id}/${sha256}`;
-        if (scan !== 'INFECTED') await this.deps.storage.put(storageKey, file.bytes, sniffed);
+        const stored = scan !== 'INFECTED';
+        if (stored) await this.deps.storage.put(storageKey, file.bytes, sniffed);
 
-        return this.deps.uow.run(async (db) => {
-            const { tx, party } = await checkUpload(db);
-            if (tx.id !== checked.id) throw notFound('Transaction');
+        try {
+            return await this.deps.uow.run(async (db) => {
+                // Checked again under the unit of work: the transaction, the version or the milestone may have changed.
+                const { tx, party, previous } = await checkUpload(db);
+                if (tx.id !== checked.id) throw notFound('Transaction');
 
-            let logicalId = this.deps.ids.id();
-            let version = 1;
-            if (input.replacesDocumentId) {
-                const previous = await db.documents.get(input.replacesDocumentId);
-                if (!previous || previous.transactionId !== tx.id || previous.type !== input.type) throw notFound('Document to replace');
-                if (previous.ownerUserId !== actor.userId) throw forbidden('Only the original uploader can publish a new version');
-                const versions = await db.documents.findBy({ logicalId: previous.logicalId });
-                logicalId = previous.logicalId;
-                version = Math.max(...versions.map((v) => v.version)) + 1;
-                for (const v of versions) if (v.status !== 'SUPERSEDED') await db.documents.update(v.id, { status: 'SUPERSEDED' });
-            }
-            const now = this.deps.clock.now().toISOString();
-            const doc: Document = {
-                id,
-                logicalId,
-                version,
-                transactionId: tx.id,
-                ownerUserId: actor.userId,
-                type: input.type,
-                title: input.title,
-                fileName: sanitizeFileName(file.fileName),
-                mimeType: sniffed,
-                sizeBytes: file.bytes.byteLength,
-                sha256,
-                storageKey,
-                status: scan === 'CLEAN' ? 'PENDING_REVIEW' : scan === 'INFECTED' ? 'QUARANTINED' : 'SCAN_PENDING',
-                visibleToRoles: defaultVisibility(input.type, party.role),
-                extracted,
-                extractionSource: Object.keys(extracted).length ? 'DECLARED' : 'NONE',
-                scan: { status: scan, engine: this.deps.scanner.engine, scannedAt: now },
-                uploadedAt: now
-            };
-            await db.documents.insert(doc);
-            await audit(
-                this.deps,
-                db,
-                actor,
-                scan === 'INFECTED' ? 'document.quarantined' : 'document.uploaded',
-                { type: 'document', id },
-                {
+                let logicalId = this.deps.ids.id();
+                let version = 1;
+                if (previous) {
+                    const versions = await db.documents.findBy({ logicalId: previous.logicalId });
+                    logicalId = previous.logicalId;
+                    version = Math.max(...versions.map((v) => v.version)) + 1;
+                    for (const v of versions) if (v.status !== 'SUPERSEDED') await db.documents.update(v.id, { status: 'SUPERSEDED' });
+                }
+                const now = this.deps.clock.now().toISOString();
+                const doc: Document = {
+                    id,
+                    logicalId,
+                    version,
                     transactionId: tx.id,
-                    metadata: { type: doc.type, version, sha256, sizeBytes: doc.sizeBytes, scan }
+                    ownerUserId: actor.userId,
+                    type: input.type,
+                    title: input.title,
+                    fileName: sanitizeFileName(file.fileName),
+                    mimeType: sniffed,
+                    sizeBytes: file.bytes.byteLength,
+                    sha256,
+                    storageKey,
+                    status: scan === 'CLEAN' ? 'PENDING_REVIEW' : scan === 'INFECTED' ? 'QUARANTINED' : 'SCAN_PENDING',
+                    visibleToRoles: defaultVisibility(input.type, party.role),
+                    extracted,
+                    extractionSource: Object.keys(extracted).length ? 'DECLARED' : 'NONE',
+                    scan: { status: scan, engine: this.deps.scanner.engine, scannedAt: now },
+                    uploadedAt: now
+                };
+                await db.documents.insert(doc);
+                await audit(
+                    this.deps,
+                    db,
+                    actor,
+                    scan === 'INFECTED' ? 'document.quarantined' : 'document.uploaded',
+                    { type: 'document', id },
+                    {
+                        transactionId: tx.id,
+                        metadata: { type: doc.type, version, sha256, sizeBytes: doc.sizeBytes, scan }
+                    }
+                );
+                if (scan === 'INFECTED') return doc;
+                if (input.milestoneId) await this.attachEvidence?.(db, actor, tx.id, input.milestoneId, id);
+                for (const p of await db.transactionParties.findBy({ transactionId: tx.id })) {
+                    if (p.userId && p.userId !== actor.userId && doc.visibleToRoles.includes(p.role)) {
+                        await notify(this.deps, db, p.userId, 'document.uploaded', { reference: tx.reference, type: doc.type }, tx.id);
+                    }
                 }
-            );
-            if (scan === 'INFECTED') return doc;
-            if (input.milestoneId) await this.attachEvidence?.(db, actor, tx.id, input.milestoneId, id);
-            for (const p of await db.transactionParties.findBy({ transactionId: tx.id })) {
-                if (p.userId && p.userId !== actor.userId && doc.visibleToRoles.includes(p.role)) {
-                    await notify(this.deps, db, p.userId, 'document.uploaded', { reference: tx.reference, type: doc.type }, tx.id);
-                }
-            }
-            await this.risk.evaluateInTx(db, tx.id);
-            return doc;
-        });
+                await this.risk.evaluateInTx(db, tx.id);
+                return doc;
+            });
+        } catch (error) {
+            if (stored) await this.discardObject(id, storageKey);
+            throw error;
+        }
     }
 
-    /** Authorisation for document content. Never relies on the URL alone. */
+    /**
+     * Best-effort removal of the object of an upload whose unit of work failed. Never masks the original error: a
+     * failure is only logged (the object then stays, unreferenced, in the private bucket). A document row that exists
+     * anyway (a commit whose acknowledgement was lost) keeps its object.
+     */
+    private async discardObject(documentId: string, storageKey: string) {
+        try {
+            if (!this.deps.storage.delete || (await this.deps.uow.run((db) => db.documents.get(documentId)))) return;
+            await this.deps.storage.delete(storageKey);
+        } catch (error) {
+            logger.warn('document.orphan_object_kept', { documentId, error: error instanceof Error ? error.name : 'unknown' });
+        }
+    }
+
+    /** Authorisation for document content. Never relies on the URL alone. Staff access needs a recent MFA. */
     async canView(db: Db, actor: Actor, doc: Document): Promise<boolean> {
         if (doc.ownerUserId === actor.userId) return true;
-        if (doc.type === 'IDENTITY') return hasRole(actor, 'compliance_analyst');
-        if (hasRole(actor, ...CONTENT_STAFF)) return true;
+        if (doc.type === 'IDENTITY') return hasRole(actor, 'compliance_analyst') && (await this.staffMfa(db, actor));
+        if (hasRole(actor, ...CONTENT_STAFF) && (await this.staffMfa(db, actor))) return true;
         if (!doc.transactionId) return false;
         const party = (await db.transactionParties.findBy({ transactionId: doc.transactionId })).find(
             (p) => p.userId === actor.userId && p.status === 'JOINED'
@@ -164,12 +205,18 @@ export class DocumentService {
         return Boolean(party && doc.visibleToRoles.includes(party.role));
     }
 
+    private staffMfa(db: Db, actor: Actor): Promise<boolean> {
+        return staffMfaIsRecent(db, actor, this.deps.clock.now());
+    }
+
     async listForTransaction(actor: Actor, transactionId: string) {
         return this.deps.uow.run(async (db) => {
-            await accessTransaction(db, actor, transactionId);
+            await accessTransaction(db, actor, transactionId, { now: this.deps.clock.now() });
+            // Auditors see every document's metadata (never its content), with a recent MFA like any staff access.
+            const auditor = hasRole(actor, 'auditor') && (await this.staffMfa(db, actor));
             const docs = await db.documents.findBy({ transactionId });
             const visible: Document[] = [];
-            for (const d of docs) if ((await this.canView(db, actor, d)) || hasRole(actor, 'auditor')) visible.push(d);
+            for (const d of docs) if (auditor || (await this.canView(db, actor, d))) visible.push(d);
             return visible.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
         });
     }
@@ -256,7 +303,7 @@ export class DocumentService {
     }
 
     async review(actor: Actor, documentId: string, rawInput: unknown) {
-        if (!hasRole(actor, 'document_reviewer')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['document_reviewer']);
         const parsed = documentReviewSchema.safeParse(rawInput);
         if (!parsed.success) throw new AppError('VALIDATION', 'Invalid review', { issues: parsed.error.issues });
         return this.deps.uow.run(async (db) => {
@@ -299,7 +346,7 @@ export class DocumentService {
 
     async comparison(actor: Actor, transactionId: string) {
         return this.deps.uow.run(async (db) => {
-            const { tx } = await accessTransaction(db, actor, transactionId);
+            const { tx } = await accessTransaction(db, actor, transactionId, { now: this.deps.clock.now() });
             const vehicle = await db.vehicles.findOne({ transactionId });
             const parties = await db.transactionParties.findBy({ transactionId });
             const names = async (role: 'SELLER' | 'BUYER') => {
@@ -337,7 +384,9 @@ export class DocumentService {
     }
 
     async accessLog(actor: Actor, documentId: string) {
-        if (!hasRole(actor, 'compliance_analyst', 'auditor', 'document_reviewer')) throw forbidden();
-        return this.deps.uow.run(async (db) => db.documentAccessLogs.findBy({ documentId }));
+        return this.deps.uow.run(async (db) => {
+            await requireStaffRole(this.deps, actor, ['compliance_analyst', 'auditor', 'document_reviewer'], db);
+            return db.documentAccessLogs.findBy({ documentId });
+        });
     }
 }
