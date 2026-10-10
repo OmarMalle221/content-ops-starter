@@ -3,13 +3,14 @@ import { parseMoney, type CurrencyCode } from '@/domain/money';
 import type { AuditEvent, Reconciliation, ReconciliationItem } from '@/domain/model';
 import { complianceHoldSchema, corridorUpdateSchema } from '@/lib/validation/schemas';
 import type { Actor } from '@/server/auth/actor';
-import { hasRole, mfaIsRecent } from '@/server/auth/actor';
+import { mfaIsRecent } from '@/server/auth/actor';
 import { AppError, forbidden, notFound } from '@/server/errors';
 import { sha256Hex } from '@/server/security/crypto';
-import { AUDIT_GENESIS_HASH, audit, notify, securitySettings, type Deps } from './context';
+import { AUDIT_GENESIS_HASH, audit, notify, requireStaffRole, securitySettings, type Deps } from './context';
 import type { LedgerService } from './ledger-service';
 import type { PaymentService } from './payment-service';
 
+/** Sensitive actions, on top of requireStaffRole: an MFA within the (shorter) sensitiveActionMfaMaxAgeMinutes. */
 async function requireMfa(deps: Deps, actor: Actor) {
     const settings = await deps.uow.run((db) => securitySettings(db));
     if (!mfaIsRecent(actor, settings.sensitiveActionMfaMaxAgeMinutes, deps.clock.now()))
@@ -24,7 +25,7 @@ export class ComplianceService {
     ) {}
 
     async placeHold(actor: Actor, transactionId: string, rawInput: unknown) {
-        if (!hasRole(actor, 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst']);
         await requireMfa(this.deps, actor);
         const parsed = complianceHoldSchema.safeParse(rawInput);
         if (!parsed.success) throw new AppError('VALIDATION', 'Invalid hold', { issues: parsed.error.issues });
@@ -53,7 +54,7 @@ export class ComplianceService {
     }
 
     async liftHold(actor: Actor, holdId: string, notes: string) {
-        if (!hasRole(actor, 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst']);
         await requireMfa(this.deps, actor);
         if (notes.trim().length < 5) throw new AppError('VALIDATION', 'A justification is required');
         const hold = await this.deps.uow.run(async (db) => {
@@ -81,7 +82,7 @@ export class ComplianceService {
     }
 
     async list(actor: Actor) {
-        if (!hasRole(actor, 'compliance_analyst', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst', 'auditor']);
         return this.deps.uow.run((db) => db.complianceHolds.list());
     }
 }
@@ -94,7 +95,7 @@ export class ReconciliationService {
 
     /** Compares the partner statement with ledger settlement journals (by external reference). */
     async run(actor: Actor): Promise<Reconciliation> {
-        if (!hasRole(actor, 'finance_operator')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['finance_operator']);
         const statement = await this.deps.payments.reconcileTransactions({
             from: '1970-01-01T00:00:00Z',
             to: this.deps.clock.now().toISOString()
@@ -161,7 +162,7 @@ export class ReconciliationService {
     }
 
     async list(actor: Actor) {
-        if (!hasRole(actor, 'finance_operator', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['finance_operator', 'auditor']);
         return this.deps.uow.run(async (db) => (await db.reconciliations.list()).sort((a, b) => b.runAt.localeCompare(a.runAt)));
     }
 }
@@ -173,8 +174,14 @@ export class AdminService {
     ) {}
 
     async overview(actor: Actor) {
-        if (!hasRole(actor, 'compliance_analyst', 'dispute_manager', 'finance_operator', 'auditor', 'document_reviewer', 'platform_admin'))
-            throw forbidden();
+        await requireStaffRole(this.deps, actor, [
+            'compliance_analyst',
+            'dispute_manager',
+            'finance_operator',
+            'auditor',
+            'document_reviewer',
+            'platform_admin'
+        ]);
         return this.deps.uow.run(async (db) => {
             const txs = await db.transactions.list();
             const byStatus: Record<string, number> = {};
@@ -196,12 +203,18 @@ export class AdminService {
     }
 
     async listTransactions(actor: Actor) {
-        if (!hasRole(actor, 'compliance_analyst', 'dispute_manager', 'finance_operator', 'auditor', 'document_reviewer')) throw forbidden();
+        await requireStaffRole(this.deps, actor, [
+            'compliance_analyst',
+            'dispute_manager',
+            'finance_operator',
+            'auditor',
+            'document_reviewer'
+        ]);
         return this.deps.uow.run(async (db) => (await db.transactions.list()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
     }
 
     async listDocumentsToReview(actor: Actor) {
-        if (!hasRole(actor, 'document_reviewer', 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['document_reviewer', 'compliance_analyst']);
         return this.deps.uow.run(async (db) =>
             Promise.all(
                 (await db.documents.list())
@@ -216,7 +229,7 @@ export class AdminService {
     }
 
     async listOrganizations(actor: Actor) {
-        if (!hasRole(actor, 'compliance_analyst', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst', 'auditor']);
         return this.deps.uow.run(async (db) =>
             Promise.all(
                 (await db.organizations.list()).map(async (o) => ({
@@ -228,22 +241,22 @@ export class AdminService {
     }
 
     async listUsers(actor: Actor) {
-        if (!hasRole(actor, 'compliance_analyst', 'auditor', 'platform_admin')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['compliance_analyst', 'auditor', 'platform_admin']);
         return this.deps.uow.run(async (db) => (await db.users.list()).map(({ mfaTotpSecret: _secret, ...u }) => u));
     }
 
     async providerEvents(actor: Actor) {
-        if (!hasRole(actor, 'finance_operator', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['finance_operator', 'auditor']);
         return this.deps.uow.run(async (db) => (await db.providerEvents.list()).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)));
     }
 
     async providerConnections(actor: Actor) {
-        if (!hasRole(actor, 'finance_operator', 'platform_admin', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['finance_operator', 'platform_admin', 'auditor']);
         return this.deps.uow.run((db) => db.providerConnections.list());
     }
 
     async ledgerView(actor: Actor) {
-        if (!hasRole(actor, 'finance_operator', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['finance_operator', 'auditor']);
         return this.deps.uow.run(async (db) => {
             const accounts = await db.ledgerAccounts.list();
             const balances = await Promise.all(
@@ -256,7 +269,7 @@ export class AdminService {
     }
 
     async auditLog(actor: Actor, filter: { transactionId?: string } = {}) {
-        if (!hasRole(actor, 'auditor', 'compliance_analyst')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['auditor', 'compliance_analyst']);
         return this.deps.uow.run(async (db) => {
             const events = (await db.auditEvents.findBy({ transactionId: filter.transactionId })).sort((a, b) => b.sequence - a.sequence);
             return { events, chain: await this.verifyChainInTx(await db.auditEvents.list()) };
@@ -282,7 +295,7 @@ export class AdminService {
     }
 
     async updateCorridor(actor: Actor, corridorId: string, rawInput: unknown) {
-        if (!hasRole(actor, 'platform_admin')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['platform_admin']);
         await requireMfa(this.deps, actor);
         const parsed = corridorUpdateSchema.safeParse(rawInput);
         if (!parsed.success) throw new AppError('VALIDATION', 'Invalid corridor settings', { issues: parsed.error.issues });
@@ -309,12 +322,12 @@ export class AdminService {
     }
 
     async securitySettings(actor: Actor) {
-        if (!hasRole(actor, 'platform_admin', 'auditor')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['platform_admin', 'auditor']);
         return this.deps.uow.run((db) => securitySettings(db));
     }
 
     async updateSecuritySettings(actor: Actor, patch: { payoutAccountCoolingOffHours?: number; sensitiveActionMfaMaxAgeMinutes?: number }) {
-        if (!hasRole(actor, 'platform_admin')) throw forbidden();
+        await requireStaffRole(this.deps, actor, ['platform_admin']);
         await requireMfa(this.deps, actor);
         const cooling = patch.payoutAccountCoolingOffHours;
         const mfa = patch.sensitiveActionMfaMaxAgeMinutes;

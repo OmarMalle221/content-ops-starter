@@ -11,6 +11,8 @@ import { z } from 'zod';
 import type { User } from '@/domain/model';
 import type { Actor } from '@/server/auth/actor';
 import { SYSTEM } from '@/server/auth/actor';
+import { AppError } from '@/server/errors';
+import { ipBucket } from '@/server/http/client-ip';
 import { logger } from '@/server/logger';
 import { isAuthGatewayError, type AuthGateway, type TotpFactor } from '@/server/ports/auth-gateway';
 import type { Db } from '@/server/ports/db';
@@ -57,14 +59,16 @@ export const AUTH_CALLBACK_PATH = '/auth/callback';
 export const SIGN_IN_ERROR_PATH = '/?auth=error';
 export const SIGN_IN_EXPIRED_PATH = '/?auth=expired';
 
+/** Per-IP limits are keyed on the client's IPv4 address or IPv6 /64 (ipBucket). */
 const LIMITS = {
     magicLinkPerIp: { limit: 10, windowMs: 15 * 60_000 },
     magicLinkPerEmail: { limit: 3, windowMs: 15 * 60_000 },
     callbackPerIp: { limit: 20, windowMs: 5 * 60_000 },
     // Per process, whatever the client IP: every Supabase Auth call comes from the server's IP and spends the
-    // (possibly shared) project's e-mail quota and per-IP verification budget.
+    // (possibly shared) project's e-mail quota and per-IP verification budget. The magic-link cap is configurable
+    // (MAGIC_LINK_HOURLY_CAP, default 20); the callback budget counts only code exchanges the provider rejected.
     magicLinkGlobal: { limit: 20, windowMs: 60 * 60_000 },
-    callbackGlobal: { limit: 120, windowMs: 60 * 60_000 },
+    callbackGlobalFailures: { limit: 120, windowMs: 60 * 60_000 },
     onboardingPerIp: { limit: 10, windowMs: 60 * 60_000 },
     // Same budget as the demo TOTP challenge: 5 attempts per 5 minutes and per user.
     mfa: { limit: 5, windowMs: 5 * 60_000 },
@@ -122,11 +126,18 @@ function pickFactor(factors: TotpFactor[]): TotpFactor | undefined {
 }
 
 export class AccountService {
+    private readonly magicLinkGlobal: { limit: number; windowMs: number };
+    /** End of the window in which the failed-exchange budget is spent: code exchanges wait until then. */
+    private exchangesBlockedUntil = 0;
+
     constructor(
         private readonly deps: Deps,
         private readonly rateLimiter: RateLimiter,
-        private readonly risk: RiskService
-    ) {}
+        private readonly risk: RiskService,
+        options: { magicLinkHourlyCap?: number } = {}
+    ) {
+        this.magicLinkGlobal = { ...LIMITS.magicLinkGlobal, limit: options.magicLinkHourlyCap ?? LIMITS.magicLinkGlobal.limit };
+    }
 
     /**
      * Sends a sign-in link. The answer is the same whether or not the address has an account, whether the
@@ -135,14 +146,14 @@ export class AccountService {
     async requestMagicLink(ctx: { gateway: AuthGateway; client: ClientInfo }, rawEmail: unknown): Promise<FlowResult> {
         const parsed = emailSchema.safeParse(rawEmail);
         if (!parsed.success) return { kind: 'error', code: 'VALIDATION', fields: ['email'] };
-        if (!this.allowed(`magic-link:ip:${this.hash(ctx.client.ip)}`, LIMITS.magicLinkPerIp))
+        if (!this.allowed(`magic-link:ip:${this.ipKey(ctx.client.ip)}`, LIMITS.magicLinkPerIp))
             return { kind: 'error', code: 'RATE_LIMITED' };
         const emailHash = this.emailHash(parsed.data);
         if (!this.allowed(`magic-link:email:${emailHash}`, LIMITS.magicLinkPerEmail)) {
             logger.info('auth.magic_link_throttled', { emailHash });
             return OK;
         }
-        if (!this.allowed('magic-link:global', LIMITS.magicLinkGlobal)) {
+        if (!this.allowed('magic-link:global', this.magicLinkGlobal)) {
             logger.warn('auth.magic_link_global_cap');
             return { kind: 'error', code: 'RATE_LIMITED' };
         }
@@ -159,10 +170,14 @@ export class AccountService {
      * E-mail link callback (PKCE `code` only). Always ends with a redirect; every refusal goes to the same generic error
      * page. A request that brings no valid code (none, malformed, throttled, rejected by the provider) changes nothing:
      * no session of this browser is ended, so a cross-site GET cannot sign anybody out.
+     *
+     * Shared budget: a request without this browser's PKCE verifier cookie cannot succeed and is refused before any
+     * global count; the per-process budget is spent only by code exchanges the provider answered with a refusal, so
+     * cookie-less requests (e.g. cross-site <img> tags) can never lock everybody out of sign-in.
      */
     async completeSignIn(ctx: AuthContext, params: { code?: string | null; next?: string | null }): Promise<FlowResult> {
         const { gateway, session, client } = ctx;
-        const ipHash = this.hash(client.ip);
+        const ipHash = this.ipKey(client.ip);
         // Set once the code exchange opened a provider session: only that session is dropped by a refusal.
         let linkConsumed = false;
         const refuse = async (reason: string, authUserId?: string): Promise<FlowResult> => {
@@ -179,10 +194,21 @@ export class AccountService {
         if (!gateway) return refuse('provider_disabled');
         if (!this.allowed(`auth-callback:${ipHash}`, LIMITS.callbackPerIp)) return refuse('rate_limited');
         if (!params.code || params.code.length > MAX_LINK_PARAM_LENGTH) return refuse('invalid_request');
-        if (!this.allowed('auth-callback:global', LIMITS.callbackGlobal)) return refuse('rate_limited_global');
+        if (!gateway.hasCodeVerifier()) return refuse('no_code_verifier');
+        if (Date.now() < this.exchangesBlockedUntil) return refuse('rate_limited_global');
         try {
             await gateway.exchangeCode(params.code);
         } catch (error) {
+            // Only a refusal by the provider spends the shared budget (an outage reached nothing to protect).
+            if (isAuthGatewayError(error) && error.reason !== 'unavailable') {
+                const spent = this.rateLimiter.consume(
+                    'auth-callback:global-failures',
+                    LIMITS.callbackGlobalFailures.limit,
+                    LIMITS.callbackGlobalFailures.windowMs
+                );
+                // The budget is spent at its last unit: no further exchange until the window ends.
+                if (spent.remaining === 0) this.exchangesBlockedUntil = spent.resetAt;
+            }
             // A failed exchange stores no session: the browser's existing one, if any, is untouched.
             return refuse(`link_rejected:${reasonOf(error)}`);
         }
@@ -238,12 +264,52 @@ export class AccountService {
         return { user: updated };
     }
 
+    /**
+     * In-app invitations are matched on the profile e-mail (TransactionService). With a provider, the verified address
+     * is re-read from the provider's server right before an invitation is listed, accepted or declined, and the profile
+     * follows it with the sign-in rules (matchProfile: refused when another profile holds the address). Returns the
+     * actor with the verified address. Without a provider (persona demo) the actor is returned unchanged.
+     */
+    async withVerifiedEmail(ctx: Pick<AuthContext, 'gateway'>, actor: Actor): Promise<Actor> {
+        const gateway = ctx.gateway;
+        if (!gateway) return actor;
+        let identity;
+        try {
+            identity = await gateway.currentIdentity();
+        } catch (error) {
+            logger.warn('auth.email_recheck_failed', { reason: reasonOf(error) });
+            throw new AppError('UNAVAILABLE', 'The e-mail address could not be verified. Please retry later.', { retryable: true });
+        }
+        // No provider session of this very user: nobody vouches for the address any more, the user signs in again.
+        if (!identity || !identity.emailConfirmed || identity.authUserId !== actor.userId) {
+            throw new AppError('UNAUTHENTICATED', 'Sign in again to use invitations');
+        }
+        const email = identity.email.toLowerCase();
+        if (email === actor.email.toLowerCase()) return actor;
+        let outcome: { user?: User; refused?: string };
+        try {
+            outcome = await this.deps.uow.run((db) => this.matchProfile(db, actor.userId, email));
+        } catch (error) {
+            if (!(error instanceof Error && error.name === 'UniqueViolationError')) throw error;
+            outcome = { refused: 'email_belongs_to_another_account' };
+        }
+        if (!outcome.user) {
+            const metadata = { reason: outcome.refused ?? 'no_profile' };
+            logger.warn('auth.email_recheck_refused', metadata);
+            await this.deps.uow.run((db) =>
+                audit(this.deps, db, actor, 'auth.email_recheck_refused', { type: 'user', id: actor.userId }, { metadata })
+            );
+            throw new AppError('FORBIDDEN', 'The verified e-mail address of this account belongs to another profile');
+        }
+        return { ...actor, email: outcome.user.email };
+    }
+
     /** Creates the TrustCargo profile of a verified identity that has none yet, then opens the session. */
     async completeOnboarding(ctx: AuthContext, input: Record<string, unknown>): Promise<FlowResult> {
         const { gateway, session, client } = ctx;
         const pending = await session.pendingOnboarding();
         if (!gateway || !pending) return { kind: 'redirect', to: SIGN_IN_EXPIRED_PATH };
-        if (!this.allowed(`onboarding:${this.hash(client.ip)}`, LIMITS.onboardingPerIp)) return { kind: 'error', code: 'RATE_LIMITED' };
+        if (!this.allowed(`onboarding:${this.ipKey(client.ip)}`, LIMITS.onboardingPerIp)) return { kind: 'error', code: 'RATE_LIMITED' };
         let identity;
         try {
             identity = await gateway.currentIdentity();
@@ -433,6 +499,11 @@ export class AccountService {
 
     private hash(value: string): string {
         return pseudonymize(this.deps.config.sessionSecret, value);
+    }
+
+    /** Pseudonymised rate-limit key of a client: IPv4 address or IPv6 /64. */
+    private ipKey(ip: string): string {
+        return this.hash(ipBucket(ip));
     }
 
     private emailHash(email: string): string {

@@ -8,13 +8,14 @@ import { PersonaPicker } from '@/components/app/persona-picker';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getI18n } from '@/i18n/server';
+import { heldPlatformRoles } from '@/server/auth/actor';
 import { getActor } from '@/server/auth/session';
 import { loadConfig } from '@/server/config';
 import { PERSONAS } from '@/server/demo/personas';
 
 export default async function Home({ searchParams }: { searchParams: Promise<{ auth?: string }> }) {
     const actor = await getActor();
-    if (actor) redirect(actor.platformRoles.length ? '/admin' : '/dashboard');
+    if (actor) redirect(heldPlatformRoles(actor).length ? '/admin' : '/dashboard');
     const { t, locale, dict } = await getI18n();
     const config = loadConfig();
     const { auth } = await searchParams;

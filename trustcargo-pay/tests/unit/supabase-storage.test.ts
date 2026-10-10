@@ -80,6 +80,23 @@ describe('Supabase Storage adapter (fake fetch)', () => {
         expect(await legacy.storage.get(KEY)).toBeUndefined();
     });
 
+    it('deletes one object of the private bucket (cleanup of a failed upload), with sanitized errors', async () => {
+        const { storage, calls } = storageWith(() => json(200, [{ name: KEY }]));
+        await storage.delete(KEY);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.method).toBe('DELETE');
+        expect(calls[0]!.url.pathname).toBe(`/storage/v1/object/${BUCKET}`);
+        expect(JSON.parse(String(calls[0]!.body))).toEqual({ prefixes: [KEY] });
+        expect(calls[0]!.headers.get('apikey')).toBe(SECRET);
+
+        const leaky = { statusCode: '500', error: 'internal', message: `db password=hunter2 for ${KEY} with Bearer ${SECRET}` };
+        const error = await failure(storageWith(() => json(500, leaky)).storage.delete(KEY));
+        expect([error.operation, error.reason]).toEqual(['delete', 'unavailable']);
+        expectSanitized(error);
+        expect((await failure(storage.delete('../etc/passwd'))).reason).toBe('invalid_key');
+        expect(calls).toHaveLength(1);
+    });
+
     it('does not mistake a missing bucket for a missing object', async () => {
         const { storage } = storageWith(() => json(400, { statusCode: '404', error: 'Bucket not found', message: 'Bucket not found' }));
         expect((await failure(storage.get(KEY))).reason).toBe('misconfigured');
@@ -156,6 +173,7 @@ describe('Supabase Storage adapter (fake fetch)', () => {
         const config = loadConfig({
             TRUSTCARGO_MODE: 'demo',
             SESSION_SECRET: 'test-session-secret-0123456789-abcdefghij',
+            MOCK_PROVIDER_WEBHOOK_SECRET: 'test-webhook-secret-0123456789',
             STORAGE_PROVIDER: 'supabase',
             SUPABASE_URL,
             SUPABASE_SECRET_KEY: SECRET

@@ -15,7 +15,8 @@ export async function reviewKycAction(_: ActionState, form: FormData) {
                 )
             ).status,
         {
-            revalidate: ['/admin/verifications']
+            revalidate: ['/admin/verifications'],
+            staff: ['compliance_analyst']
         }
     );
 }
@@ -26,7 +27,8 @@ export async function reviewDocumentAction(_: ActionState, form: FormData) {
             (await app.documents.review(actor, str(form, 'documentId'), { decision: str(form, 'decision'), notes: str(form, 'notes') }))
                 .status,
         {
-            revalidate: ['/admin/documents']
+            revalidate: ['/admin/documents'],
+            staff: ['document_reviewer']
         }
     );
 }
@@ -36,7 +38,8 @@ export async function reviewRiskAction(_: ActionState, form: FormData) {
         async ({ app, actor }) =>
             (await app.risk.review(actor, str(form, 'alertId'), { decision: str(form, 'decision'), notes: str(form, 'notes') })).status,
         {
-            revalidate: ['/admin/risk', `/admin/transactions/${str(form, 'transactionId')}`]
+            revalidate: ['/admin/risk', `/admin/transactions/${str(form, 'transactionId')}`],
+            staff: ['compliance_analyst']
         }
     );
 }
@@ -53,20 +56,23 @@ export async function placeHoldAction(_: ActionState, form: FormData) {
                 })
             ).id,
         {
-            revalidate: [`/admin/transactions/${id}`, '/admin/risk']
+            revalidate: [`/admin/transactions/${id}`, '/admin/risk'],
+            staff: ['compliance_analyst']
         }
     );
 }
 
 export async function liftHoldAction(_: ActionState, form: FormData) {
     return runAction(async ({ app, actor }) => (await app.compliance.liftHold(actor, str(form, 'holdId'), str(form, 'notes'))).status, {
-        revalidate: [`/admin/transactions/${str(form, 'transactionId')}`, '/admin/risk']
+        revalidate: [`/admin/transactions/${str(form, 'transactionId')}`, '/admin/risk'],
+        staff: ['compliance_analyst']
     });
 }
 
 export async function assignDisputeAction(_: ActionState, form: FormData) {
     return runAction(async ({ app, actor }) => (await app.disputes.assign(actor, str(form, 'disputeId'))).status, {
-        revalidate: ['/admin/disputes']
+        revalidate: ['/admin/disputes'],
+        staff: ['dispute_manager']
     });
 }
 
@@ -81,7 +87,7 @@ export async function decideDisputeAction(_: ActionState, form: FormData) {
                     contractClause: str(form, 'contractClause')
                 })
             ).id,
-        { revalidate: ['/admin/disputes', `/admin/transactions/${str(form, 'transactionId')}`] }
+        { revalidate: ['/admin/disputes', `/admin/transactions/${str(form, 'transactionId')}`], staff: ['dispute_manager'] }
     );
 }
 
@@ -90,19 +96,24 @@ export async function adminDisputeMessageAction(_: ActionState, form: FormData) 
         async ({ app, actor }) =>
             (await app.disputes.addMessage(actor, str(form, 'disputeId'), { body: str(form, 'body'), documentIds: [] })).id,
         {
-            revalidate: [`/admin/transactions/${str(form, 'transactionId')}`]
+            revalidate: [`/admin/transactions/${str(form, 'transactionId')}`],
+            staff: ['dispute_manager']
         }
     );
 }
 
 export async function archiveDisputeAction(_: ActionState, form: FormData) {
     return runAction(async ({ app, actor }) => (await app.disputes.archive(actor, str(form, 'disputeId'))).status, {
-        revalidate: ['/admin/disputes']
+        revalidate: ['/admin/disputes'],
+        staff: ['dispute_manager']
     });
 }
 
 export async function runReconciliationAction(_: ActionState) {
-    return runAction(async ({ app, actor }) => (await app.reconciliation.run(actor)).status, { revalidate: ['/admin/ledger'] });
+    return runAction(async ({ app, actor }) => (await app.reconciliation.run(actor)).status, {
+        revalidate: ['/admin/ledger'],
+        staff: ['finance_operator']
+    });
 }
 
 export async function injectDiscrepancyAction(_: ActionState) {
@@ -118,25 +129,31 @@ export async function injectDiscrepancyAction(_: ActionState) {
                 occurredAt: new Date().toISOString()
             });
         },
-        { revalidate: ['/admin/ledger'] }
+        { revalidate: ['/admin/ledger'], staff: ['finance_operator'] }
     );
 }
 
 export async function reverseJournalAction(_: ActionState, form: FormData) {
     return runAction(async ({ app, actor }) => (await app.ledger.reverse(actor, str(form, 'journalId'), str(form, 'reason'))).id, {
-        revalidate: ['/admin/ledger']
+        revalidate: ['/admin/ledger'],
+        staff: ['finance_operator']
     });
 }
 
 export async function reprocessEventAction(_: ActionState, form: FormData) {
+    // ProviderEventService.reprocess checks the role only: the recent MFA is required here.
     return runAction(async ({ app, actor }) => (await app.providerEvents.reprocess(actor, str(form, 'eventId'))).status, {
-        revalidate: ['/admin/partners']
+        revalidate: ['/admin/partners'],
+        staff: ['finance_operator']
     });
 }
 
 export async function retryReleasesAction(_: ActionState, form: FormData) {
     const id = str(form, 'transactionId');
-    return runAction(async ({ app, actor }) => app.payments.retryBlockedReleases(actor, id), { revalidate: [`/admin/transactions/${id}`] });
+    return runAction(async ({ app, actor }) => app.payments.retryBlockedReleases(actor, id), {
+        revalidate: [`/admin/transactions/${id}`],
+        staff: ['finance_operator', 'compliance_analyst']
+    });
 }
 
 export async function updateCorridorAction(_: ActionState, form: FormData) {
@@ -149,7 +166,7 @@ export async function updateCorridorAction(_: ActionState, form: FormData) {
                     reviewThresholdCurrency: str(form, 'reviewThresholdCurrency')
                 })
             ).id,
-        { revalidate: ['/admin/corridors'] }
+        { revalidate: ['/admin/corridors'], staff: ['platform_admin'] }
     );
 }
 
@@ -160,6 +177,6 @@ export async function updateSecurityAction(_: ActionState, form: FormData) {
                 payoutAccountCoolingOffHours: Number(str(form, 'payoutAccountCoolingOffHours')),
                 sensitiveActionMfaMaxAgeMinutes: Number(str(form, 'sensitiveActionMfaMaxAgeMinutes'))
             }),
-        { revalidate: ['/admin/security'] }
+        { revalidate: ['/admin/security'], staff: ['platform_admin'] }
     );
 }

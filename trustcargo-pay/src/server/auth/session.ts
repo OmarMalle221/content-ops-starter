@@ -6,6 +6,7 @@ import { clientIp } from '@/server/http/client-ip';
 import { getApp } from '@/server/instance';
 import { hmacHex, randomToken, safeEqualHex } from '@/server/security/crypto';
 import type { SessionControl } from '@/server/services/account-service';
+import { securitySettings } from '@/server/services/context';
 import type { Actor } from './actor';
 import { hasRole, mfaIsRecent } from './actor';
 
@@ -113,14 +114,21 @@ export const sessionControl: SessionControl = {
     endOnboarding
 };
 
-/** Resolves the actor from the signed cookie. Roles and status always come from the database. */
+/**
+ * Resolves the actor from the signed cookie. Roles and status always come from the database. Platform roles are only
+ * effective after an MFA challenge passed within the security settings' adminMfaMaxAgeMinutes: until then they are
+ * returned as pendingPlatformRoles, which grant nothing (the services check the same rule again).
+ */
 export async function getActor(): Promise<Actor | undefined> {
     const app = await getApp();
     const payload = await readSession(app.config.sessionSecret);
     if (!payload) return undefined;
-    const user = await app.deps.uow.run((db) => db.users.get(payload.uid));
+    const { user, settings } = await app.deps.uow.run(async (db) => ({
+        user: await db.users.get(payload.uid),
+        settings: await securitySettings(db)
+    }));
     if (!user || user.status !== 'ACTIVE') return undefined;
-    return {
+    const actor: Actor = {
         kind: 'USER',
         userId: user.id,
         email: user.email,
@@ -128,6 +136,10 @@ export async function getActor(): Promise<Actor | undefined> {
         mfaVerifiedAt: payload.mfa ? new Date(payload.mfa).toISOString() : undefined,
         sessionId: payload.sid
     };
+    if (user.platformRoles.length && !mfaIsRecent(actor, settings.adminMfaMaxAgeMinutes, new Date())) {
+        return { ...actor, platformRoles: [], pendingPlatformRoles: user.platformRoles };
+    }
+    return actor;
 }
 
 export async function requireActor(): Promise<Actor> {
@@ -136,14 +148,12 @@ export async function requireActor(): Promise<Actor> {
     return actor;
 }
 
-/** Back-office pages: a staff role AND a recent MFA challenge. */
+/** Back-office pages: a staff role AND a recent MFA challenge (a role held without one leads to the challenge). */
 export async function requireStaff(roles: PlatformRole[], next: string): Promise<Actor> {
     const actor = await requireActor();
-    if (!hasRole(actor, ...roles)) redirect('/dashboard');
-    const app = await getApp();
-    const settings = await app.deps.uow.run(async (db) => (await db.securitySettings.get('default'))!);
-    if (!mfaIsRecent(actor, settings.adminMfaMaxAgeMinutes, new Date())) redirect(`/mfa?next=${encodeURIComponent(next)}`);
-    return actor;
+    if (hasRole(actor, ...roles)) return actor;
+    if (roles.some((r) => actor.pendingPlatformRoles?.includes(r))) redirect(`/mfa?next=${encodeURIComponent(next)}`);
+    redirect('/dashboard');
 }
 
 export async function clientFingerprint(): Promise<{ ip: string; userAgent: string }> {

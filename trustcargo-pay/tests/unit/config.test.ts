@@ -75,16 +75,32 @@ describe('configuration: demo fallbacks and required secrets', () => {
         expect(failure(env)).toMatch(/^SESSION_SECRET .* is required/);
     });
 
-    it('requires a real MOCK_PROVIDER_WEBHOOK_SECRET with DATABASE_URL (forged partner events otherwise)', () => {
-        expect(failure(persistent({ MOCK_PROVIDER_WEBHOOK_SECRET: '' }))).toMatch(/^MOCK_PROVIDER_WEBHOOK_SECRET .* is required/);
-        expect(failure(persistent({ MOCK_PROVIDER_WEBHOOK_SECRET: DEMO_WEBHOOK_SECRET }))).toMatch(/MOCK_PROVIDER_WEBHOOK_SECRET/);
-        expect(load({ AUTH_PROVIDER: 'supabase', ...SUPABASE, SESSION_SECRET }).webhookSecret).toBe(DEMO_WEBHOOK_SECRET);
+    it.each([
+        ['DATABASE_URL', persistent({ MOCK_PROVIDER_WEBHOOK_SECRET: '' })],
+        ['AUTH_PROVIDER=supabase', { AUTH_PROVIDER: 'supabase', ...SUPABASE, SESSION_SECRET }],
+        ['STORAGE_PROVIDER=supabase', { STORAGE_PROVIDER: 'supabase', ...SUPABASE, SESSION_SECRET }],
+        ['the public demo constant', persistent({ MOCK_PROVIDER_WEBHOOK_SECRET: DEMO_WEBHOOK_SECRET })]
+    ])('requires a real MOCK_PROVIDER_WEBHOOK_SECRET with %s (forged partner events otherwise)', (_, env) => {
+        expect(failure(env)).toMatch(/^MOCK_PROVIDER_WEBHOOK_SECRET .* is required/);
+    });
+
+    it('keeps the public demo webhook secret for the pure in-memory persona demo only', () => {
+        expect(load({}).webhookSecret).toBe(DEMO_WEBHOOK_SECRET);
+        expect(
+            load({ AUTH_PROVIDER: 'supabase', ...SUPABASE, SESSION_SECRET, MOCK_PROVIDER_WEBHOOK_SECRET: WEBHOOK_SECRET }).webhookSecret
+        ).toBe(WEBHOOK_SECRET);
     });
 
     it('enables persona login only for the persona demo, never next to Supabase accounts', () => {
         expect(load({}).personaLogin).toBe(true);
         expect(load({ DEMO_ALLOW_PERSONA_LOGIN: 'false' }).personaLogin).toBe(false);
-        const supabase = load({ AUTH_PROVIDER: 'supabase', DEMO_ALLOW_PERSONA_LOGIN: 'true', ...SUPABASE, SESSION_SECRET });
+        const supabase = load({
+            AUTH_PROVIDER: 'supabase',
+            DEMO_ALLOW_PERSONA_LOGIN: 'true',
+            ...SUPABASE,
+            SESSION_SECRET,
+            MOCK_PROVIDER_WEBHOOK_SECRET: WEBHOOK_SECRET
+        });
         expect(supabase.personaLogin).toBe(false);
         expect(load(persistent({ AUTH_PROVIDER: 'supabase', ...SUPABASE })).personaLogin).toBe(false);
     });
@@ -137,6 +153,37 @@ describe('configuration: database TLS', () => {
         }
     });
 
+    it('resolves the host like node-postgres: a repeated parameter is refused, never resolved to its first value', () => {
+        for (const url of [
+            'postgresql://postgres:s3cret-pw@localhost:5432/postgres?host=localhost&host=db.example.net',
+            'postgresql://postgres:s3cret-pw@localhost:5432/postgres?host=/tmp&host=127.0.0.2',
+            'postgresql://postgres:s3cret-pw@localhost/postgres?sslmode=require&sslmode=disable'
+        ]) {
+            for (const env of [persistent({ DATABASE_URL: url }), persistent({ DATABASE_URL: url, DATABASE_SSL_CA: CA })]) {
+                const message = failure(env);
+                expect(message).toMatch(/^Invalid configuration: DATABASE_URL repeats a connection parameter \((host|sslmode)\)$/);
+                expect(message).not.toContain('s3cret-pw');
+            }
+        }
+        // pg-connection-string's own rules: the `host` parameter wins over the URL host (a socket there is local).
+        expect(failure(persistent({ DATABASE_URL: 'postgresql://postgres:s3cret-pw@localhost/postgres?host=127.0.0.2' }))).toMatch(
+            /^DATABASE_SSL_CA .* is required/
+        );
+        expect(
+            load(persistent({ DATABASE_URL: 'postgresql://postgres@db.example.net/postgres?host=/tmp' })).database!.sslCa
+        ).toBeUndefined();
+    });
+
+    it('never echoes the URL when it cannot be parsed, and refuses a CA with a Unix socket host', () => {
+        const malformed = failure(persistent({ DATABASE_URL: 'postgresql://postgres:s3cret-pw@[bad/postgres' }));
+        expect(malformed).toBe('Invalid configuration: DATABASE_URL is not a valid connection string');
+        const socket = failure(
+            persistent({ DATABASE_URL: 'postgresql://postgres:s3cret-pw@/postgres?host=/var/run/postgresql', DATABASE_SSL_CA: CA })
+        );
+        expect(socket).toMatch(/^DATABASE_SSL_CA cannot be used with a Unix socket host/);
+        expect(socket).not.toContain('s3cret-pw');
+    });
+
     it('refuses URL settings that disable TLS or certificate checks for a remote host', () => {
         for (const query of ['sslmode=disable', 'sslmode=no-verify', 'ssl=0', 'ssl=false']) {
             const message = failure(persistent({ DATABASE_URL: `${REMOTE_URL}?${query}`, DATABASE_SSL_CA: CA }));
@@ -169,6 +216,45 @@ describe('configuration: database TLS', () => {
         }
         const local = 'postgresql://postgres@localhost/postgres?host=/tmp/pgsock';
         expect(pgConnectionOptions({ url: local, role: 'service_role', poolMax: 1 })).toEqual({ connectionString: local, ssl: undefined });
+    });
+
+    it('hands pg the very host loadConfig checked, without a WHATWG URL holding the credentials', () => {
+        const resolved = (url: string, sslCa?: string) =>
+            (new pg.Client(pgConnectionOptions({ url, role: 'service_role', poolMax: 1, sslCa })) as unknown as Params)
+                .connectionParameters;
+        type Params = { connectionParameters: { host: string; user: string; password: string; database: string; ssl: unknown } };
+        // A credentialed socket URL (no URL host) parses instead of throwing ERR_INVALID_URL with the password inside.
+        expect(resolved('postgresql://postgres:s3cret-pw@/postgres?host=/var/run/postgresql&sslmode=disable', CA)).toMatchObject({
+            host: '/var/run/postgresql',
+            user: 'postgres',
+            password: 's3cret-pw',
+            database: 'postgres',
+            ssl: { ca: CA, rejectUnauthorized: true }
+        });
+        expect(resolved(`${REMOTE_URL}?host=db2.example.net&ssl=0`, CA)).toMatchObject({ host: 'db2.example.net', ssl: { ca: CA } });
+        // Every URL loadConfig accepts without a CA really is local for pg.
+        for (const url of [
+            'postgresql://postgres@localhost:5432/postgres',
+            'postgresql://postgres@[::1]:5432/postgres',
+            'postgresql://postgres@db.example.net/postgres?host=/tmp/pgsock',
+            'postgresql://%2Fvar%2Frun%2Fpostgresql/postgres'
+        ]) {
+            expect(load(persistent({ DATABASE_URL: url })).database!.sslCa).toBeUndefined();
+            expect(resolved(url).host).toMatch(/^(localhost|::1|\/.*)$/);
+        }
+        expect(() =>
+            pgConnectionOptions({ url: 'postgresql://postgres:s3cret-pw@[bad/postgres', role: 'service_role', poolMax: 1, sslCa: CA })
+        ).toThrow(/^Invalid configuration: DATABASE_URL is not a valid connection string$/);
+    });
+});
+
+describe('configuration: sign-in e-mail cap', () => {
+    it('defaults MAGIC_LINK_HOURLY_CAP to 20 per process and hour, and accepts a positive integer only', () => {
+        expect(load({}).auth.magicLinkHourlyCap).toBe(20);
+        expect(load({ MAGIC_LINK_HOURLY_CAP: '' }).auth.magicLinkHourlyCap).toBe(20);
+        expect(load({ MAGIC_LINK_HOURLY_CAP: '8' }).auth.magicLinkHourlyCap).toBe(8);
+        for (const value of ['0', '-1', '2.5', 'many'])
+            expect(failure({ MAGIC_LINK_HOURLY_CAP: value })).toBe('Invalid configuration: MAGIC_LINK_HOURLY_CAP');
     });
 });
 

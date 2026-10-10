@@ -22,9 +22,9 @@ Voir [`.env.example`](../.env.example). Une variable vide vaut une variable abse
 Dans **tous** les modes, l'application refuse aussi de démarrer :
 
 - sans `SESSION_SECRET` réel (32 caractères au moins, différent de la valeur de démonstration publique) dès que `DATABASE_URL`, `AUTH_PROVIDER=supabase` ou `STORAGE_PROVIDER=supabase` est défini : avec la valeur publique, n'importe qui pourrait forger un cookie de session ;
-- sans `MOCK_PROVIDER_WEBHOOK_SECRET` réel dès que `DATABASE_URL` est défini : n'importe qui pourrait forger des événements partenaire signés ;
+- sans `MOCK_PROVIDER_WEBHOOK_SECRET` réel dès que `DATABASE_URL`, `AUTH_PROVIDER=supabase` ou `STORAGE_PROVIDER=supabase` est défini : n'importe qui pourrait forger des événements partenaire signés ;
 - avec `DATABASE_URL` sans `STORAGE_PROVIDER` explicite : `supabase`, ou `memory` en démo seulement (les fichiers des documents sont alors perdus au redémarrage et ne sont pas partagés entre instances ; avertissement `config.ephemeral_document_storage` au démarrage) ;
-- avec une base distante sans `DATABASE_SSL_CA` (voir [TLS](#tls-vers-la-base)).
+- avec une base distante sans `DATABASE_SSL_CA`, ou une `DATABASE_URL` qui répète un paramètre (voir [TLS](#tls-vers-la-base)).
 
 Les valeurs de démonstration publiques ne servent donc qu'à la démo par profils **en mémoire**, sans base ni Supabase.
 
@@ -32,7 +32,7 @@ Persistance Postgres : `DATABASE_URL` (connexion directe, rôle de migration ou 
 
 ### TLS vers la base
 
-node-postgres n'essaie jamais TLS de lui-même, et Supabase accepte les connexions en clair tant que « Enforce SSL » n'est pas activé. Pour tout hôte autre que `localhost`, `127.0.0.1`, `::1` ou un socket Unix, `DATABASE_SSL_CA` est donc **obligatoire**, dans tous les modes. Le certificat du serveur est alors toujours vérifié contre cette CA (`rejectUnauthorized: true`, nom d'hôte compris), et les réglages TLS de l'URL (`ssl`, `sslmode`, `sslnegotiation`, `sslrootcert`, `sslcert`, `sslkey`) sont retirés pour qu'elle ne puisse pas les affaiblir. `sslmode=disable`, `sslmode=no-verify`, `ssl=0` ou `ssl=false` sont refusés pour une base distante.
+node-postgres n'essaie jamais TLS de lui-même, et Supabase accepte les connexions en clair tant que « Enforce SSL » n'est pas activé. Pour tout hôte autre que `localhost`, `127.0.0.1`, `::1` ou un socket Unix, `DATABASE_SSL_CA` est donc **obligatoire**, dans tous les modes. L'hôte est lu par la fonction même de node-postgres (`parse` de `pg-connection-string`, dont le paramètre `host` l'emporte sur l'hôte de l'URL), et l'application passe ensuite à node-postgres les options déjà lues : l'hôte contrôlé est celui auquel elle se connecte. Une URL qui répète un paramètre (`?host=localhost&host=db.example.net`) est refusée, et `DATABASE_SSL_CA` est refusé avec un socket Unix (TLS ne s'y applique pas). Les messages d'erreur ne reprennent jamais l'URL, qui peut contenir un mot de passe. Le certificat du serveur est alors toujours vérifié contre cette CA (`rejectUnauthorized: true`, nom d'hôte compris), et les réglages TLS de l'URL (`ssl`, `sslmode`, `sslnegotiation`, `sslrootcert`, `sslcert`, `sslkey`) sont retirés pour qu'elle ne puisse pas les affaiblir. `sslmode=disable`, `sslmode=no-verify`, `ssl=0` ou `ssl=false` sont refusés pour une base distante.
 
 Supabase : **Project Settings → Database → SSL Configuration → Download certificate** (fichier `.crt` au format PEM, par exemple `prod-ca-2021.crt`). Activer aussi « Enforce SSL on incoming connections » quand le projet le permet. La variable contient le **contenu** PEM, pas un chemin, sur plusieurs lignes ou sur une seule avec des `\n` littéraux :
 
@@ -50,7 +50,9 @@ Les limites de débit et les empreintes de session utilisent l'IP du client, pri
 - `CLIENT_IP_HEADER` défini : l'en-tête écrit par la périphérie de la plateforme (`fly-client-ip` sur Fly.io, `cf-connecting-ip` derrière Cloudflare, `x-nf-client-connection-ip` sur Netlify, `x-real-ip` derrière un nginx qui l'écrase). Absent de la requête : `unknown` (un seul compartiment), jamais une valeur choisie par le client ;
 - sinon, l'entrée **la plus à droite** de `X-Forwarded-For`, ajoutée par le proxy le plus proche. Les entrées à sa gauche viennent du client et sont ignorées.
 
-Next.js ne remplit `X-Forwarded-For` que si la requête n'en a pas : exposée sans proxy, l'application verrait un en-tête choisi par le client. Toujours la déployer derrière le proxy de la plateforme (c'est le cas des cibles ci-dessous).
+Une adresse IPv6 est réduite à son préfixe /64 (un hôte ou un abonné en détient généralement un entier : une adresse différente à chaque requête ne donne donc pas un nouveau compartiment) ; une adresse IPv4 est prise telle quelle.
+
+Next.js ne remplit `X-Forwarded-For` que si la requête n'en a pas : exposée sans proxy, l'application verrait un en-tête choisi par le client et les limites par IP se contourneraient. Un déploiement **exposé directement** (par exemple une VM sans proxy inverse) doit donc soit se placer derrière un proxy inverse qui écrit l'adresse du client (nginx, Caddy, un équilibreur de charge), soit définir `CLIENT_IP_HEADER` vers un en-tête que ce proxy écrase à chaque requête. Les plateformes de conteneurs citées ci-dessous ont toutes un tel proxy.
 
 ## Démo (état actuel)
 
@@ -63,7 +65,7 @@ MOCK_PROVIDER_WEBHOOK_SECRET=$(openssl rand -hex 24) APP_URL=https://demo.exampl
 npm start
 ```
 
-Cibles adaptées : un conteneur unique (Fly.io, Railway, Render, Cloud Run avec `max-instances=1`) ou une VM.
+Cibles adaptées : un conteneur unique (Fly.io, Railway, Render, Cloud Run avec `max-instances=1`) ou une VM derrière un proxy inverse (voir [IP du client](#ip-du-client)).
 
 Les plateformes serverless multi-instances (Netlify, Vercel Functions) ne conviennent **pas** avec l'adaptateur mémoire : chaque instance aurait des données différentes. Avec `DATABASE_URL`, plusieurs instances partagent la même base ; leurs unités de travail sont sérialisées par un verrou consultatif global (débit limité, voir [PRODUCTION_READINESS](PRODUCTION_READINESS.md)). Le `netlify.toml` à la racine du dépôt concerne le site existant, pas cette application.
 
@@ -74,7 +76,7 @@ Une base est **soit** une démo par profils, **soit** une base de comptes réels
 - `AUTH_PROVIDER=demo` : profils fictifs et scénarios fictifs. L'application refuse de démarrer si la base contient un compte réel (`is_demo = false`) : une session de profil fictif (personnel compris, dont le code MFA est affiché) y donnerait accès ;
 - `AUTH_PROVIDER=supabase` : seules les données de référence nécessaires au fonctionnement sont créées (paramètres de sécurité, corridors, connexion au partenaire simulé), aucun profil ni scénario fictif ; la connexion par profil est désactivée quelle que soit `DEMO_ALLOW_PERSONA_LOGIN`. L'application refuse de démarrer sur une base qui contient des profils fictifs.
 
-L'amorçage tient en **une seule transaction** (unité de travail longue : délais de verrou et d'instruction portés à 15 min pour elle seule) et se termine par un marqueur, l'événement d'audit `system.seed_completed`. Un amorçage interrompu (plantage, déploiement, coupure réseau) est entièrement annulé et le démarrage suivant recommence ; une seconde instance qui démarre en même temps attend la fin de la transaction puis trouve le marqueur. Seuls les enregistrements du partenaire simulé (schéma `trustcargo_sim`, écrits hors transaction par conception) et, avec `STORAGE_PROVIDER=supabase`, des objets de documents de démonstration non référencés peuvent rester : fictifs et sans effet. Sur une base distante, l'amorçage d'une démo par profils fait plusieurs milliers d'allers-retours et peut durer plusieurs minutes, pendant lesquelles la première requête attend.
+L'amorçage tient en **une seule transaction** (unité de travail longue : délais de verrou et d'instruction portés à 15 min pour elle seule) et se termine par un marqueur, l'événement d'audit `system.seed_completed`. Un amorçage interrompu (plantage, déploiement, coupure réseau) est entièrement annulé et le démarrage suivant recommence ; une seconde instance qui démarre en même temps attend la fin de la transaction puis trouve le marqueur. Seuls les enregistrements du partenaire simulé (schéma `trustcargo_sim`, écrits hors transaction par conception) et, avec `STORAGE_PROVIDER=supabase`, des objets de documents de démonstration non référencés peuvent rester : fictifs et sans effet. Les téléversements de ces documents de démonstration ont lieu dans cette transaction, donc sous le verrou global : c'est la seule entrée/sortie externe faite dans une unité de travail, par conception (les autres instances attendent de toute façon la fin de l'amorçage). Sur une base distante, l'amorçage d'une démo par profils fait plusieurs milliers d'allers-retours et peut durer plusieurs minutes, pendant lesquelles la première requête attend.
 
 Une base qui contient des données mais pas le marqueur (amorçage d'une version antérieure, données venues d'ailleurs) est refusée en mode démo, avec un message explicite. Pour repartir de zéro : supprimer les schémas `trustcargo`, `trustcargo_private` et `trustcargo_sim` (`drop schema … cascade`), puis réappliquer les migrations comme décrit ci-dessous, ou utiliser une nouvelle base.
 
@@ -119,7 +121,9 @@ Déploiement recommandé :
 | `SUPABASE_SECRET_KEY` | Clé secrète (`sb_secret_…`) ou ancienne clé `service_role`. Utilisée **uniquement** pour Storage. Secret : coffre de l'hébergeur, jamais dans le dépôt. |
 | `SUPABASE_STORAGE_BUCKET` | `trustcargo-documents` par défaut (bucket privé créé par la migration RLS). |
 | `APP_URL` | URL publique de l'application ; base du lien de connexion (`APP_URL/auth/callback`) et des redirections. |
-| `SESSION_SECRET` | Obligatoire (valeur réelle) dès qu'`AUTH_PROVIDER` ou `STORAGE_PROVIDER` vaut `supabase`. |
+| `SESSION_SECRET`, `MOCK_PROVIDER_WEBHOOK_SECRET` | Obligatoires (valeurs réelles) dès qu'`AUTH_PROVIDER` ou `STORAGE_PROVIDER` vaut `supabase`. |
+| `MAGIC_LINK_HOURLY_CAP` | Liens de connexion envoyés par heure et par processus, quel que soit le client (20 par défaut). À dimensionner **sous** le quota d'e-mails du projet Supabase (Authentication → Rate Limits), moins la part des autres applications d'un projet partagé. |
+| `CLIENT_IP_HEADER` | En-tête de l'IP du client écrit par la plateforme ; obligatoire pour un déploiement exposé sans proxy inverse (voir [IP du client](#ip-du-client)). |
 
 Aucune de ces variables ne doit être préfixée par `NEXT_PUBLIC_` : l'application n'a pas de client Supabase dans le navigateur.
 
@@ -133,7 +137,7 @@ Aucune de ces variables ne doit être préfixée par `NEXT_PUBLIC_` : l'applicat
 
 ### Storage
 
-Le bucket privé `trustcargo-documents` est créé par `supabase/migrations/20261009000003_rls.sql` quand le schéma `storage` existe. L'application y écrit avec la clé secrète, côté serveur, sans jamais écraser un objet (`upsert: false`). Elle ne produit **aucune** URL signée Supabase : les téléchargements passent par `/api/v1/documents/{id}/content`, qui ré-autorise l'utilisateur, journalise l'accès et vérifie le SHA-256.
+Le bucket privé `trustcargo-documents` est créé par `supabase/migrations/20261009000003_rls.sql` quand le schéma `storage` existe. L'application y écrit avec la clé secrète, côté serveur, sans jamais écraser un objet (`upsert: false`) ; elle ne supprime que l'objet d'un envoi dont l'unité de travail a échoué. La même migration crée **une** politique `storage.objects` restrictive, `trustcargo_documents_server_only` (si elle n'existe pas déjà ; jamais supprimée ni modifiée) : `anon` et `authenticated` ne voient ni n'écrivent aucun objet de ce bucket, quelles que soient les politiques permissives des autres applications du projet ; les autres buckets ne sont pas concernés. Elle ne produit **aucune** URL signée Supabase : les téléchargements passent par `/api/v1/documents/{id}/content`, qui ré-autorise l'utilisateur, journalise l'accès et vérifie le SHA-256.
 
 ### Premier administrateur plateforme
 
@@ -165,7 +169,7 @@ En développement, le projet Supabase cible `cargoflow-verify` **partage ses uti
 - les réglages Auth sont communs aux deux applications : Site URL, liste des URL de redirection, modèles d'e-mail, SMTP, MFA. Ne pas modifier le Site URL ni les modèles de CargoFlow : ajouter seulement `http://localhost:3000/auth/callback` aux Redirect URLs et garder le modèle par défaut (lien `code`, même navigateur). Activer TOTP le rend disponible aux utilisateurs CargoFlow, sans le leur imposer ;
 - n'y utiliser que des adresses de test, jamais de données personnelles réelles ;
 - migrations : appliquées **une par une** (MCP `apply_migration` ou éditeur SQL), jamais avec la CLI Supabase (`db push`, `migration repair`), dont l'historique est celui de CargoFlow. Le MCP peut demander une confirmation explicite pour les instructions `REVOKE` ou `DROP` des migrations : la donner après relecture, sans modifier le fichier ;
-- les limites par IP d'Auth Supabase (envois d'e-mails, vérifications de jetons) s'appliquent à **l'IP du serveur** TrustCargo, puisque tous les appels Auth partent du serveur ; elles sont partagées entre tous les utilisateurs TrustCargo (et le quota d'e-mails du projet avec CargoFlow). En plus des limites par IP du client et par adresse, l'application plafonne donc, par processus et quelle que soit l'IP, les envois de liens (20 par heure) et les échanges de code au callback (120 par heure) ;
+- les limites par IP d'Auth Supabase (envois d'e-mails, vérifications de jetons) s'appliquent à **l'IP du serveur** TrustCargo, puisque tous les appels Auth partent du serveur ; elles sont partagées entre tous les utilisateurs TrustCargo (et le quota d'e-mails du projet avec CargoFlow). En plus des limites par IP du client et par adresse, l'application plafonne donc, par processus et quelle que soit l'IP, les envois de liens (`MAGIC_LINK_HOURLY_CAP`, 20 par heure par défaut : à régler sous le quota d'e-mails du projet moins la part de CargoFlow) et les échanges de code **refusés par Supabase** au callback (120 par heure). Un appel du callback sans le cookie de vérificateur PKCE du navigateur est refusé avant tout décompte partagé, et les connexions réussies ne consomment rien ;
 - avec `AUTH_PROVIDER=supabase`, la base TrustCargo de ce projet est une base de comptes réels : aucun profil fictif n'y est créé, et la démo par profils doit utiliser une autre base (mémoire ou Postgres local).
 
 C'est acceptable **pour le développement uniquement**. Staging et production exigent chacun un projet Supabase **dédié** à TrustCargo Pay.

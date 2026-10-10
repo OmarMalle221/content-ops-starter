@@ -1,7 +1,8 @@
 /**
  * Supabase Storage adapter for `FileStorage` (private bucket, secret key, server-side only).
  *
- * - Objects are immutable: uploads use `upsert: false`, a new document version is a new key.
+ * - Objects are immutable: uploads use `upsert: false`, a new document version is a new key. The only removal is the
+ *   cleanup of an upload whose unit of work failed (`delete`).
  * - The adapter never creates Supabase signed URLs. Browsers download through the application's own
  *   signed-URL route, which re-authorises the user, writes the access log and checks the SHA-256.
  * - Errors are rebuilt from the status/code only: no key, token, URL or provider message is propagated.
@@ -31,7 +32,7 @@ export type StorageFailure = 'invalid_key' | 'conflict' | 'misconfigured' | 'rej
 
 export class StorageAdapterError extends Error {
     constructor(
-        readonly operation: 'upload' | 'download',
+        readonly operation: 'upload' | 'download' | 'delete',
         readonly reason: StorageFailure,
         readonly status?: number
     ) {
@@ -106,5 +107,15 @@ export class SupabaseFileStorage implements FileStorage {
             throw new StorageAdapterError('download', classify(e), e.status);
         }
         return new Uint8Array(await data.arrayBuffer());
+    }
+
+    /** Removes one object (Storage answers success for a missing one). Used to clean up after a failed upload. */
+    async delete(key: string): Promise<void> {
+        if (!OBJECT_KEY.test(key)) throw new StorageAdapterError('delete', 'invalid_key');
+        const { error } = await this.client.storage.from(this.bucket).remove([key]);
+        if (error) {
+            const e = shape(error);
+            throw new StorageAdapterError('delete', classify(e), e.status);
+        }
     }
 }

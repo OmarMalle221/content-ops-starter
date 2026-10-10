@@ -1,7 +1,10 @@
 'use server';
 import type { ActionState } from '@/lib/action-state';
+import type { App } from '@/server/app';
 import { AppError } from '@/server/errors';
+import type { Actor } from '@/server/auth/actor';
 import { hasRole } from '@/server/auth/actor';
+import { requestAuthGateway } from '@/server/auth/auth-gateway';
 import { runAction, str } from './_run';
 
 const MIN = 60_000;
@@ -60,21 +63,39 @@ export async function regenerateInvitationAction(_: ActionState, form: FormData)
     );
 }
 
-export async function acceptInvitationAction(_: ActionState, form: FormData) {
-    return runAction(async ({ app, actor }) => (await app.transactions.acceptInvitation(actor, str(form, 'token'))).id, {
-        rateLimit: { key: 'invite', limit: 20, windowMs: 10 * MIN }
+/**
+ * Invitations are matched on the profile e-mail: with Supabase Auth it is first re-checked against the provider's
+ * verified address (and synced, or refused on conflict) by AccountService.withVerifiedEmail.
+ */
+async function withVerifiedEmail(app: App, actor: Actor): Promise<Actor> {
+    return app.accounts.withVerifiedEmail({ gateway: await requestAuthGateway(app.config) }, actor);
+}
+
+/** Invitations addressed to the signed-in user, listed from an action: the provider may be called (see above). */
+export async function pendingInvitationsAction() {
+    return runAction(async ({ app, actor }) => app.transactions.pendingInvitations(await withVerifiedEmail(app, actor)), {
+        rateLimit: { key: 'invitations', limit: 60, windowMs: 10 * MIN }
     });
 }
 
+export async function acceptInvitationAction(_: ActionState, form: FormData) {
+    return runAction(
+        async ({ app, actor }) => (await app.transactions.acceptInvitation(await withVerifiedEmail(app, actor), str(form, 'token'))).id,
+        { rateLimit: { key: 'invite', limit: 20, windowMs: 10 * MIN } }
+    );
+}
+
 export async function acceptInvitationForPartyAction(_: ActionState, form: FormData) {
-    return runAction(async ({ app, actor }) => (await app.transactions.acceptInvitationForParty(actor, str(form, 'partyId'))).id, {
-        revalidate: ['/dashboard']
-    });
+    return runAction(
+        async ({ app, actor }) =>
+            (await app.transactions.acceptInvitationForParty(await withVerifiedEmail(app, actor), str(form, 'partyId'))).id,
+        { revalidate: ['/dashboard'] }
+    );
 }
 
 export async function declineInvitationAction(_: ActionState, form: FormData) {
     return runAction(async ({ app, actor }) =>
-        app.transactions.declineInvitation(actor, str(form, 'token'), str(form, 'reason') || undefined)
+        app.transactions.declineInvitation(await withVerifiedEmail(app, actor), str(form, 'token'), str(form, 'reason') || undefined)
     );
 }
 

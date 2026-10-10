@@ -87,6 +87,13 @@ export class MemoryFileStorage implements FileStorage {
         const f = this.files.get(key);
         return f ? new Uint8Array(f.bytes) : undefined;
     }
+    async delete(key: string) {
+        this.files.delete(key);
+    }
+    /** Stored keys (tests). */
+    keys(): string[] {
+        return [...this.files.keys()];
+    }
 }
 
 /** Placeholder scanner: detects the EICAR test signature only. Production needs a real AV engine. */

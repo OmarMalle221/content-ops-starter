@@ -212,11 +212,19 @@ select tst.ok('post_ledger_journal executable by service_role',
     has_function_privilege('service_role', 'trustcargo.post_ledger_journal(text,text,uuid,text,text,jsonb,text,uuid,uuid)', 'EXECUTE'));
 select tst.ok('trustcargo-documents bucket is private',
     (select not public from storage.buckets where id = 'trustcargo-documents'));
--- The shared project's storage policies are left untouched: TrustCargo creates none.
-select tst.eq('no storage.objects policy created by TrustCargo', (
+-- The shared project's storage policies are left untouched: TrustCargo creates exactly one, restrictive, that only
+-- keeps anon / authenticated out of its own bucket (behavioural checks in '== storage: foreign permissive policies').
+select tst.eq('exactly one storage policy created by TrustCargo', (
     select count(*) from pg_policies
     where schemaname = 'storage'
-      and (policyname like 'trustcargo%' or coalesce(qual, '') like '%trustcargo%' or coalesce(with_check, '') like '%trustcargo%')), 0);
+      and (policyname like 'trustcargo%' or coalesce(qual, '') like '%trustcargo%' or coalesce(with_check, '') like '%trustcargo%')), 1);
+select tst.ok('it is the restrictive server-only policy of the documents bucket, for anon and authenticated', exists (
+    select 1 from pg_policies
+    where schemaname = 'storage' and tablename = 'objects' and policyname = 'trustcargo_documents_server_only'
+      and permissive = 'RESTRICTIVE' and cmd = 'ALL' and roles @> array['anon', 'authenticated']::name[]
+      and cardinality(roles) = 2
+      and qual = $q$(bucket_id IS DISTINCT FROM 'trustcargo-documents'::text)$q$
+      and with_check = $q$(bucket_id IS DISTINCT FROM 'trustcargo-documents'::text)$q$));
 
 \echo '== seeding (superuser)'
 begin;
@@ -424,6 +432,47 @@ select tst.denied('anon cannot read transactions', 'select * from trustcargo.tra
 select tst.denied('anon cannot read users', 'select * from trustcargo.users');
 select tst.denied('anon cannot call post_ledger_journal',
     $q$select trustcargo.post_ledger_journal('x', 'REVERSAL', null, null, 'x', '[]'::jsonb)$q$);
+rollback;
+
+-- =====================================================================================================
+\echo '== storage: foreign permissive policies cannot reopen the documents bucket'
+begin;
+-- What another app of a shared project might define: bucket-agnostic, permissive policies for everybody.
+insert into storage.buckets (id, name, public) values ('other-app', 'other-app', false);
+insert into storage.objects (bucket_id, name, owner) values ('other-app', 'shared/readme.txt', null);
+create policy test_foreign_open_read on storage.objects for select to anon, authenticated using (true);
+create policy test_foreign_open_write on storage.objects for all to anon, authenticated using (true) with check (true);
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated"}', true);
+set local role authenticated;
+select tst.eq('authenticated reads no trustcargo-documents object despite a using (true) policy',
+    tst.cnt($q$select 1 from storage.objects where bucket_id = 'trustcargo-documents'$q$), 0);
+select tst.eq('authenticated still reads the other bucket (its own policies apply)',
+    tst.cnt($q$select 1 from storage.objects where bucket_id = 'other-app'$q$), 1);
+select tst.denied('authenticated cannot insert into trustcargo-documents despite a with check (true) policy',
+    $q$insert into storage.objects (bucket_id, name, owner) values ('trustcargo-documents', '11111111-1111-4111-8111-111111111111/x/evil.pdf', 'c0000000-0000-4000-8000-00000000000c')$q$);
+select tst.eq('authenticated can still insert into the other bucket',
+    tst.affected($q$insert into storage.objects (bucket_id, name, owner) values ('other-app', 'shared/c.txt', 'c0000000-0000-4000-8000-00000000000c')$q$), 1);
+select tst.eq('authenticated cannot update trustcargo-documents objects',
+    tst.affected($q$update storage.objects set owner = 'c0000000-0000-4000-8000-00000000000c' where bucket_id = 'trustcargo-documents'$q$), 0);
+select tst.eq('authenticated cannot delete trustcargo-documents objects',
+    tst.affected($q$delete from storage.objects where bucket_id = 'trustcargo-documents'$q$), 0);
+select tst.denied('authenticated cannot move an object of the other bucket into trustcargo-documents',
+    $q$update storage.objects set bucket_id = 'trustcargo-documents' where bucket_id = 'other-app'$q$);
+reset role;
+select set_config('request.jwt.claims', '{"role":"anon"}', true);
+set local role anon;
+select tst.eq('anon reads no trustcargo-documents object despite a using (true) policy',
+    tst.cnt($q$select 1 from storage.objects where bucket_id = 'trustcargo-documents'$q$), 0);
+select tst.ok('anon still reads the other bucket', tst.cnt($q$select 1 from storage.objects where bucket_id = 'other-app'$q$) >= 1);
+select tst.denied('anon cannot insert into trustcargo-documents despite a with check (true) policy',
+    $q$insert into storage.objects (bucket_id, name) values ('trustcargo-documents', '11111111-1111-4111-8111-111111111111/x/anon.pdf')$q$);
+select tst.eq('anon can still insert into the other bucket',
+    tst.affected($q$insert into storage.objects (bucket_id, name) values ('other-app', 'shared/anon.txt')$q$), 1);
+reset role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select tst.ok('the server (service_role) still reads the documents bucket',
+    tst.cnt($q$select 1 from storage.objects where bucket_id = 'trustcargo-documents'$q$) > 0);
 rollback;
 
 -- =====================================================================================================

@@ -28,6 +28,7 @@
         "lucide-react": "1.54.0",
         "next": "16.4.0",
         "pg": "8.23.0",
+        "pg-connection-string": "2.14.1",
         "radix-ui": "1.7.0",
         "react": "19.3.0",
         "react-dom": "19.3.0",

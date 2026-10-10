@@ -9,12 +9,12 @@ import type {
     ScreeningProvider
 } from '@/server/ports/providers';
 import type { AnyActor, Actor } from '@/server/auth/actor';
-import { TRANSACTION_READER_ROLES, hasRole } from '@/server/auth/actor';
+import { TRANSACTION_READER_ROLES, hasRole, mfaIsRecent } from '@/server/auth/actor';
 import type { PartyRole, PlatformRole, SecuritySettings, Transaction, TransactionParty } from '@/domain/model';
 import { canonicalJson } from '@/domain/canonical';
 import { sha256Hex } from '@/server/security/crypto';
 import { storableValue } from '@/server/text';
-import { AppError, notFound } from '@/server/errors';
+import { AppError, forbidden, notFound } from '@/server/errors';
 
 /** Matches the SQL schema's genesis value for the audit hash chain. */
 export const AUDIT_GENESIS_HASH = '0'.repeat(64);
@@ -108,6 +108,31 @@ export async function notifyRole(
     for (const u of users) await notify(deps, db, u.id, type, params, transactionId);
 }
 
+/**
+ * Back-office rule, enforced by the services themselves and not only by the /admin pages: a platform role is only
+ * effective with an MFA challenge passed within the security settings' adminMfaMaxAgeMinutes. getActor() already
+ * withholds the roles of a session without one (pendingPlatformRoles); this check also holds for an actor built by
+ * hand. Party access (owner, JOINED party, organisation member) needs no MFA.
+ */
+export async function staffMfaIsRecent(db: Db, actor: Actor, now: Date): Promise<boolean> {
+    return mfaIsRecent(actor, (await securitySettings(db)).adminMfaMaxAgeMinutes, now);
+}
+
+const staffMfaRequired = () => new AppError('MFA_REQUIRED', 'A recent MFA verification is required for back-office access');
+
+/**
+ * Staff-only operations: one of `roles`, effective. FORBIDDEN without the role; MFA_REQUIRED when the role is held
+ * without a recent MFA (stale session, or an actor whose roles are pending). Runs in `db` when given.
+ */
+export async function requireStaffRole(deps: Deps, actor: Actor, roles: PlatformRole[], db?: Db): Promise<void> {
+    if (!hasRole(actor, ...roles)) {
+        if (roles.some((r) => actor.pendingPlatformRoles?.includes(r))) throw staffMfaRequired();
+        throw forbidden();
+    }
+    const recent = (d: Db) => staffMfaIsRecent(d, actor, deps.clock.now());
+    if (!(await (db ? recent(db) : deps.uow.run(recent)))) throw staffMfaRequired();
+}
+
 export interface TransactionAccess {
     tx: Transaction;
     party?: TransactionParty;
@@ -119,12 +144,14 @@ export interface TransactionAccess {
 /**
  * Central authorisation check for transaction-scoped operations.
  * Unknown or inaccessible transactions both yield NOT_FOUND so existence is not leaked.
+ * The read-only staff fallback requires a recent MFA (staffMfaIsRecent), measured at `now` (default: the wall clock,
+ * like the session's MFA stamp).
  */
 export async function accessTransaction(
     db: Db,
     actor: Actor,
     transactionId: string,
-    options: { roles?: PartyRole[]; write?: boolean; staffRoles?: PlatformRole[] } = {}
+    options: { roles?: PartyRole[]; write?: boolean; staffRoles?: PlatformRole[]; now?: Date } = {}
 ): Promise<TransactionAccess> {
     const tx = await db.transactions.get(transactionId);
     if (!tx) throw notFound('Transaction');
@@ -144,6 +171,7 @@ export async function accessTransaction(
             return { tx, party: undefined, viaOrganization: true, staff: false };
         }
         if (hasRole(actor, ...(options.staffRoles ?? TRANSACTION_READER_ROLES))) {
+            if (!(await staffMfaIsRecent(db, actor, options.now ?? new Date()))) throw staffMfaRequired();
             return { tx, party: undefined, viaOrganization: false, staff: true };
         }
     }

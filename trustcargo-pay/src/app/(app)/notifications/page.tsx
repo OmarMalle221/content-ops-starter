@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { getI18n } from '@/i18n/server';
 import { fmtDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { heldPlatformRoles } from '@/server/auth/actor';
 import { requireActor } from '@/server/auth/session';
 import { getApp } from '@/server/instance';
 
@@ -16,7 +17,8 @@ export default async function NotificationsPage() {
     const { t, intl } = await getI18n();
     const app = await getApp();
     const list = await app.notifications.list(actor);
-    const staff = actor.platformRoles.length > 0;
+    // Staff links go to the back office, which asks for the MFA challenge first when it is not recent.
+    const staff = heldPlatformRoles(actor).length > 0;
     return (
         <>
             <PageHeader title={t('notifications.title')} actions={list.some((n) => !n.readAt) ? <MarkAllRead /> : undefined} />
