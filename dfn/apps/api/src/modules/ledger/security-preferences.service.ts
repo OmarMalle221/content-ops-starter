@@ -7,9 +7,10 @@ import {
   ErrorCode,
   securityPreferencesSchema,
   type SecurityPreferencesInput,
+  KeyPurpose,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
-import { decryptString } from '../../common/crypto';
+import { openString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
@@ -132,7 +133,7 @@ export class SecurityPreferencesService {
 
   /** Same verification as the transfer authorisation step-up (TransfersService.assertMfa). */
   private assertMfaCode(mfaSecretEnc: string | null, mfaCode: string | undefined) {
-    const secret = mfaSecretEnc ? decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, mfaSecretEnc) : null;
+    const secret = mfaSecretEnc ? openString(this.env, KeyPurpose.MFA, mfaSecretEnc) : null;
     if (!mfaCode || !secret || !authenticator.verify({ token: mfaCode, secret })) {
       throw new DomainError(
         ErrorCode.MFA_REQUIRED,

@@ -6,9 +6,10 @@ import {
   orgRoleHas,
   type CreateBeneficiaryInput,
   type ListBeneficiariesQuery,
+  KeyPurpose,
 } from '@dfn/shared';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
-import { encryptString } from '../../common/crypto';
+import { sealString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
@@ -112,7 +113,7 @@ export class BeneficiariesService {
           country: input.country,
           currencyCode: input.currencyCode,
           method: input.method,
-          accountIdentifierEnc: encryptString(this.env.DOCUMENT_ENCRYPTION_KEY, identifier),
+          accountIdentifierEnc: sealString(this.env, KeyPurpose.BENEFICIARIES, identifier),
           accountIdentifierMasked: maskAccountIdentifier(identifier),
           institutionName: input.institutionName ?? null,
           phone: input.phone ?? null,

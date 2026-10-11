@@ -29,59 +29,67 @@ enum UserStatus {
 }
 
 model User {
-  id               String       @id @default(uuid()) @db.Uuid
-  email            String       @unique
-  passwordHash     String
-  firstName        String
-  lastName         String
-  phone            String?
-  country          String?      @db.Char(2)
-  locale           String       @default("fr")
-  globalRole       GlobalRole   @default(USER)
-  status           UserStatus   @default(ACTIVE)
-  mfaEnabled       Boolean      @default(false)
-  mfaSecretEnc     String?
-  failedLoginCount Int          @default(0)
-  lockedUntil      DateTime?
-  lastLoginAt      DateTime?
+  id                  String     @id @default(uuid()) @db.Uuid
+  email               String     @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  phone               String?
+  country             String?    @db.Char(2)
+  locale              String     @default("fr")
+  globalRole          GlobalRole @default(USER)
+  status              UserStatus @default(ACTIVE)
+  mfaEnabled          Boolean    @default(false)
+  mfaSecretEnc        String?
+  /// Last accepted TOTP time step (anti-replay: a code is accepted at most once).
+  mfaLastUsedStep     BigInt?
+  failedLoginCount    Int        @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
   securityPreferences Json?
   deletionRequestedAt DateTime?
-  anonymizedAt     DateTime?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-  deletedAt        DateTime?
+  anonymizedAt        DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  deletedAt           DateTime?
 
-  sessions               Session[]
-  beneficiaries          Beneficiary[]           @relation("BeneficiaryCreator")
-  createdTransfers       Transfer[]              @relation("TransferCreator")
-  reviewedTransfers      Transfer[]              @relation("TransferReviewer")
-  fxQuotes               FXQuote[]               @relation("FxQuoteCreator")
-  invoices               Invoice[]               @relation("InvoiceCreator")
-  quotes                 Quote[]                 @relation("QuoteCreator")
-  invoicePayments        InvoicePayment[]        @relation("InvoicePaymentRecorder")
-  apiCredentials         ApiCredential[]         @relation("ApiCredentialCreator")
-  webhookSubscriptions   WebhookSubscription[]   @relation("WebhookCreator")
-  ddaOperations          DigitalAssetSimulation[] @relation("DdaCreator")
-  memberships            OrganizationMember[]
-  identityVerifications  IdentityVerification[]
-  notifications          Notification[]
-  auditLogs              AuditLog[]              @relation("AuditActor")
-  createdTransactions    Transaction[]           @relation("TransactionCreator")
-  uploadedDocuments      Document[]              @relation("DocumentUploader")
-  disputeMessages        DisputeMessage[]
-  disputeDecisions       DisputeDecision[]
-  riskAlerts             RiskAlert[]
-  parties                TransactionParty[]
-  contractAcceptances    ContractAcceptance[]
-  evidences              Evidence[]
-  assignedDisputes       Dispute[]               @relation("DisputeAssignee")
-  riskAlertActions       RiskAlertAction[]
-  transactionEvents      TransactionEvent[]
-  reviewedIdentities     IdentityVerification[]  @relation("IdentityReviewer")
-  reviewedBusinesses     BusinessVerification[]  @relation("BusinessReviewer")
-  reviewedDocuments      Document[]              @relation("DocumentReviewer")
-  resolvedRiskAlerts     RiskAlert[]             @relation("RiskResolver")
-  organizationInvites    OrganizationInvitation[] @relation("OrgInviteSender")
+  sessions              Session[]
+  beneficiaries         Beneficiary[]            @relation("BeneficiaryCreator")
+  createdTransfers      Transfer[]               @relation("TransferCreator")
+  reviewedTransfers     Transfer[]               @relation("TransferReviewer")
+  fxQuotes              FXQuote[]                @relation("FxQuoteCreator")
+  invoices              Invoice[]                @relation("InvoiceCreator")
+  quotes                Quote[]                  @relation("QuoteCreator")
+  invoicePayments       InvoicePayment[]         @relation("InvoicePaymentRecorder")
+  apiCredentials        ApiCredential[]          @relation("ApiCredentialCreator")
+  webhookSubscriptions  WebhookSubscription[]    @relation("WebhookCreator")
+  ddaOperations         DigitalAssetSimulation[] @relation("DdaCreator")
+  memberships           OrganizationMember[]
+  identityVerifications IdentityVerification[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]               @relation("AuditActor")
+  createdTransactions   Transaction[]            @relation("TransactionCreator")
+  uploadedDocuments     Document[]               @relation("DocumentUploader")
+  disputeMessages       DisputeMessage[]
+  disputeDecisions      DisputeDecision[]
+  riskAlerts            RiskAlert[]
+  parties               TransactionParty[]
+  contractAcceptances   ContractAcceptance[]
+  evidences             Evidence[]
+  assignedDisputes      Dispute[]                @relation("DisputeAssignee")
+  riskAlertActions      RiskAlertAction[]
+  transactionEvents     TransactionEvent[]
+  reviewedIdentities    IdentityVerification[]   @relation("IdentityReviewer")
+  reviewedBusinesses    BusinessVerification[]   @relation("BusinessReviewer")
+  reviewedDocuments     Document[]               @relation("DocumentReviewer")
+  resolvedRiskAlerts    RiskAlert[]              @relation("RiskResolver")
+  organizationInvites   OrganizationInvitation[] @relation("OrgInviteSender")
+  webAuthnCredentials   WebAuthnCredential[]
+  mfaRecoveryCodes      MfaRecoveryCode[]
+  assignedRiskAlerts    RiskAlert[]              @relation("RiskAssignee")
+  gateFirstApprovals    RegulatoryGate[]         @relation("GateFirstApprover")
+  gateSecondApprovals   RegulatoryGate[]         @relation("GateSecondApprover")
+  gateEvents            RegulatoryGateEvent[]    @relation("GateEventActor")
 
   @@index([globalRole])
   @@index([status])
@@ -248,22 +256,29 @@ model BusinessVerification {
 }
 
 model Counterparty {
-  id                   String   @id @default(uuid()) @db.Uuid
-  organizationId       String   @db.Uuid
-  name                 String
-  email                String?
-  phone                String?
-  country              String?  @db.Char(2)
-  notes                String?
-  linkedOrganizationId String?  @db.Uuid
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                          String                 @id @default(uuid()) @db.Uuid
+  organizationId              String                 @db.Uuid
+  name                        String
+  email                       String?
+  phone                       String?
+  country                     String?                @db.Char(2)
+  notes                       String?
+  linkedOrganizationId        String?                @db.Uuid
+  /// Consent workflow: a link is only effective once the target organisation accepts it.
+  linkStatus                  CounterpartyLinkStatus @default(NONE)
+  linkRequestedOrganizationId String?                @db.Uuid
+  linkRequestedAt             DateTime?
+  linkDecidedAt               DateTime?
+  linkDecidedByUserId         String?                @db.Uuid
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   invoices     Invoice[]
   quotes       Quote[]
 
   @@index([organizationId])
+  @@index([linkRequestedOrganizationId, linkStatus])
 }
 
 // ───────────────────────────── Diaspora Protect ─────────────────────────────
@@ -291,30 +306,30 @@ enum TransactionCategory {
 }
 
 model Transaction {
-  id                  String              @id @default(uuid()) @db.Uuid
-  reference           String              @unique
-  createdByUserId     String              @db.Uuid
-  buyerOrganizationId String              @db.Uuid
-  sellerOrganizationId String?            @db.Uuid
-  title               String
-  description         String
-  category            TransactionCategory @default(GOODS)
-  currencyCode        String              @db.Char(3)
-  amountMinor         BigInt
-  feeMinor            BigInt              @default(0)
-  feeBps              Int                 @default(150)
-  status              TransactionStatus   @default(DRAFT)
-  releaseFrozen       Boolean             @default(false)
-  originCountry       String              @db.Char(2)
-  destinationCountry  String              @db.Char(2)
-  acceptedAt          DateTime?
-  fundedAt            DateTime?
-  settledAt           DateTime?
-  cancelledAt         DateTime?
-  expiresAt           DateTime?
-  metadata            Json?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  id                   String              @id @default(uuid()) @db.Uuid
+  reference            String              @unique
+  createdByUserId      String              @db.Uuid
+  buyerOrganizationId  String              @db.Uuid
+  sellerOrganizationId String?             @db.Uuid
+  title                String
+  description          String
+  category             TransactionCategory @default(GOODS)
+  currencyCode         String              @db.Char(3)
+  amountMinor          BigInt
+  feeMinor             BigInt              @default(0)
+  feeBps               Int                 @default(150)
+  status               TransactionStatus   @default(DRAFT)
+  releaseFrozen        Boolean             @default(false)
+  originCountry        String              @db.Char(2)
+  destinationCountry   String              @db.Char(2)
+  acceptedAt           DateTime?
+  fundedAt             DateTime?
+  settledAt            DateTime?
+  cancelledAt          DateTime?
+  expiresAt            DateTime?
+  metadata             Json?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   createdBy          User          @relation("TransactionCreator", fields: [createdByUserId], references: [id])
   buyerOrganization  Organization  @relation("BuyerOrg", fields: [buyerOrganizationId], references: [id])
@@ -366,10 +381,10 @@ model TransactionParty {
   acceptedAt      DateTime?
   createdAt       DateTime    @default(now())
 
-  transaction  Transaction   @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  organization Organization? @relation(fields: [organizationId], references: [id])
-  user         User?         @relation(fields: [userId], references: [id])
-  acceptances  ContractAcceptance[]
+  transaction    Transaction          @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  organization   Organization?        @relation(fields: [organizationId], references: [id])
+  user           User?                @relation(fields: [userId], references: [id])
+  acceptances    ContractAcceptance[]
   openedDisputes Dispute[]
 
   @@unique([transactionId, role])
@@ -519,6 +534,10 @@ model Document {
   sha256           String
   storageKey       String         @unique
   encrypted        Boolean        @default(true)
+  /// Storage backend holding the encrypted blob ("local" or "s3").
+  storageDriver    String         @default("local")
+  /// Key-ring key id that sealed the blob (null = legacy DOCUMENT_ENCRYPTION_KEY).
+  encryptionKeyId  String?
   status           DocumentStatus @default(PENDING_REVIEW)
   reviewedById     String?        @db.Uuid
   reviewNote       String?
@@ -527,11 +546,11 @@ model Document {
   createdAt        DateTime       @default(now())
   deletedAt        DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  uploadedBy   User         @relation("DocumentUploader", fields: [uploadedByUserId], references: [id])
-  reviewedBy   User?        @relation("DocumentReviewer", fields: [reviewedById], references: [id])
-  transaction  Transaction? @relation(fields: [transactionId], references: [id])
-  evidences    Evidence[]
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  uploadedBy      User             @relation("DocumentUploader", fields: [uploadedByUserId], references: [id])
+  reviewedBy      User?            @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+  transaction     Transaction?     @relation(fields: [transactionId], references: [id])
+  evidences       Evidence[]
   disputeMessages DisputeMessage[]
 
   @@index([organizationId])
@@ -569,12 +588,12 @@ model Dispute {
   closedAt         DateTime?
   updatedAt        DateTime      @updatedAt
 
-  transaction  Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  openedBy     TransactionParty @relation(fields: [openedByPartyId], references: [id])
-  assignedTo   User?            @relation("DisputeAssignee", fields: [assignedToUserId], references: [id])
-  messages     DisputeMessage[]
-  decisions    DisputeDecision[]
-  evidences    Evidence[]
+  transaction Transaction       @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  openedBy    TransactionParty  @relation(fields: [openedByPartyId], references: [id])
+  assignedTo  User?             @relation("DisputeAssignee", fields: [assignedToUserId], references: [id])
+  messages    DisputeMessage[]
+  decisions   DisputeDecision[]
+  evidences   Evidence[]
 
   @@index([transactionId])
   @@index([status])
@@ -699,10 +718,10 @@ model LedgerAccount {
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
 
-  currency  Currency          @relation(fields: [currencyCode], references: [code])
-  entries   LedgerEntry[]
-  snapshots BalanceSnapshot[]
-  wallet    Wallet?
+  currency    Currency                   @relation(fields: [currencyCode], references: [code])
+  entries     LedgerEntry[]
+  snapshots   BalanceSnapshot[]
+  wallet      Wallet?
   differences ReconciliationDifference[]
 
   @@index([ownerType, ownerId])
@@ -1006,7 +1025,9 @@ model Transfer {
   rateDenominator                BigInt         @default(1)
   status                         TransferStatus @default(CREATED)
   purpose                        String?
-  /** Snapshot of the beneficiary at creation (masked identifier only). */
+  /**
+   * Snapshot of the beneficiary at creation (masked identifier only).
+   */
   beneficiary                    Json
   failureReason                  String?
   reviewReason                   String?
@@ -1087,6 +1108,8 @@ model Invoice {
   issueDate       DateTime      @default(now())
   dueDate         DateTime
   subtotalMinor   BigInt        @default(0)
+  /// Tax rate in basis points, persisted (never re-derived from rounded amounts).
+  taxBps          Int           @default(0)
   taxMinor        BigInt        @default(0)
   totalMinor      BigInt        @default(0)
   paidMinor       BigInt        @default(0)
@@ -1097,11 +1120,11 @@ model Invoice {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  createdBy    User          @relation("InvoiceCreator", fields: [createdByUserId], references: [id])
-  counterparty Counterparty? @relation(fields: [counterpartyId], references: [id])
-  transaction  Transaction?  @relation(fields: [transactionId], references: [id])
-  quote        Quote?        @relation(fields: [quoteId], references: [id])
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User             @relation("InvoiceCreator", fields: [createdByUserId], references: [id])
+  counterparty Counterparty?    @relation(fields: [counterpartyId], references: [id])
+  transaction  Transaction?     @relation(fields: [transactionId], references: [id])
+  quote        Quote?           @relation(fields: [quoteId], references: [id])
   lines        InvoiceLine[]
   payments     InvoicePayment[]
 
@@ -1160,6 +1183,7 @@ model Quote {
   currencyCode           String      @db.Char(3)
   validUntil             DateTime
   subtotalMinor          BigInt      @default(0)
+  taxBps                 Int         @default(0)
   taxMinor               BigInt      @default(0)
   totalMinor             BigInt      @default(0)
   notes                  String?
@@ -1204,6 +1228,9 @@ enum MaintenanceJobName {
   TRANSFER_PROCESSING
   WEBHOOK_RETRY
   INVOICE_OVERDUE
+  ENCRYPTION_KEY_ROTATION
+  REVIEW_SLA
+  AUTH_CLEANUP
 }
 
 enum MaintenanceRunStatus {
@@ -1221,6 +1248,9 @@ model MaintenanceRun {
   finishedAt  DateTime?
   summary     Json?
   error       String?
+  /// Replica that ran the job and its last heartbeat (distributed scheduler).
+  instanceId  String?
+  heartbeatAt DateTime?
 
   @@index([jobName, startedAt])
 }
@@ -1263,29 +1293,38 @@ enum RiskAlertStatus {
 }
 
 model RiskAlert {
-  id             String          @id @default(uuid()) @db.Uuid
-  userId         String?         @db.Uuid
-  organizationId String?         @db.Uuid
-  transactionId  String?         @db.Uuid
-  ruleCode       String
-  severity       RiskSeverity
-  score          Int
-  explanation    Json
-  status         RiskAlertStatus @default(OPEN)
-  resolvedById   String?         @db.Uuid
-  resolutionNote String?
-  resolvedAt     DateTime?
-  createdAt      DateTime        @default(now())
+  id               String          @id @default(uuid()) @db.Uuid
+  userId           String?         @db.Uuid
+  organizationId   String?         @db.Uuid
+  transactionId    String?         @db.Uuid
+  ruleCode         String
+  severity         RiskSeverity
+  score            Int
+  explanation      Json
+  status           RiskAlertStatus @default(OPEN)
+  resolvedById     String?         @db.Uuid
+  resolutionNote   String?
+  resolvedAt       DateTime?
+  /// Review queue: assignee, SLA deadline (from severity), first staff action, SLA breach marker.
+  assignedToUserId String?         @db.Uuid
+  assignedAt       DateTime?
+  dueAt            DateTime?
+  firstActionAt    DateTime?
+  slaBreachedAt    DateTime?
+  createdAt        DateTime        @default(now())
 
-  user         User?         @relation(fields: [userId], references: [id])
-  organization Organization? @relation(fields: [organizationId], references: [id])
-  transaction  Transaction?  @relation(fields: [transactionId], references: [id])
-  resolvedBy   User?         @relation("RiskResolver", fields: [resolvedById], references: [id])
+  user         User?             @relation(fields: [userId], references: [id])
+  organization Organization?     @relation(fields: [organizationId], references: [id])
+  transaction  Transaction?      @relation(fields: [transactionId], references: [id])
+  resolvedBy   User?             @relation("RiskResolver", fields: [resolvedById], references: [id])
+  assignedTo   User?             @relation("RiskAssignee", fields: [assignedToUserId], references: [id])
   actions      RiskAlertAction[]
 
   @@index([status, severity])
   @@index([transactionId])
   @@index([userId])
+  @@index([assignedToUserId, status])
+  @@index([status, dueAt])
 }
 
 model RiskAlertAction {
@@ -1451,23 +1490,148 @@ enum DdaOperation {
 }
 
 model DigitalAssetSimulation {
-  id                        String                @id @default(uuid()) @db.Uuid
-  reference                 String                @unique
-  organizationId            String                @db.Uuid
-  counterpartyOrganizationId String?              @db.Uuid
-  createdByUserId           String?               @db.Uuid
-  operation                 DdaOperation          @default(MINT)
-  unitsMinor                BigInt
-  reserveDeltaUsdMinor      BigInt                @default(0)
-  status                    DigitalAssetSimStatus @default(MINTED)
-  ledgerTransactionId       String?               @db.Uuid
-  note                      String?
-  metadata                  Json?
-  createdAt                 DateTime              @default(now())
+  id                         String                @id @default(uuid()) @db.Uuid
+  reference                  String                @unique
+  organizationId             String                @db.Uuid
+  counterpartyOrganizationId String?               @db.Uuid
+  createdByUserId            String?               @db.Uuid
+  operation                  DdaOperation          @default(MINT)
+  unitsMinor                 BigInt
+  reserveDeltaUsdMinor       BigInt                @default(0)
+  status                     DigitalAssetSimStatus @default(MINTED)
+  ledgerTransactionId        String?               @db.Uuid
+  note                       String?
+  metadata                   Json?
+  createdAt                  DateTime              @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   counterparty Organization? @relation("DdaCounterparty", fields: [counterpartyOrganizationId], references: [id])
   createdBy    User?         @relation("DdaCreator", fields: [createdByUserId], references: [id])
 
   @@index([organizationId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 6 — passkeys, MFA recovery, job leases, regulatory gates
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum WebAuthnChallengePurpose {
+  REGISTRATION
+  AUTHENTICATION
+  STEP_UP
+}
+
+/// WebAuthn / passkey credential (public key only; the private key never leaves the authenticator).
+model WebAuthnCredential {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  /// base64url credential id
+  credentialId String    @unique
+  publicKey    Bytes
+  counter      BigInt    @default(0)
+  transports   String[]
+  deviceType   String?
+  backedUp     Boolean   @default(false)
+  aaguid       String?
+  name         String
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Single-use WebAuthn challenge (registration, passwordless login or step-up).
+model AuthChallenge {
+  id        String                   @id @default(uuid()) @db.Uuid
+  userId    String?                  @db.Uuid
+  sessionId String?                  @db.Uuid
+  purpose   WebAuthnChallengePurpose
+  challenge String                   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime                 @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// MFA recovery code (hashed, single use).
+model MfaRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Distributed lease of a maintenance job: one replica at a time, renewed by heartbeat.
+model JobLease {
+  jobName     MaintenanceJobName @id
+  ownerId     String
+  runId       String?            @db.Uuid
+  acquiredAt  DateTime           @default(now())
+  heartbeatAt DateTime           @default(now())
+  expiresAt   DateTime
+}
+
+enum CounterpartyLinkStatus {
+  NONE
+  PENDING
+  ACCEPTED
+  DECLINED
+  REVOKED
+}
+
+enum RegulatoryGateStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PENDING_SECOND_APPROVAL
+  SATISFIED
+  REVOKED
+}
+
+/// Regulatory gate (ROADMAP §10, R1–R10). Tracking only: satisfying a gate never switches the
+/// platform out of sandbox — DFN_MODE stays "sandbox" in this code base.
+model RegulatoryGate {
+  code             String               @id
+  title            String
+  jurisdiction     String
+  referenceDoc     String
+  level            String
+  status           RegulatoryGateStatus @default(NOT_STARTED)
+  evidenceRef      String?
+  notes            String?
+  firstApproverId  String?              @db.Uuid
+  firstApprovedAt  DateTime?
+  secondApproverId String?              @db.Uuid
+  secondApprovedAt DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  firstApprover  User?                 @relation("GateFirstApprover", fields: [firstApproverId], references: [id])
+  secondApprover User?                 @relation("GateSecondApprover", fields: [secondApproverId], references: [id])
+  events         RegulatoryGateEvent[]
+}
+
+model RegulatoryGateEvent {
+  id          String                @id @default(uuid()) @db.Uuid
+  gateCode    String
+  actorUserId String                @db.Uuid
+  action      String
+  fromStatus  RegulatoryGateStatus?
+  toStatus    RegulatoryGateStatus
+  note        String?
+  createdAt   DateTime              @default(now())
+
+  gate  RegulatoryGate @relation(fields: [gateCode], references: [code], onDelete: Cascade)
+  actor User           @relation("GateEventActor", fields: [actorUserId], references: [id])
+
+  @@index([gateCode, createdAt])
 }

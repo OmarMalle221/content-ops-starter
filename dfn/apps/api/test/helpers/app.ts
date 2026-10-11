@@ -11,6 +11,12 @@ export interface TestContext {
 }
 
 const TABLES = [
+  'RegulatoryGateEvent',
+  'RegulatoryGate',
+  'JobLease',
+  'AuthChallenge',
+  'MfaRecoveryCode',
+  'WebAuthnCredential',
   'WebhookDelivery',
   'WebhookSubscription',
   'ApiRequestLog',

@@ -2,9 +2,10 @@ import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { authenticator } from 'otplib';
 import type { Request } from 'express';
-import { ErrorCode, type LoginInput, type RegisterInput } from '@dfn/shared';
+import { ErrorCode, type LoginInput, type RegisterInput, KeyPurpose } from '@dfn/shared';
 import { DomainError } from '../../common/domain-error';
-import { decryptString, encryptString, sha256Hex } from '../../common/crypto';
+import { sha256Hex } from '../../common/crypto';
+import { openString, sealString } from '../../common/keyring';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
@@ -156,7 +157,7 @@ export class AuthService {
     const secret = authenticator.generateSecret();
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { mfaSecretEnc: encryptString(this.env.DOCUMENT_ENCRYPTION_KEY, secret) },
+      data: { mfaSecretEnc: sealString(this.env, KeyPurpose.MFA, secret) },
     });
     const otpauthUrl = authenticator.keyuri(user.email, 'Diaspora Trust (sandbox)', secret);
     return { secret, otpauthUrl };
@@ -165,7 +166,7 @@ export class AuthService {
   async mfaEnable(auth: AuthContext, code: string, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (!user.mfaSecretEnc) throw DomainError.validation('Run MFA setup first');
-    const secret = decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, user.mfaSecretEnc);
+    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
     if (!authenticator.verify({ token: code, secret })) throw DomainError.validation('Invalid code');
     await this.prisma.user.update({ where: { id: user.id }, data: { mfaEnabled: true } });
     await this.sessions.markMfaVerified(auth.sessionId);
@@ -182,7 +183,7 @@ export class AuthService {
   async mfaVerify(auth: AuthContext, code: string, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (!user.mfaEnabled || !user.mfaSecretEnc) throw DomainError.validation('MFA is not enabled');
-    const secret = decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, user.mfaSecretEnc);
+    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
     if (!authenticator.verify({ token: code, secret })) {
       await this.audit.log({
         actorUserId: user.id,
@@ -207,7 +208,7 @@ export class AuthService {
   async mfaDisable(auth: AuthContext, code: string, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (!user.mfaEnabled || !user.mfaSecretEnc) throw DomainError.validation('MFA is not enabled');
-    const secret = decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, user.mfaSecretEnc);
+    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
     if (!authenticator.verify({ token: code, secret })) throw DomainError.validation('Invalid code');
     await this.prisma.user.update({
       where: { id: user.id },

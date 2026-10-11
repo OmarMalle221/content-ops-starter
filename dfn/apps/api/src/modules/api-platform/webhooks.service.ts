@@ -8,9 +8,11 @@ import {
   type SendTestWebhookInput,
   type UpdateWebhookInput,
   type WebhookDeliveriesQuery,
+  KeyPurpose,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
-import { encryptString, randomToken } from '../../common/crypto';
+import { randomToken } from '../../common/crypto';
+import { sealString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { paginate } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -61,7 +63,7 @@ export class WebhooksService {
   }
 
   private encrypt(secret: string) {
-    return encryptString(this.env.DOCUMENT_ENCRYPTION_KEY, secret);
+    return sealString(this.env, KeyPurpose.WEBHOOKS, secret);
   }
 
   async list(auth: AuthContext, query: ListWebhooksQuery) {

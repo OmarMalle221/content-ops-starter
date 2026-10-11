@@ -265,6 +265,9 @@ export const MaintenanceJobName = {
   TRANSFER_PROCESSING: 'TRANSFER_PROCESSING',
   WEBHOOK_RETRY: 'WEBHOOK_RETRY',
   INVOICE_OVERDUE: 'INVOICE_OVERDUE',
+  ENCRYPTION_KEY_ROTATION: 'ENCRYPTION_KEY_ROTATION',
+  REVIEW_SLA: 'REVIEW_SLA',
+  AUTH_CLEANUP: 'AUTH_CLEANUP',
 } as const;
 export type MaintenanceJobName = (typeof MaintenanceJobName)[keyof typeof MaintenanceJobName];
 
@@ -334,3 +337,54 @@ export const WebhookEventType = {
 } as const;
 export type WebhookEventType = (typeof WebhookEventType)[keyof typeof WebhookEventType];
 export const ALL_WEBHOOK_EVENTS = Object.values(WebhookEventType);
+
+// ── Phase 6 ──────────────────────────────────────────────────────────────────
+
+export const WebAuthnChallengePurpose = {
+  REGISTRATION: 'REGISTRATION',
+  AUTHENTICATION: 'AUTHENTICATION',
+  STEP_UP: 'STEP_UP',
+} as const;
+export type WebAuthnChallengePurpose = (typeof WebAuthnChallengePurpose)[keyof typeof WebAuthnChallengePurpose];
+
+export const CounterpartyLinkStatus = {
+  NONE: 'NONE',
+  PENDING: 'PENDING',
+  ACCEPTED: 'ACCEPTED',
+  DECLINED: 'DECLINED',
+  REVOKED: 'REVOKED',
+} as const;
+export type CounterpartyLinkStatus = (typeof CounterpartyLinkStatus)[keyof typeof CounterpartyLinkStatus];
+
+export const RegulatoryGateStatus = {
+  NOT_STARTED: 'NOT_STARTED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  PENDING_SECOND_APPROVAL: 'PENDING_SECOND_APPROVAL',
+  SATISFIED: 'SATISFIED',
+  REVOKED: 'REVOKED',
+} as const;
+export type RegulatoryGateStatus = (typeof RegulatoryGateStatus)[keyof typeof RegulatoryGateStatus];
+
+export const RegulatoryGateLevel = {
+  BLOCKING: 'BLOCKING',
+  STRONG: 'STRONG',
+  ABSOLUTE: 'ABSOLUTE',
+} as const;
+export type RegulatoryGateLevel = (typeof RegulatoryGateLevel)[keyof typeof RegulatoryGateLevel];
+
+/** Where encrypted document blobs live. */
+export const StorageDriver = { LOCAL: 'local', S3: 's3' } as const;
+export type StorageDriver = (typeof StorageDriver)[keyof typeof StorageDriver];
+
+/** How maintenance jobs are scheduled: one in-process timer, or BullMQ repeatable jobs on Redis. */
+export const JobsDriver = { INPROCESS: 'inprocess', BULLMQ: 'bullmq' } as const;
+export type JobsDriver = (typeof JobsDriver)[keyof typeof JobsDriver];
+
+/** Key-ring purposes: each kind of secret is sealed with its own key (rotation per purpose). */
+export const KeyPurpose = {
+  DOCUMENTS: 'documents',
+  MFA: 'mfa',
+  WEBHOOKS: 'webhooks',
+  BENEFICIARIES: 'beneficiaries',
+} as const;
+export type KeyPurpose = (typeof KeyPurpose)[keyof typeof KeyPurpose];

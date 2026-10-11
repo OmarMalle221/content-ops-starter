@@ -47,6 +47,9 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Traitement des transferts',
         WEBHOOK_RETRY: 'Relance des webhooks',
         INVOICE_OVERDUE: 'Factures en retard',
+        ENCRYPTION_KEY_ROTATION: 'Rotation des clés de chiffrement',
+        REVIEW_SLA: 'Délais de revue conformité',
+        AUTH_CLEANUP: 'Nettoyage de l’authentification',
       },
       descriptions: {
         BALANCE_SNAPSHOTS: 'Un instantané par compte de registre actif (ancre de la réconciliation).',
@@ -57,6 +60,9 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Fait progresser les transferts en traitement (simulation partenaire).',
         WEBHOOK_RETRY: 'Relance les livraisons de webhooks en échec.',
         INVOICE_OVERDUE: 'Marque les factures échues comme en retard.',
+        ENCRYPTION_KEY_ROTATION: 'Re-chiffre les secrets et documents scellés avec une clé retirée.',
+        REVIEW_SLA: 'Signale les alertes de risque dont le délai de revue est dépassé.',
+        AUTH_CLEANUP: 'Purge les défis WebAuthn expirés et les sessions échues.',
       },
     },
     account: {
@@ -129,6 +135,9 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Transfer processing',
         WEBHOOK_RETRY: 'Webhook retry',
         INVOICE_OVERDUE: 'Overdue invoices',
+        ENCRYPTION_KEY_ROTATION: 'Encryption key rotation',
+        REVIEW_SLA: 'Compliance review deadlines',
+        AUTH_CLEANUP: 'Authentication cleanup',
       },
       descriptions: {
         BALANCE_SNAPSHOTS: 'One snapshot per active ledger account (the reconciliation anchor).',
@@ -138,6 +147,9 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Advances transfers in processing (partner simulation).',
         WEBHOOK_RETRY: 'Retries failed webhook deliveries.',
         INVOICE_OVERDUE: 'Flags past-due invoices as overdue.',
+        ENCRYPTION_KEY_ROTATION: 'Re-encrypts sealed secrets and documents still using a retired key.',
+        REVIEW_SLA: 'Flags risk alerts whose review deadline has passed.',
+        AUTH_CLEANUP: 'Purges expired WebAuthn challenges and sessions.',
       },
     },
     account: {

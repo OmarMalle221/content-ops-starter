@@ -4,6 +4,11 @@ import { businessPart } from './i18n-parts/business';
 import { developersPart } from './i18n-parts/developers';
 import { ddaPart } from './i18n-parts/dda';
 import { jobsPart } from './i18n-parts/jobs';
+import { passkeysPart } from './i18n-parts/passkeys';
+import { reviewQueuePart } from './i18n-parts/reviews';
+import { gatesAdminPart } from './i18n-parts/gates';
+import { counterpartyLinksPart } from './i18n-parts/links';
+import { keysAdminPart } from './i18n-parts/keys';
 
 export type Locale = 'fr' | 'en';
 export const LOCALE_COOKIE = 'dfn_locale';
@@ -397,6 +402,8 @@ const baseFr = {
     transfers: 'Transferts',
     jobs: 'Tâches planifiées',
     dda: 'Laboratoire DDA',
+    gates: 'Portes réglementaires',
+    keys: 'Clés et stockage',
     note: 'Note',
     role: 'Rôle',
     riskActions: {
@@ -438,6 +445,11 @@ const fr = {
   ...developersPart.fr,
   ...ddaPart.fr,
   ...jobsPart.fr,
+  ...passkeysPart.fr,
+  ...reviewQueuePart.fr,
+  ...gatesAdminPart.fr,
+  ...counterpartyLinksPart.fr,
+  ...keysAdminPart.fr,
 };
 export type Dictionary = typeof fr;
 
@@ -829,6 +841,8 @@ const baseEn: typeof baseFr = {
     transfers: 'Transfers',
     jobs: 'Scheduled jobs',
     dda: 'DDA lab',
+    gates: 'Regulatory gates',
+    keys: 'Keys & storage',
     note: 'Note',
     role: 'Role',
     riskActions: {
@@ -867,6 +881,11 @@ const en: Dictionary = {
   ...developersPart.en,
   ...ddaPart.en,
   ...jobsPart.en,
+  ...passkeysPart.en,
+  ...reviewQueuePart.en,
+  ...gatesAdminPart.en,
+  ...counterpartyLinksPart.en,
+  ...keysAdminPart.en,
 };
 
 export const dictionaries: Record<Locale, Dictionary> = { fr, en };

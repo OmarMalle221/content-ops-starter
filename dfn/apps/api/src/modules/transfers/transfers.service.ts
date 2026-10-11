@@ -25,10 +25,12 @@ import {
   type CreateTransferInput,
   type ListTransfersQuery,
   type ReviewTransferInput,
+  KeyPurpose,
 } from '@dfn/shared';
 import type { RiskFacts } from '@dfn/compliance';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
-import { decryptString, randomToken } from '../../common/crypto';
+import { randomToken } from '../../common/crypto';
+import { openString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { DomainEventsBus } from '../../common/events/domain-events';
 import { paginate } from '../../common/pagination';
@@ -542,9 +544,7 @@ export class TransfersService {
       : { requireMfaForTransfers: true, transferAlerts: true, dailyTransferLimit: null };
     const mfaRequired = user.mfaEnabled && prefs.requireMfaForTransfers !== false;
     if (mfaRequired) {
-      const secret = user.mfaSecretEnc
-        ? decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, user.mfaSecretEnc)
-        : null;
+      const secret = user.mfaSecretEnc ? openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc) : null;
       if (!input.mfaCode || !secret || !authenticator.verify({ token: input.mfaCode, secret })) {
         throw new DomainError(
           ErrorCode.MFA_REQUIRED,

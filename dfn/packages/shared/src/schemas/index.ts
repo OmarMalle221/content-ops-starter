@@ -11,3 +11,8 @@ export * from './transfers';
 export * from './business';
 export * from './api-platform';
 export * from './dda';
+export * from './passkeys';
+export * from './reviews';
+export * from './gates';
+export * from './counterparty-links';
+export * from './storage';

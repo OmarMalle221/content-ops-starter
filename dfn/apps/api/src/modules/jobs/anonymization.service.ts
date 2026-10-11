@@ -1,7 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { Prisma } from '@dfn/database';
-import { encryptString, randomToken } from '../../common/crypto';
+import { randomToken } from '../../common/crypto';
+import { KeyPurpose } from '@dfn/shared';
+import { sealString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ENV, type Env } from '../../config/env';
@@ -137,10 +139,7 @@ export class AnonymizationService {
           name: ANONYMIZED_BENEFICIARY_NAME,
           phone: null,
           email: null,
-          accountIdentifierEnc: encryptString(
-            this.env.DOCUMENT_ENCRYPTION_KEY,
-            ANONYMIZED_ACCOUNT_IDENTIFIER,
-          ),
+          accountIdentifierEnc: sealString(this.env, KeyPurpose.BENEFICIARIES, ANONYMIZED_ACCOUNT_IDENTIFIER),
           accountIdentifierMasked: ANONYMIZED_ACCOUNT_IDENTIFIER_MASKED,
           status: 'REMOVED',
         },

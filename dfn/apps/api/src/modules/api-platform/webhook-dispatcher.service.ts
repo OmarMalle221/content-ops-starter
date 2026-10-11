@@ -2,8 +2,8 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { randomUUID } from 'node:crypto';
 import { Prisma, type WebhookDelivery, type WebhookSubscription } from '@dfn/database';
 import { signPayload } from '@dfn/payment-adapters';
-import { ALL_WEBHOOK_EVENTS } from '@dfn/shared';
-import { decryptString } from '../../common/crypto';
+import { ALL_WEBHOOK_EVENTS, KeyPurpose } from '@dfn/shared';
+import { openString } from '../../common/keyring';
 import { DomainEventsBus, type DomainEvent } from '../../common/events/domain-events';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ENV, type Env } from '../../config/env';
@@ -156,7 +156,7 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
       // re-pointed) to a private address is refused even if it passed the lexical check at creation.
       const unsafe = await unsafeDestinationReason(subscription.url, this.env.NODE_ENV);
       if (unsafe) throw new Error(`Destination refused: ${unsafe}`);
-      const secret = decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, subscription.secretEnc);
+      const secret = openString(this.env, KeyPurpose.WEBHOOKS, subscription.secretEnc);
       signature = signatureHeader(secret, timestamp, rawBody);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.env.WEBHOOK_TIMEOUT_MS);

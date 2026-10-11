@@ -17,6 +17,8 @@ export function AdminTabs({ role }: { role: string }) {
     { href: '/admin/ledger', key: 'admin.ledger' },
     { href: '/admin/audit', key: 'admin.audit' },
     { href: '/admin/jobs', key: 'admin.jobs' },
+    { href: '/admin/gates', key: 'admin.gates' },
+    ...(role === 'ADMIN' ? [{ href: '/admin/keys', key: 'admin.keys' }] : []),
     ...(role === 'ADMIN' ? [{ href: '/admin/dda', key: 'admin.dda' }] : []),
   ];
   return (

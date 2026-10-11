@@ -30,6 +30,17 @@ export const Permission = {
   ADMIN_TRANSFERS: 'admin:transfers',
   ADMIN_JOBS: 'admin:jobs',
   ADMIN_DDA: 'admin:dda',
+  // Phase 6
+  /** Accept or decline a counterparty link request addressed to the organisation. */
+  ORG_LINK_DECIDE: 'org:link_decide',
+  /** Read the regulatory gates register (R1–R10). */
+  ADMIN_GATES_VIEW: 'admin:gates_view',
+  /** Update / approve regulatory gates (two distinct approvers required to satisfy a gate). */
+  ADMIN_GATES_MANAGE: 'admin:gates_manage',
+  /** Staff write access inside a tenant (support actions); staff are read-only by default. */
+  ADMIN_SUPPORT_WRITE: 'admin:support_write',
+  /** Key ring status and re-encryption (key rotation) operations. */
+  ADMIN_KEYS: 'admin:keys',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 
@@ -49,6 +60,7 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.TRANSFER_AUTHORIZE,
     Permission.INVOICE_MANAGE,
     Permission.API_MANAGE,
+    Permission.ORG_LINK_DECIDE,
   ],
   ADMIN: [
     Permission.TRANSACTION_CREATE,
@@ -64,6 +76,7 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.TRANSFER_AUTHORIZE,
     Permission.INVOICE_MANAGE,
     Permission.API_MANAGE,
+    Permission.ORG_LINK_DECIDE,
   ],
   MEMBER: [
     Permission.TRANSACTION_CREATE,
@@ -88,6 +101,7 @@ export const GLOBAL_ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     Permission.ADMIN_LEDGER,
     Permission.ADMIN_TRANSFERS,
     Permission.ADMIN_JOBS,
+    Permission.ADMIN_GATES_VIEW,
   ],
   ADMIN: [
     Permission.ADMIN_USERS,
@@ -100,6 +114,10 @@ export const GLOBAL_ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     Permission.ADMIN_TRANSFERS,
     Permission.ADMIN_JOBS,
     Permission.ADMIN_DDA,
+    Permission.ADMIN_GATES_VIEW,
+    Permission.ADMIN_GATES_MANAGE,
+    Permission.ADMIN_SUPPORT_WRITE,
+    Permission.ADMIN_KEYS,
   ],
 };
 
