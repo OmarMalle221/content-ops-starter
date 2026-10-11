@@ -7,6 +7,8 @@ import { api, errorMessage } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 import { FormMessage } from '@/components/form-message';
 
+const DOCUMENT_TYPES = ['PASSPORT', 'NATIONAL_ID', 'DRIVER_LICENSE', 'RESIDENCE_PERMIT'] as const;
+
 export function IdentityVerificationForm({ compact = false }: { compact?: boolean }) {
   const { t, locale } = useI18n();
   const router = useRouter();
@@ -36,10 +38,11 @@ export function IdentityVerificationForm({ compact = false }: { compact?: boolea
       <div className="space-y-2">
         <Label htmlFor="documentType">{t('settings.documentType')}</Label>
         <Select id="documentType" value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
-          <option value="PASSPORT">Passeport / Passport</option>
-          <option value="NATIONAL_ID">Carte d’identité / National ID</option>
-          <option value="DRIVER_LICENSE">Permis de conduire / Driver licence</option>
-          <option value="RESIDENCE_PERMIT">Titre de séjour / Residence permit</option>
+          {DOCUMENT_TYPES.map((x) => (
+            <option key={x} value={x}>
+              {t(`settings.documentTypes.${x}`)}
+            </option>
+          ))}
         </Select>
       </div>
       <div className="space-y-2">

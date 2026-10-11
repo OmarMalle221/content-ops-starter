@@ -10,6 +10,8 @@ export const lineItemSchema = z.object({
 export type LineItemInput = z.infer<typeof lineItemSchema>;
 
 const documentBase = {
+  /** Issuing organisation; defaults to the caller's personal workspace (see resolveActingOrganization). */
+  organizationId: z.string().uuid().optional(),
   counterpartyId: z.string().uuid().optional(),
   customerName: z.string().trim().min(1).max(160),
   customerEmail: emailSchema.optional(),
@@ -34,8 +36,18 @@ export const recordInvoicePaymentSchema = z.object({
   method: z.nativeEnum(InvoicePaymentMethod).default(InvoicePaymentMethod.EXTERNAL_RECORDED),
   reference: z.string().trim().max(120).optional(),
   paidAt: z.string().datetime().optional(),
+  /** WALLET_SIMULATED only: the paying organisation (must be the counterparty's linked organisation). */
+  organizationId: z.string().uuid().optional(),
 });
 export type RecordInvoicePaymentInput = z.infer<typeof recordInvoicePaymentSchema>;
+
+/** Cancelling an invoice or declining a quote may carry a short reason. */
+export const cancelDocumentSchema = z.object({ reason: z.string().trim().max(500).optional() });
+export type CancelDocumentInput = z.infer<typeof cancelDocumentSchema>;
+
+/** Accepting / declining a quote is recorded by the issuer on behalf of the customer. */
+export const quoteDecisionSchema = z.object({ note: z.string().trim().max(500).optional() });
+export type QuoteDecisionInput = z.infer<typeof quoteDecisionSchema>;
 
 export const createQuoteSchema = z.object({
   ...documentBase,
@@ -76,3 +88,17 @@ export const listDocumentsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
+export type ListDocumentsQuery = z.infer<typeof listDocumentsQuerySchema>;
+
+/**
+ * Organisation-scoped listing. ISSUED = documents issued by the organisation (default);
+ * RECEIVED = invoices addressed to a counterparty linked to the organisation (customer view).
+ */
+export const listBusinessDocumentsQuerySchema = listDocumentsQuerySchema.extend({
+  organizationId: z.string().uuid().optional(),
+  scope: z.enum(['ISSUED', 'RECEIVED']).default('ISSUED'),
+});
+export type ListBusinessDocumentsQuery = z.infer<typeof listBusinessDocumentsQuerySchema>;
+
+export const businessOrganizationQuerySchema = z.object({ organizationId: z.string().uuid() });
+export type BusinessOrganizationQuery = z.infer<typeof businessOrganizationQuerySchema>;

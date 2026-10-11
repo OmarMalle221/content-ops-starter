@@ -179,4 +179,124 @@ export const riskRules: RiskRule[] = [
       };
     },
   },
+  // ───────────────────────────── Diaspora Transfer (Phase 4) ──────────────────
+  {
+    code: 'TRANSFER_VELOCITY',
+    description: 'Unusual number of transfers initiated by the organisation in 24 hours',
+    appliesTo: ['transfer.created', 'transfer.authorized'],
+    evaluate(f) {
+      if (f.transfersLast24h === undefined || f.transfersLast24h < 5) return null;
+      const high = f.transfersLast24h >= 10;
+      return {
+        ruleCode: this.code,
+        severity: high ? 'HIGH' : 'MEDIUM',
+        score: high ? 35 : 15,
+        explanation: {
+          summary: `${f.transfersLast24h} transfers initiated in the last 24 hours`,
+          factors: {
+            transfersLast24h: f.transfersLast24h,
+            transfersAmountLast24hMinor: f.transfersAmountLast24hMinor?.toString() ?? null,
+            currencyCode: f.currencyCode ?? null,
+          },
+          recommendation:
+            'Check for structuring (smurfing) or account takeover before further transfers settle.',
+        },
+      };
+    },
+  },
+  {
+    code: 'NEW_BENEFICIARY_HIGH_VALUE',
+    description: 'Large transfer to a beneficiary added less than 24 hours ago',
+    appliesTo: ['transfer.created', 'transfer.authorized'],
+    evaluate(f) {
+      if (f.beneficiaryAgeHours === undefined || f.amountMinor === undefined || !f.currencyCode) return null;
+      const threshold = HIGH_VALUE_THRESHOLDS_MINOR[f.currencyCode];
+      if (!threshold || f.beneficiaryAgeHours >= 24 || f.amountMinor < threshold / 2n) return null;
+      return {
+        ruleCode: this.code,
+        severity: 'MEDIUM',
+        score: 20,
+        explanation: {
+          summary: 'High-value transfer to a beneficiary registered less than 24 hours ago',
+          factors: {
+            beneficiaryAgeHours: f.beneficiaryAgeHours,
+            amountMinor: f.amountMinor.toString(),
+            currencyCode: f.currencyCode,
+            destinationCountry: f.destinationCountry ?? null,
+          },
+          recommendation:
+            'Confirm the beneficiary with the sender through a second channel before settlement.',
+        },
+      };
+    },
+  },
+  {
+    code: 'BENEFICIARY_CHURN',
+    description: 'Many beneficiaries added or removed within 24 hours',
+    appliesTo: ['beneficiary.changed'],
+    evaluate(f) {
+      if (f.beneficiaryChangesLast24h === undefined || f.beneficiaryChangesLast24h < 3) return null;
+      return {
+        ruleCode: this.code,
+        severity: 'MEDIUM',
+        score: 15,
+        explanation: {
+          summary: `${f.beneficiaryChangesLast24h} beneficiary changes in the last 24 hours`,
+          factors: { beneficiaryChangesLast24h: f.beneficiaryChangesLast24h },
+          recommendation: 'Possible account takeover: verify recent sign-ins and contact the organisation.',
+        },
+      };
+    },
+  },
+  {
+    code: 'UNVERIFIED_TRANSFER',
+    description: 'High-value transfer authorised while identity verification is incomplete',
+    appliesTo: ['transfer.authorized'],
+    evaluate(f) {
+      if (f.amountMinor === undefined || !f.currencyCode || f.identityVerified !== false) return null;
+      const threshold = HIGH_VALUE_THRESHOLDS_MINOR[f.currencyCode];
+      if (!threshold || f.amountMinor < threshold) return null;
+      return {
+        ruleCode: this.code,
+        severity: 'HIGH',
+        score: 45,
+        explanation: {
+          summary: 'High-value transfer authorised by a user whose identity verification is incomplete',
+          factors: {
+            amountMinor: f.amountMinor.toString(),
+            currencyCode: f.currencyCode,
+            identityVerified: false,
+            destinationCountry: f.destinationCountry ?? null,
+          },
+          recommendation: 'Hold the transfer for manual review and require identity verification.',
+        },
+      };
+    },
+  },
+  {
+    code: 'TRANSFER_DRAINS_WALLET',
+    description: 'Transfer that empties (almost) the whole wallet balance',
+    appliesTo: ['transfer.created', 'transfer.authorized'],
+    evaluate(f) {
+      if (f.walletBalanceMinor === undefined || f.amountMinor === undefined || !f.currencyCode) return null;
+      const threshold = HIGH_VALUE_THRESHOLDS_MINOR[f.currencyCode];
+      if (!threshold || f.walletBalanceMinor <= 0n || f.amountMinor < threshold / 2n) return null;
+      // amount ≥ 90 % of the balance, computed in integers.
+      if (f.amountMinor * 100n < f.walletBalanceMinor * 90n) return null;
+      return {
+        ruleCode: this.code,
+        severity: 'LOW',
+        score: 5,
+        explanation: {
+          summary: 'Transfer amount is at least 90 % of the wallet balance',
+          factors: {
+            amountMinor: f.amountMinor.toString(),
+            walletBalanceMinor: f.walletBalanceMinor.toString(),
+            currencyCode: f.currencyCode,
+          },
+          recommendation: 'Monitor; combined with other signals this may indicate an exit scam or takeover.',
+        },
+      };
+    },
+  },
 ];

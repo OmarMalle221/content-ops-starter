@@ -36,4 +36,6 @@ export const createCounterpartySchema = z.object({
   phone: z.string().trim().max(30).optional(),
   country: countrySchema.optional(),
   notes: z.string().trim().max(1000).optional(),
+  /** Optional link to a DFN organisation (enables wallet-to-wallet invoice payments). */
+  linkedOrganizationId: z.string().uuid().optional(),
 });

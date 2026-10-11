@@ -752,6 +752,9 @@ model LedgerEntry {
   direction           BalanceSide
   amountMinor         BigInt
   currencyCode        String      @db.Char(3)
+  /// Monotonic insertion sequence (commit order under the account lock): snapshots and
+  /// reconciliation partition entries on it, never on timestamps.
+  seq                 BigInt      @unique @default(autoincrement())
   createdAt           DateTime    @default(now())
 
   ledgerTransaction LedgerTransaction @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
@@ -767,6 +770,8 @@ model BalanceSnapshot {
   accountId    String   @db.Uuid
   balanceMinor BigInt
   entryCount   Int
+  /// Highest LedgerEntry.seq included in this snapshot (null for legacy snapshots).
+  lastSeq      BigInt?
   asOf         DateTime @default(now())
 
   account LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)

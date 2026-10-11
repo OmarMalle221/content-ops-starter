@@ -37,12 +37,13 @@ export function UserStatusButton({ user }: { user: any }) {
 }
 
 export function UserRoleSelect({ user }: { user: any }) {
+  const { t } = useI18n();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   return (
     <div>
       <Select
-        aria-label="Role"
+        aria-label={t('admin.role')}
         className="h-8 w-36 text-xs"
         value={user.globalRole}
         onChange={(e) =>
@@ -94,6 +95,7 @@ export function ReviewVerificationButtons({ id }: { id: string }) {
 }
 
 export function RiskAlertActions({ alert }: { alert: any }) {
+  const { t } = useI18n();
   const router = useRouter();
   const [note, setNote] = useState('');
   const options =
@@ -109,10 +111,10 @@ export function RiskAlertActions({ alert }: { alert: any }) {
           key={action}
           trigger={
             <Button size="sm" variant={action === 'CONFIRM' ? 'destructive' : 'outline'}>
-              {action.replace('_', ' ')}
+              {t(`admin.riskActions.${action}`)}
             </Button>
           }
-          title={`${action} — ${alert.ruleCode}`}
+          title={`${t(`admin.riskActions.${action}`)} — ${alert.ruleCode}`}
           disabled={note.trim().length < 3}
           onConfirm={() =>
             api(`/v1/admin/risk-alerts/${alert.id}/actions`, { method: 'POST', json: { action, note } }).then(
@@ -121,7 +123,7 @@ export function RiskAlertActions({ alert }: { alert: any }) {
           }
         >
           <div className="space-y-2">
-            <Label htmlFor={`note-${alert.id}`}>Note</Label>
+            <Label htmlFor={`note-${alert.id}`}>{t('admin.note')}</Label>
             <Textarea id={`note-${alert.id}`} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </ActionDialog>
@@ -159,8 +161,10 @@ export function ReconcileButton() {
         <p
           className={`text-sm ${result.differences.length || result.unbalancedTransactions.length ? 'text-destructive' : 'text-success'}`}
         >
-          {result.accountsChecked} accounts · {result.differences.length} differences ·{' '}
-          {result.unbalancedTransactions.length} unbalanced
+          {t('admin.reconcileResult')
+            .replace('{accounts}', String(result.accountsChecked))
+            .replace('{differences}', String(result.differences.length))
+            .replace('{unbalanced}', String(result.unbalancedTransactions.length))}
         </p>
       ) : null}
       <FormMessage error={error} />

@@ -103,6 +103,16 @@ Règles complémentaires :
 - Réponse `429 RATE_LIMITED` avec `Retry-After`.
 - Expiration automatique des invitations et des demandes de financement ; jetons d'invitation à usage unique.
 - Idempotence : `LedgerTransaction.idempotencyKey`, `ProviderEvent.idempotencyKey` (uniques) ; un rejeu renvoie le résultat initial sans effet.
+- Clés API partenaires : limitation de débit **par clé** (fenêtre glissante d'une minute, `rateLimitPerMinute`, en-têtes `X-RateLimit-*` et `Retry-After`), journal `ApiRequestLog` de chaque appel y compris les refus (401 / 403 / 429).
+- En-tête `Idempotency-Key` sur toute mutation : empreinte méthode + chemin + corps canonique, rejeu de la réponse initiale (`Idempotent-Replayed: true`), refus d'une réutilisation avec un corps différent (`IDEMPOTENCY_KEY_REUSED`), verrou de requête en cours (`IDEMPOTENCY_IN_PROGRESS`), expiration `IDEMPOTENCY_TTL_HOURS`.
+- Dépôts sandbox libre-service plafonnés par organisation, devise et jour (`SANDBOX_SELF_DEPOSIT_DAILY_LIMIT`) ; plafond quotidien de transfert par utilisateur (`DAILY_LIMIT_EXCEEDED`) et MFA exigée à l'autorisation selon les préférences de sécurité.
+- Webhooks sortants : adresses privées / locales refusées (anti-SSRF lexical), redirections non suivies, délai `WEBHOOK_TIMEOUT_MS`, tentatives exponentielles bornées (`WEBHOOK_MAX_ATTEMPTS`), désactivation après 50 échecs consécutifs.
+
+### Clés API partenaires
+
+- Format `dfn_sk_<préfixe>_<32 octets aléatoires>` ; seul le préfixe et le hachage SHA-256 sont stockés ; le secret est affiché une seule fois (création ou rotation).
+- Le contexte d'une clé est un **membre** de l'organisation émettrice, jamais un rôle staff ; les routes d'authentification, d'administration, de simulation et de gestion des clés sont inaccessibles par clé (`SCOPE_FORBIDDEN`), les autres exigent un scope explicite (`api-scopes.ts`, refus par défaut pour toute nouvelle route).
+- Expiration, rotation et révocation journalisées dans `AuditLog` et notifiées aux propriétaires de l'organisation.
 
 ## 9. Journalisation structurée sans données sensibles
 
@@ -114,7 +124,8 @@ Règles complémentaires :
 ## 10. Piste d'audit
 
 - `AuditLog` : acteur, organisation, action, type et identifiant d'entité, IP, user-agent, métadonnées ; indexé par entité, acteur, organisation et date.
-- `TransactionEvent` : historique métier immuable de chaque transaction (`TransactionEventType`).
+- `TransactionEvent` / `TransferEvent` : historique métier immuable de chaque transaction et de chaque transfert.
+- `ApiRequestLog`, `WebhookDelivery`, `MaintenanceRun`, `DigitalAssetSimulation` : traçabilité des appels par clé, des livraisons sortantes, des tâches planifiées et des opérations de recherche DDA.
 - `RiskAlertAction`, `DisputeDecision`, `DisputeMessage`, `ContractAcceptance` : décisions et consentements horodatés, jamais modifiés.
 - Les lignes d'audit ne sont ni modifiables ni supprimables par l'application ; la purge suit la politique de rétention et se fait par anonymisation.
 
@@ -124,7 +135,8 @@ Règles complémentaires :
 - Secrets critiques : `SESSION_SECRET`, `DOCUMENT_ENCRYPTION_KEY`, `DATABASE_URL`, `REDIS_URL`, futurs `KYC_PROVIDER_API_KEY`, `SANCTIONS_PROVIDER_API_KEY`, `SMTP_URL`.
 - L'API refuse de démarrer si `SESSION_SECRET` ou `DOCUMENT_ENCRYPTION_KEY` conservent leur valeur d'exemple hors `NODE_ENV=development`.
 - Rotation : procédure documentée (double clé pendant la transition pour le chiffrement des documents : déchiffrement avec l'ancienne, chiffrement avec la nouvelle, re-chiffrement en tâche de fond).
-- Secrets des webhooks (`WebhookSubscription.secretEnc`) et des clés API (`keyHash`) : jamais stockés en clair.
+- Secrets des webhooks (`WebhookSubscription.secretEnc`, chiffrés AES-256-GCM) et des clés API (`keyHash`, SHA-256) : jamais stockés en clair ni réaffichés ; identifiants de bénéficiaires chiffrés (`accountIdentifierEnc`) et masqués en lecture.
+- Anonymisation des comptes supprimés (`ANONYMIZE_DELETED`) : e-mail, nom, téléphone, secret MFA, mot de passe (remplacé par un hachage aléatoire), préférences et données déclarées KYC sont écrasés ; sessions révoquées ; registre, événements et audit conservés, liés à l'identifiant technique.
 
 ## 12. Sauvegardes et restauration
 
@@ -145,13 +157,14 @@ Règles complémentaires :
 
 ## 14. Stratégie de tests de sécurité
 
-| Niveau                  | Contenu                                                                                                                                                                               | Outils                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| Unitaires               | `validateEntries`, `computeFeeMinor`, machines à états, moteur de risque, signature HMAC, hachage de contrat                                                                          | vitest                                     |
-| Intégration API         | Gardes RBAC (chaque permission × chaque rôle), isolation 404, CSRF/Origin, verrouillage, MFA, rejeu de webhook, validation des téléversements                                         | vitest + supertest sur `TEST_DATABASE_URL` |
-| Concurrence du registre | N libérations simultanées d'un même séquestre ; N confirmations du même financement ; vérification qu'aucun solde interdit ne devient négatif et qu'une seule écriture par clé existe | tests dédiés `packages/financial-ledger`   |
-| e2e                     | Scénario à 12 étapes et scénario de litige, vérification du bandeau sandbox sur chaque page                                                                                           | Playwright                                 |
-| Manuel / externe        | Test d'intrusion indépendant avant toute phase live (porte R8)                                                                                                                        | —                                          |
+| Niveau                  | Contenu                                                                                                                                                                                                                                                                         | Outils                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Unitaires               | `validateEntries`, `computeFeeMinor`, machines à états, moteur de risque, signature HMAC, hachage de contrat                                                                                                                                                                    | vitest                                                                                         |
+| Intégration API         | Gardes RBAC (chaque permission × chaque rôle), isolation 404, CSRF/Origin, verrouillage, MFA, rejeu de webhook, validation des téléversements                                                                                                                                   | vitest + supertest sur `TEST_DATABASE_URL`                                                     |
+| Concurrence du registre | N libérations simultanées d'un même séquestre ; N confirmations du même financement ; vérification qu'aucun solde interdit ne devient négatif et qu'une seule écriture par clé existe                                                                                           | tests dédiés `packages/financial-ledger`                                                       |
+| Intégration phases 3–5  | Plafonds et MFA des transferts, revue conformité, isolation des bénéficiaires et factures, verrou des tâches, suppression / anonymisation, scopes et quotas par clé API, idempotence (rejeu, réutilisation, concurrence), signature et relances des webhooks, lignes rouges DDA | vitest + supertest (`apps/api/test/{wallet,jobs,transfers,business,api-platform,dda}.test.ts`) |
+| e2e                     | Scénario à 12 étapes et scénario de litige, vérification du bandeau sandbox sur chaque page                                                                                                                                                                                     | Playwright                                                                                     |
+| Manuel / externe        | Test d'intrusion indépendant avant toute phase live (porte R8)                                                                                                                                                                                                                  | —                                                                                              |
 
 ## 15. Séparation sandbox / production — le garde `DFN_MODE`
 
@@ -159,22 +172,38 @@ Le dépôt ne contient **aucun chemin de production**. La séparation est appliq
 
 1. **Démarrage** : l'API lit `DFN_MODE` et refuse de démarrer (`process.exit(1)` avec message explicite) pour toute valeur autre que `sandbox`. Il n'existe pas de valeur `production` reconnue dans cette base de code.
 2. **Réponses** : chaque réponse HTTP porte l'en-tête `x-dfn-mode: sandbox` ; la description OpenAPI contient le disclaimer. Le front lit `NEXT_PUBLIC_DFN_MODE` et affiche le bandeau « Données fictives — Aucun fonds réel » sur toutes les pages, sans possibilité de le fermer.
-3. **Fabriques d'adaptateurs** : `createPaymentProvider`, `createKycProvider`, `createSanctionsProvider` lèvent une exception pour tout code autre que `sandbox` / `sandbox_partner`. Ajouter un adaptateur réel exige du code nouveau, une revue, et les portes réglementaires de `ROADMAP.md` §9.
+3. **Fabriques d'adaptateurs** : `createPaymentProvider`, `createKycProvider`, `createSanctionsProvider`, `createFxRateProvider` lèvent une exception pour tout code autre que `sandbox` / `sandbox_partner`. Ajouter un adaptateur réel exige du code nouveau, une revue, et les portes réglementaires de `ROADMAP.md` §10.
 4. **Données** : `PaymentProvider.mode` connaît `LIVE` pour préparer le schéma, mais aucun enregistrement `LIVE` n'est créé par le seed ni accepté par les fabriques ; `IdentityVerification.provider = "sandbox"`.
 5. **Vocabulaire** : statuts `SIMULATED_PASS` / `SIMULATED_FAIL`, `CLEAR_SIMULATED`, `EXECUTED_SIMULATED`, méthodes `BANK_TRANSFER_SIMULATED` / `WALLET_SIMULATED`, instructions contenant « Do not send money ». Aucune interface ne peut afficher un résultat simulé comme réel sans réécrire ces types.
-6. **Privilèges** : la simulation du partenaire (`sandbox:partner_simulate`, dépôts sandbox) est réservée au rôle global `ADMIN` et journalisée.
-7. **Gouvernance** : toute modification du garde ou des fabriques requiert deux approbateurs et une mise à jour de `AUTHORIZATIONS_CHECKLIST.md`.
+6. **Privilèges** : la simulation du partenaire (`sandbox:partner_simulate`, dépôts sandbox administrés, événements de règlement de transfert) est réservée au rôle global `ADMIN` et journalisée ; le dépôt libre-service est plafonné et audité.
+7. **DDA** : la devise `DDA` est de type `SIMULATED_ASSET`, les routes `v1/admin/dda/*` exigent `ADMIN_DDA` (rôle `ADMIN`), chaque réponse porte `simulated: true` et l'hypothèse « 1 DDA = 1 USD non garantie », et une écriture `DDA` ↔ fiat est structurellement impossible (une devise par écriture). Aucune conversion, aucun jeton, aucune émission.
+8. **Gouvernance** : toute modification du garde ou des fabriques requiert deux approbateurs et une mise à jour de `AUTHORIZATIONS_CHECKLIST.md`.
 
-## 16. Risques résiduels et prochaines étapes
+## 16. Revue adversariale (phases 3–5)
 
-| Risque résiduel                                                               | Niveau                                  | Mitigation prévue                                               |
-| ----------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| Stockage local des documents (`STORAGE_DIR`) sans HSM/KMS                     | Moyen                                   | Migration S3 + KMS (Phase 3), rotation de clé                   |
-| Absence de passkeys / de codes de récupération MFA                            | Moyen                                   | Phase 3                                                         |
-| Pas d'antivirus sur les téléversements                                        | Moyen                                   | Scan asynchrone en file BullMQ                                  |
-| Limitation de débit en mémoire si Redis absent (déploiements multi-instances) | Faible en sandbox                       | Redis obligatoire hors développement                            |
-| Pas de test d'intrusion indépendant                                           | Élevé avant live, acceptable en sandbox | Porte R8                                                        |
-| Données personnelles réelles des testeurs                                     | Moyen                                   | Jeux de données fictifs, rétention courte, `DATA_PROTECTION.md` |
-| Dépendance au secret unique `DOCUMENT_ENCRYPTION_KEY` pour documents et MFA   | Moyen                                   | Séparation en deux clés et KMS (Phase 3)                        |
+Trois relectures indépendantes (sécurité applicative, invariants comptables, règles produit sandbox) ont été menées sur le code des phases 3 à 5 avant fusion. Corrections appliquées : garde anti-SSRF réécrit (analyse réelle des adresses IPv4/IPv6, formes IPv4-mappées, résolution DNS à l'envoi), secrets exclus du magasin d'idempotence (`@SkipIdempotency`), contre-vérification du sur-paiement des factures sous verrou de ligne, événement partenaire prématuré ne consommant plus la clé d'idempotence du règlement, expiration des devis et plafond quotidien revérifiés sous verrou, instantanés de solde pris sous verrou de compte et réconciliation partitionnée sur `LedgerEntry.seq`, neutralisation des formules dans les exports CSV, lien explicite de contrepartie restreint aux organisations du demandeur, blocages de suppression de compte étendus (transferts, factures, clés API) et anonymisation des bénéficiaires / contreparties / courriels clients, baisse des protections de sécurité soumise à un code TOTP, clés API invalidées lorsque leur créateur quitte l'organisation, motifs de revue conformité réservés au staff, et une douzaine de corrections d'interface (boutons inertes, hydratation, traductions, règles métier côté client). Les points non corrigés figurent dans le tableau ci-dessous.
+
+## 17. Risques résiduels et prochaines étapes
+
+| Risque résiduel                                                                                                        | Niveau                                  | Mitigation prévue                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------- |
+| Stockage local des documents (`STORAGE_DIR`) sans HSM/KMS                                                              | Moyen                                   | Migration S3 + KMS (Phase 6), rotation de clé                                         |
+| Absence de passkeys / de codes de récupération MFA                                                                     | Moyen                                   | Phase 6                                                                               |
+| Pas d'antivirus sur les téléversements                                                                                 | Moyen                                   | Scan asynchrone en file BullMQ                                                        |
+| Limitation de débit en mémoire (throttler sans Redis, quotas par clé API, `lastUsedAt`) — déploiements multi-instances | Faible en sandbox                       | Redis obligatoire hors développement ; magasin partagé pour les quotas par clé        |
+| Planificateur de tâches en mémoire (une seule réplique doit activer `JOBS_ENABLED`)                                    | Faible en sandbox                       | Passage à BullMQ avec verrou Redis (Phase 6)                                          |
+| Garde anti-SSRF lexical (pas de résolution DNS ; désactivé en `NODE_ENV=test`)                                         | Moyen                                   | Résolution DNS + liste d'autorisation d'adresses avant toute phase live               |
+| Secrets de webhooks chiffrés avec `DOCUMENT_ENCRYPTION_KEY` (clé partagée avec documents et MFA)                       | Moyen                                   | Clé dédiée et KMS (Phase 6)                                                           |
+| Livraison webhook créée puis processus arrêté avant la première tentative : ligne `PENDING` non relancée               | Faible                                  | Balayage des `PENDING` périmées dans `WEBHOOK_RETRY`                                  |
+| `Idempotency-Key` honoré aussi pour les sessions (clé scopée par utilisateur) ; le web ne l'envoie pas                 | Faible                                  | Documenté ; limiter aux clés API si nécessaire                                        |
+| Pas de test d'intrusion indépendant                                                                                    | Élevé avant live, acceptable en sandbox | Porte R8                                                                              |
+| Données personnelles réelles des testeurs                                                                              | Moyen                                   | Jeux de données fictifs, rétention courte, `DATA_PROTECTION.md`                       |
+| Dépendance au secret unique `DOCUMENT_ENCRYPTION_KEY` pour documents, MFA et secrets de webhooks                       | Moyen                                   | Séparation en clés distinctes et KMS (Phase 6)                                        |
+| Checklists de conformité rédigées sans conseiller juridique                                                            | Élevé avant tout contrat partenaire     | Relecture juridique (Phase 6, tâche humaine)                                          |
+| Rejeu d'un code TOTP dans sa fenêtre de validité (plusieurs autorisations de transfert avec le même code)              | Faible                                  | Mémoriser le dernier pas TOTP utilisé (`mfaLastUsedStep`) et refuser la réutilisation |
+| Rôles staff considérés comme `OWNER` implicite dans tout espace (création de contreparties, envoi de factures)         | Faible en sandbox                       | Permissions `ADMIN_*` explicites pour les chemins d'écriture staff                    |
+| Verrou de tâche planifiée libéré après 15 min alors que le traitement peut continuer                                   | Faible                                  | `AbortSignal` lié au verrou ou verrou repris par lot                                  |
+| Création de contrepartie par e-mail : révèle l'existence d'un compte DFN pour cet e-mail (badge « lié »)               | Faible                                  | Lien soumis au consentement du client, limitation de débit                            |
+| Taux de taxe des factures dérivé de `taxMinor / subtotalMinor` lors des modifications (dérive d'arrondi possible)      | Faible                                  | Persister `taxBps` sur `Invoice` / `Quote`                                            |
 
 **Signaler une vulnérabilité** : écrire à l'équipe sécurité via le canal indiqué dans le README du dépôt (à compléter) ; ne pas ouvrir d'issue publique. Accusé de réception sous 2 jours ouvrés, correctif ou plan sous 30 jours pour les failles hautes.

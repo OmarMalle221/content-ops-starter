@@ -82,10 +82,7 @@ export function CreateOrganizationDialog() {
           onChange={(e) => setForm((f) => ({ ...f, registrationNumber: e.target.value }))}
         />
       </div>
-      <p className="text-xs text-muted-foreground">
-        Vous serez reconnecté·e pour rafraîchir vos droits d’accès / You will be asked to sign in again to
-        refresh your access.
-      </p>
+      <p className="text-xs text-muted-foreground">{t('business.reloginHint')}</p>
     </ActionDialog>
   );
 }
@@ -241,7 +238,9 @@ export function BusinessVerificationCard({ org }: { org: any }) {
                 onChange={(e) => setForm((f) => ({ ...f, businessType: e.target.value }))}
               >
                 {['SOLE_PROPRIETOR', 'COMPANY', 'COOPERATIVE', 'NGO', 'OTHER'].map((x) => (
-                  <option key={x}>{x}</option>
+                  <option key={x} value={x}>
+                    {t(`business.types.${x}`)}
+                  </option>
                 ))}
               </Select>
             </div>

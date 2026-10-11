@@ -24,6 +24,10 @@ export class JobRegistry {
     return this.handlers.get(name);
   }
 
+  has(name: MaintenanceJobName): boolean {
+    return this.handlers.has(name);
+  }
+
   list(): MaintenanceJobName[] {
     return [...this.handlers.keys()];
   }

@@ -297,12 +297,31 @@ export class LedgerService {
     return { items, total, page, pageSize };
   }
 
+  /**
+   * Balance snapshot taken under the account row lock (the same lock `post()` takes), so no
+   * posting on that account can be in flight: the balance, the entry count and `lastSeq`
+   * (highest LedgerEntry.seq included) describe exactly one consistent cut.
+   */
   async snapshot(accountId: string, db: Db = this.prisma) {
-    const account = await db.ledgerAccount.findUniqueOrThrow({ where: { id: accountId } });
-    const balance = await this.balanceWithin(account, db);
-    return db.balanceSnapshot.create({
-      data: { accountId, balanceMinor: balance.balanceMinor, entryCount: balance.entryCount },
-    });
+    const run = async (tx: PrismaTransactionClient) => {
+      const [account] = await tx.$queryRaw<LedgerAccount[]>`
+        SELECT * FROM "LedgerAccount" WHERE id = ${accountId}::uuid FOR UPDATE`;
+      if (!account) throw new LedgerError('ACCOUNT_NOT_FOUND', `Ledger account ${accountId} not found`);
+      const balance = await this.balanceWithin(account, tx);
+      const [row] = await tx.$queryRaw<Array<{ lastSeq: bigint | null }>>`
+        SELECT MAX(seq)::bigint AS "lastSeq" FROM "LedgerEntry" WHERE "accountId" = ${accountId}::uuid`;
+      return tx.balanceSnapshot.create({
+        data: {
+          accountId,
+          balanceMinor: balance.balanceMinor,
+          entryCount: balance.entryCount,
+          lastSeq: row?.lastSeq == null ? 0n : BigInt(row.lastSeq),
+        },
+      });
+    };
+    return '$transaction' in db && typeof db.$transaction === 'function'
+      ? (db as PrismaClient).$transaction(run)
+      : run(db as PrismaTransactionClient);
   }
 
   /**
@@ -316,23 +335,48 @@ export class LedgerService {
     try {
       const accounts = await this.prisma.ledgerAccount.findMany();
       for (const account of accounts) {
-        const actual = await this.balanceWithin(account, this.prisma);
         const latest = await this.prisma.balanceSnapshot.findFirst({
           where: { accountId: account.id },
-          orderBy: { asOf: 'desc' },
+          orderBy: [{ asOf: 'desc' }, { lastSeq: 'desc' }],
         });
-        if (latest) {
-          const since = await this.prisma.$queryRaw<
-            Array<{ direction: 'DEBIT' | 'CREDIT'; total: bigint | null }>
-          >`
-            SELECT direction, COALESCE(SUM("amountMinor"),0)::bigint AS total FROM "LedgerEntry"
-            WHERE "accountId" = ${account.id}::uuid AND "createdAt" > ${latest.asOf} GROUP BY direction`;
-          let d = 0n;
-          let c = 0n;
-          for (const r of since) {
-            if (r.direction === 'DEBIT') d = BigInt(r.total ?? 0);
-            else c = BigInt(r.total ?? 0);
+        // One statement computes both the full totals and the "since snapshot" totals, so both
+        // views come from the same consistent read: a posting committed between two queries can
+        // no longer show up on one side only. Entries are partitioned on `seq` (legacy snapshots
+        // without `lastSeq` fall back to the timestamp).
+        const rows = await this.prisma.$queryRaw<
+          Array<{ direction: 'DEBIT' | 'CREDIT'; total: bigint | null; since: bigint | null; count: bigint }>
+        >`
+          SELECT direction,
+            COALESCE(SUM("amountMinor"),0)::bigint AS total,
+            COALESCE(SUM(CASE WHEN ${
+              latest?.lastSeq != null
+                ? Prisma.sql`seq > ${latest.lastSeq}`
+                : latest
+                  ? Prisma.sql`"createdAt" > ${latest.asOf}`
+                  : Prisma.sql`TRUE`
+            } THEN "amountMinor" ELSE 0 END),0)::bigint AS since,
+            COUNT(*)::bigint AS count
+          FROM "LedgerEntry" WHERE "accountId" = ${account.id}::uuid GROUP BY direction`;
+        let td = 0n;
+        let tc = 0n;
+        let d = 0n;
+        let c = 0n;
+        let entryCount = 0n;
+        for (const r of rows) {
+          entryCount += BigInt(r.count);
+          if (r.direction === 'DEBIT') {
+            td = BigInt(r.total ?? 0);
+            d = BigInt(r.since ?? 0);
+          } else {
+            tc = BigInt(r.total ?? 0);
+            c = BigInt(r.since ?? 0);
           }
+        }
+        const actual = {
+          balanceMinor: computeBalance(account.normalBalance, td, tc),
+          entryCount: Number(entryCount),
+        };
+        if (latest) {
           const expected = latest.balanceMinor + computeBalance(account.normalBalance, d, c);
           if (expected !== actual.balanceMinor) {
             differences.push({

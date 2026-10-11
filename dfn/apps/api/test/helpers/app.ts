@@ -119,6 +119,14 @@ export class Client {
         .send(body ?? {}),
     ).then((r) => this.capture(r));
   }
+  put(url: string, body?: unknown) {
+    return this.withCookie(
+      this.ctx
+        .http()
+        .put(url)
+        .send(body ?? {}),
+    ).then((r) => this.capture(r));
+  }
   delete(url: string) {
     return this.withCookie(this.ctx.http().delete(url)).then((r) => this.capture(r));
   }

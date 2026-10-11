@@ -65,3 +65,11 @@ export const reviewTransferSchema = z.object({
   note: z.string().trim().min(3).max(2000),
 });
 export type ReviewTransferInput = z.infer<typeof reviewTransferSchema>;
+
+/** Query of GET /v1/transfers/:id/receipt — JSON by default, plain text with ?format=txt. */
+export const transferReceiptQuerySchema = z.object({ format: z.enum(['json', 'txt']).default('json') });
+export type TransferReceiptQuery = z.infer<typeof transferReceiptQuerySchema>;
+
+/** Admin queue: same filters as the member list, every organisation. */
+export const listAdminTransfersQuerySchema = listTransfersQuerySchema;
+export type ListAdminTransfersQuery = z.infer<typeof listAdminTransfersQuerySchema>;

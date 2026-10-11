@@ -448,9 +448,42 @@
         "tags": ["verifications"]
       }
     },
+    "/v1/wallets/estimate": {
+      "post": {
+        "operationId": "WalletsController_estimate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["wallets"]
+      }
+    },
     "/v1/wallets/{organizationId}": {
       "get": {
         "operationId": "WalletsController_balances",
+        "parameters": [
+          {
+            "name": "organizationId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["wallets"]
+      }
+    },
+    "/v1/wallets/{organizationId}/summary": {
+      "get": {
+        "operationId": "WalletsController_summary",
         "parameters": [
           {
             "name": "organizationId",
@@ -525,6 +558,83 @@
           }
         },
         "tags": ["wallets"]
+      }
+    },
+    "/v1/sandbox/wallets/self-deposit": {
+      "post": {
+        "operationId": "WalletsSandboxController_selfDeposit",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["sandbox"]
+      }
+    },
+    "/v1/beneficiaries": {
+      "get": {
+        "operationId": "BeneficiariesController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["beneficiaries"]
+      },
+      "post": {
+        "operationId": "BeneficiariesController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["beneficiaries"]
+      }
+    },
+    "/v1/beneficiaries/{id}": {
+      "delete": {
+        "operationId": "BeneficiariesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["beneficiaries"]
+      }
+    },
+    "/v1/users/me/security-preferences": {
+      "get": {
+        "operationId": "SecurityPreferencesController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["users"]
+      },
+      "put": {
+        "operationId": "SecurityPreferencesController_update",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["users"]
       }
     },
     "/v1/transactions": {
@@ -1362,6 +1472,1119 @@
           }
         },
         "tags": ["sandbox"]
+      }
+    },
+    "/v1/transfers/quotes": {
+      "post": {
+        "operationId": "TransfersController_createQuote",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/transfers/quotes/{id}": {
+      "get": {
+        "operationId": "TransfersController_getQuote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/transfers": {
+      "post": {
+        "operationId": "TransfersController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      },
+      "get": {
+        "operationId": "TransfersController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/transfers/{id}": {
+      "get": {
+        "operationId": "TransfersController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/transfers/{id}/receipt": {
+      "get": {
+        "operationId": "TransfersController_receipt",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/transfers/{id}/authorize": {
+      "post": {
+        "operationId": "TransfersController_authorize",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/transfers/{id}/cancel": {
+      "post": {
+        "operationId": "TransfersController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["transfers"]
+      }
+    },
+    "/v1/admin/transfers": {
+      "get": {
+        "operationId": "TransfersAdminController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/transfers/{id}": {
+      "get": {
+        "operationId": "TransfersAdminController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/transfers/{id}/review": {
+      "post": {
+        "operationId": "TransfersAdminController_review",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/sandbox/partner/transfer-events": {
+      "post": {
+        "operationId": "TransfersSandboxController_transferEvent",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["sandbox"]
+      }
+    },
+    "/v1/invoices": {
+      "post": {
+        "operationId": "InvoicesController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      },
+      "get": {
+        "operationId": "InvoicesController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/invoices.csv": {
+      "get": {
+        "operationId": "InvoicesController_csv",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/invoices/{id}": {
+      "get": {
+        "operationId": "InvoicesController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      },
+      "patch": {
+        "operationId": "InvoicesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/invoices/{id}/document": {
+      "get": {
+        "operationId": "InvoicesController_document",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/invoices/{id}/send": {
+      "post": {
+        "operationId": "InvoicesController_send",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/invoices/{id}/payments": {
+      "post": {
+        "operationId": "InvoicesController_recordPayment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/invoices/{id}/cancel": {
+      "post": {
+        "operationId": "InvoicesController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes": {
+      "post": {
+        "operationId": "QuotesController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      },
+      "get": {
+        "operationId": "QuotesController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes/{id}": {
+      "get": {
+        "operationId": "QuotesController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      },
+      "patch": {
+        "operationId": "QuotesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes/{id}/document": {
+      "get": {
+        "operationId": "QuotesController_document",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes/{id}/send": {
+      "post": {
+        "operationId": "QuotesController_send",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes/{id}/accept": {
+      "post": {
+        "operationId": "QuotesController_accept",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes/{id}/decline": {
+      "post": {
+        "operationId": "QuotesController_decline",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/quotes/{id}/convert": {
+      "post": {
+        "operationId": "QuotesController_convert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/organizations/{id}/reports/summary": {
+      "get": {
+        "operationId": "ReportsController_summary",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/organizations/{id}/reports/transactions.csv": {
+      "get": {
+        "operationId": "ReportsController_transactionsCsv",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/organizations/{id}/reports/invoices.csv": {
+      "get": {
+        "operationId": "ReportsController_invoicesCsv",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/organizations/{id}/reports/commissions": {
+      "get": {
+        "operationId": "ReportsController_commissions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["business"]
+      }
+    },
+    "/v1/api-credentials/catalog": {
+      "get": {
+        "operationId": "ApiCredentialsController_catalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/api-credentials": {
+      "get": {
+        "operationId": "ApiCredentialsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      },
+      "post": {
+        "operationId": "ApiCredentialsController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/api-credentials/{id}": {
+      "get": {
+        "operationId": "ApiCredentialsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      },
+      "delete": {
+        "operationId": "ApiCredentialsController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/api-credentials/{id}/rotate": {
+      "post": {
+        "operationId": "ApiCredentialsController_rotate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/api-credentials/{id}/logs": {
+      "get": {
+        "operationId": "ApiCredentialsController_logs",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/webhooks": {
+      "get": {
+        "operationId": "WebhooksController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      },
+      "post": {
+        "operationId": "WebhooksController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/webhooks/{id}": {
+      "get": {
+        "operationId": "WebhooksController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      },
+      "patch": {
+        "operationId": "WebhooksController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      },
+      "delete": {
+        "operationId": "WebhooksController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/webhooks/{id}/rotate-secret": {
+      "post": {
+        "operationId": "WebhooksController_rotateSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/webhooks/{id}/test": {
+      "post": {
+        "operationId": "WebhooksController_test",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/webhooks/{id}/deliveries": {
+      "get": {
+        "operationId": "WebhooksController_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/webhooks/{id}/deliveries/{deliveryId}/retry": {
+      "post": {
+        "operationId": "WebhooksController_retry",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deliveryId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["api-platform"]
+      }
+    },
+    "/v1/admin/dda/overview": {
+      "get": {
+        "operationId": "DdaAdminController_overview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/operations": {
+      "get": {
+        "operationId": "DdaAdminController_operations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/holdings": {
+      "get": {
+        "operationId": "DdaAdminController_holdings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/organizations": {
+      "get": {
+        "operationId": "DdaAdminController_organizations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/trace/{reference}": {
+      "get": {
+        "operationId": "DdaAdminController_trace",
+        "parameters": [
+          {
+            "name": "reference",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/mint": {
+      "post": {
+        "operationId": "DdaAdminController_mint",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/transfer": {
+      "post": {
+        "operationId": "DdaAdminController_transfer",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/redeem": {
+      "post": {
+        "operationId": "DdaAdminController_redeem",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/reserve-adjustments": {
+      "post": {
+        "operationId": "DdaAdminController_reserveAdjustment",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/dda/stress-test": {
+      "post": {
+        "operationId": "DdaAdminController_stressTest",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/jobs": {
+      "get": {
+        "operationId": "JobsAdminController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/jobs/runs": {
+      "get": {
+        "operationId": "JobsAdminController_runs",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/jobs/{name}/run": {
+      "post": {
+        "operationId": "JobsAdminController_run",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/users/me/deletion-request": {
+      "post": {
+        "operationId": "AccountDeletionController_request",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["users"]
+      }
+    },
+    "/v1/users/me/deletion-request/status": {
+      "get": {
+        "operationId": "AccountDeletionController_status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["users"]
+      }
+    },
+    "/v1/admin/users/{id}/deletion-cancel": {
+      "post": {
+        "operationId": "AccountDeletionAdminController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
       }
     }
   },

@@ -25,6 +25,7 @@ const baseFr = {
     business: 'Entreprise',
     documents: 'Documents',
     disputes: 'Litiges',
+    developers: 'Développeurs',
     notifications: 'Notifications',
     settings: 'Paramètres',
     admin: 'Administration',
@@ -337,6 +338,14 @@ const baseFr = {
     businessType: 'Forme juridique',
     inviteLink: 'Lien d’invitation',
     indicators: 'Indicateurs',
+    reloginHint: 'Vous serez reconnecté·e pour rafraîchir vos droits d’accès.',
+    types: {
+      SOLE_PROPRIETOR: 'Entreprise individuelle',
+      COMPANY: 'Société',
+      COOPERATIVE: 'Coopérative',
+      NGO: 'ONG / association',
+      OTHER: 'Autre',
+    },
   },
   settings: {
     title: 'Paramètres',
@@ -357,6 +366,13 @@ const baseFr = {
     documentType: 'Type de document',
     issuingCountry: 'Pays émetteur',
     simulateFail: 'Simuler un échec (démo)',
+    phone: 'Téléphone',
+    documentTypes: {
+      PASSPORT: 'Passeport',
+      NATIONAL_ID: 'Carte d’identité',
+      DRIVER_LICENSE: 'Permis de conduire',
+      RESIDENCE_PERMIT: 'Titre de séjour',
+    },
   },
   admin: {
     title: 'Administration',
@@ -378,6 +394,19 @@ const baseFr = {
     approve: 'Approuver',
     reject: 'Rejeter',
     notes: 'Notes',
+    transfers: 'Transferts',
+    jobs: 'Tâches planifiées',
+    dda: 'Laboratoire DDA',
+    note: 'Note',
+    role: 'Rôle',
+    riskActions: {
+      START_REVIEW: 'Démarrer la revue',
+      CONFIRM: 'Confirmer l’anomalie',
+      DISMISS: 'Écarter',
+      CONTEST: 'Contester',
+    },
+    reconcileResult:
+      '{accounts} compte(s) vérifié(s) · {differences} écart(s) · {unbalanced} transaction(s) déséquilibrée(s)',
   },
   notif: { title: 'Notifications', markAll: 'Tout marquer comme lu', empty: 'Aucune notification.' },
   transfers: {
@@ -428,6 +457,7 @@ const baseEn: typeof baseFr = {
     business: 'Business',
     documents: 'Documents',
     disputes: 'Disputes',
+    developers: 'Developers',
     notifications: 'Notifications',
     settings: 'Settings',
     admin: 'Administration',
@@ -741,6 +771,14 @@ const baseEn: typeof baseFr = {
     businessType: 'Legal form',
     inviteLink: 'Invitation link',
     indicators: 'Indicators',
+    reloginHint: 'You will be asked to sign in again to refresh your access.',
+    types: {
+      SOLE_PROPRIETOR: 'Sole proprietorship',
+      COMPANY: 'Company',
+      COOPERATIVE: 'Cooperative',
+      NGO: 'NGO / non-profit',
+      OTHER: 'Other',
+    },
   },
   settings: {
     title: 'Settings',
@@ -760,6 +798,13 @@ const baseEn: typeof baseFr = {
     documentType: 'Document type',
     issuingCountry: 'Issuing country',
     simulateFail: 'Simulate a failure (demo)',
+    phone: 'Phone',
+    documentTypes: {
+      PASSPORT: 'Passport',
+      NATIONAL_ID: 'National ID',
+      DRIVER_LICENSE: 'Driver licence',
+      RESIDENCE_PERMIT: 'Residence permit',
+    },
   },
   admin: {
     title: 'Administration',
@@ -781,6 +826,19 @@ const baseEn: typeof baseFr = {
     approve: 'Approve',
     reject: 'Reject',
     notes: 'Notes',
+    transfers: 'Transfers',
+    jobs: 'Scheduled jobs',
+    dda: 'DDA lab',
+    note: 'Note',
+    role: 'Role',
+    riskActions: {
+      START_REVIEW: 'Start review',
+      CONFIRM: 'Confirm anomaly',
+      DISMISS: 'Dismiss',
+      CONTEST: 'Contest',
+    },
+    reconcileResult:
+      '{accounts} account(s) checked · {differences} difference(s) · {unbalanced} unbalanced transaction(s)',
   },
   notif: { title: 'Notifications', markAll: 'Mark all as read', empty: 'No notification.' },
   transfers: {

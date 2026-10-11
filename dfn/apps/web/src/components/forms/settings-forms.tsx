@@ -71,7 +71,7 @@ export function ProfileForm({ user }: { user: any }) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="phone">Téléphone / Phone</Label>
+            <Label htmlFor="phone">{t('settings.phone')}</Label>
             <Input
               id="phone"
               value={form.phone}

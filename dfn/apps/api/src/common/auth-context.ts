@@ -7,6 +7,13 @@ export interface AuthMembership {
   role: OrgRole;
 }
 
+/** Present when the request was authenticated with a partner API key (Diaspora API). */
+export interface AuthApiCredential {
+  id: string;
+  scopes: string[];
+  organizationId: string;
+}
+
 export interface AuthContext {
   userId: string;
   sessionId: string;
@@ -20,6 +27,8 @@ export interface AuthContext {
   memberships: AuthMembership[];
   ip?: string;
   userAgent?: string;
+  /** Set only for API-key authenticated requests; absent for cookie / bearer-session requests. */
+  apiCredential?: AuthApiCredential;
 }
 
 export function isStaff(auth: AuthContext): boolean {

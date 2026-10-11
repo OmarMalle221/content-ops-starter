@@ -296,17 +296,56 @@ export class OrganizationsService {
   async createCounterparty(
     auth: AuthContext,
     organizationId: string,
-    input: { name: string; email?: string; phone?: string; country?: string; notes?: string },
+    input: {
+      name: string;
+      email?: string;
+      phone?: string;
+      country?: string;
+      notes?: string;
+      linkedOrganizationId?: string;
+    },
     req: Request,
   ) {
     this.assertMember(auth, organizationId, Permission.TRANSACTION_CREATE);
-    const cp = await this.prisma.counterparty.create({ data: { organizationId, ...input } });
+    let linkedOrganizationId = input.linkedOrganizationId ?? null;
+    if (linkedOrganizationId) {
+      // An explicit link is only allowed towards an organisation the caller belongs to (e.g. another
+      // workspace of the same person): linking an arbitrary identifier would let anyone probe
+      // organisation ids and push invoices into a tenant that never opted in.
+      const membership = await this.prisma.organizationMember.findFirst({
+        where: {
+          organizationId: linkedOrganizationId,
+          userId: auth.userId,
+          organization: { deletedAt: null },
+        },
+        select: { organizationId: true },
+      });
+      if (!membership) throw DomainError.validation('Linked organisation not found');
+      if (membership.organizationId === organizationId)
+        throw DomainError.validation('A counterparty cannot link to its own organisation');
+    } else if (input.email) {
+      // Auto-link to the personal workspace of a DFN user with that email (lets them pay invoices from their wallet).
+      const user = await this.prisma.user.findUnique({ where: { email: input.email }, select: { id: true } });
+      if (user) {
+        const personal = await this.prisma.organizationMember.findFirst({
+          where: { userId: user.id, role: 'OWNER', organization: { type: 'PERSONAL', deletedAt: null } },
+          select: { organizationId: true },
+        });
+        if (personal && personal.organizationId !== organizationId)
+          linkedOrganizationId = personal.organizationId;
+      }
+    }
+    const { linkedOrganizationId: _ignored, ...rest } = input;
+    const cp = await this.prisma.counterparty.create({
+      data: { organizationId, ...rest, linkedOrganizationId },
+    });
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId,
       action: 'counterparty.created',
       entityType: 'Counterparty',
       entityId: cp.id,
+      metadata: { linkedOrganizationId },
       ...requestMeta(req),
     });
     return cp;
