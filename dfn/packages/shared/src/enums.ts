@@ -215,3 +215,122 @@ export const TransactionEventType = {
   EXPIRED: 'transaction.expired',
 } as const;
 export type TransactionEventType = (typeof TransactionEventType)[keyof typeof TransactionEventType];
+
+// ───────────────────────────── Phase 3–5 additions ──────────────────────────
+
+export const CurrencyKind = { FIAT: 'FIAT', SIMULATED_ASSET: 'SIMULATED_ASSET' } as const;
+export type CurrencyKind = (typeof CurrencyKind)[keyof typeof CurrencyKind];
+
+export const BeneficiaryMethod = { BANK_ACCOUNT: 'BANK_ACCOUNT', MOBILE_MONEY: 'MOBILE_MONEY' } as const;
+export type BeneficiaryMethod = (typeof BeneficiaryMethod)[keyof typeof BeneficiaryMethod];
+
+export const BeneficiaryStatus = { ACTIVE: 'ACTIVE', REMOVED: 'REMOVED' } as const;
+export type BeneficiaryStatus = (typeof BeneficiaryStatus)[keyof typeof BeneficiaryStatus];
+
+export const FxQuoteStatus = { QUOTED: 'QUOTED', USED: 'USED', EXPIRED: 'EXPIRED' } as const;
+export type FxQuoteStatus = (typeof FxQuoteStatus)[keyof typeof FxQuoteStatus];
+
+export const InvoiceStatus = {
+  DRAFT: 'DRAFT',
+  SENT: 'SENT',
+  PARTIALLY_PAID: 'PARTIALLY_PAID',
+  PAID: 'PAID',
+  OVERDUE: 'OVERDUE',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type InvoiceStatus = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+
+export const QuoteStatus = {
+  DRAFT: 'DRAFT',
+  SENT: 'SENT',
+  ACCEPTED: 'ACCEPTED',
+  DECLINED: 'DECLINED',
+  EXPIRED: 'EXPIRED',
+  CONVERTED: 'CONVERTED',
+} as const;
+export type QuoteStatus = (typeof QuoteStatus)[keyof typeof QuoteStatus];
+
+export const InvoicePaymentMethod = {
+  WALLET_SIMULATED: 'WALLET_SIMULATED',
+  PROTECT_RELEASE: 'PROTECT_RELEASE',
+  EXTERNAL_RECORDED: 'EXTERNAL_RECORDED',
+} as const;
+export type InvoicePaymentMethod = (typeof InvoicePaymentMethod)[keyof typeof InvoicePaymentMethod];
+
+export const MaintenanceJobName = {
+  BALANCE_SNAPSHOTS: 'BALANCE_SNAPSHOTS',
+  RECONCILIATION: 'RECONCILIATION',
+  EXPIRE_STALE: 'EXPIRE_STALE',
+  ANONYMIZE_DELETED: 'ANONYMIZE_DELETED',
+  TRANSFER_PROCESSING: 'TRANSFER_PROCESSING',
+  WEBHOOK_RETRY: 'WEBHOOK_RETRY',
+  INVOICE_OVERDUE: 'INVOICE_OVERDUE',
+} as const;
+export type MaintenanceJobName = (typeof MaintenanceJobName)[keyof typeof MaintenanceJobName];
+
+export const WebhookDeliveryStatus = {
+  PENDING: 'PENDING',
+  DELIVERED: 'DELIVERED',
+  FAILED: 'FAILED',
+  EXHAUSTED: 'EXHAUSTED',
+} as const;
+export type WebhookDeliveryStatus = (typeof WebhookDeliveryStatus)[keyof typeof WebhookDeliveryStatus];
+
+export const DdaOperation = {
+  MINT: 'MINT',
+  TRANSFER: 'TRANSFER',
+  REDEEM: 'REDEEM',
+  RESERVE_ADJUSTMENT: 'RESERVE_ADJUSTMENT',
+} as const;
+export type DdaOperation = (typeof DdaOperation)[keyof typeof DdaOperation];
+
+/** Transfer history event types (Diaspora Transfer). */
+export const TransferEventType = {
+  CREATED: 'transfer.created',
+  QUOTED: 'transfer.quoted',
+  AUTHORIZED: 'transfer.authorized',
+  REVIEW_REQUIRED: 'transfer.review_required',
+  REVIEW_APPROVED: 'transfer.review_approved',
+  REVIEW_REJECTED: 'transfer.review_rejected',
+  PROCESSING: 'transfer.processing',
+  SETTLED: 'transfer.settled',
+  FAILED: 'transfer.failed',
+  EXPIRED: 'transfer.expired',
+  CANCELLED: 'transfer.cancelled',
+  REVERSED: 'transfer.reversed',
+} as const;
+export type TransferEventType = (typeof TransferEventType)[keyof typeof TransferEventType];
+
+/** Scopes available to API credentials (Diaspora API). */
+export const ApiScope = {
+  TRANSACTIONS_READ: 'transactions:read',
+  TRANSACTIONS_WRITE: 'transactions:write',
+  DOCUMENTS_WRITE: 'documents:write',
+  DISPUTES_WRITE: 'disputes:write',
+  WALLETS_READ: 'wallets:read',
+  TRANSFERS_READ: 'transfers:read',
+  TRANSFERS_WRITE: 'transfers:write',
+  INVOICES_READ: 'invoices:read',
+  INVOICES_WRITE: 'invoices:write',
+  WEBHOOKS_MANAGE: 'webhooks:manage',
+} as const;
+export type ApiScope = (typeof ApiScope)[keyof typeof ApiScope];
+export const ALL_API_SCOPES = Object.values(ApiScope);
+
+/** Webhook event types partners can subscribe to. */
+export const WebhookEventType = {
+  TRANSACTION_CREATED: 'transaction.created',
+  TRANSACTION_ACCEPTED: 'transaction.party_accepted',
+  TRANSACTION_FUNDED: 'funding.confirmed',
+  MILESTONE_SUBMITTED: 'milestone.submitted',
+  MILESTONE_RELEASED: 'milestone.released',
+  TRANSACTION_SETTLED: 'transaction.settled',
+  TRANSACTION_CANCELLED: 'transaction.cancelled',
+  DISPUTE_OPENED: 'dispute.opened',
+  DISPUTE_CLOSED: 'dispute.closed',
+  TRANSFER_SETTLED: 'transfer.settled',
+  TRANSFER_FAILED: 'transfer.failed',
+  INVOICE_PAID: 'invoice.paid',
+} as const;
+export type WebhookEventType = (typeof WebhookEventType)[keyof typeof WebhookEventType];
+export const ALL_WEBHOOK_EVENTS = Object.values(WebhookEventType);

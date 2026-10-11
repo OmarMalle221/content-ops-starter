@@ -1,4 +1,12 @@
-import { DisputeStatus, FundingStatus, MilestoneStatus, TransactionStatus, TransferStatus } from '../enums';
+import {
+  DisputeStatus,
+  FundingStatus,
+  InvoiceStatus,
+  MilestoneStatus,
+  QuoteStatus,
+  TransactionStatus,
+  TransferStatus,
+} from '../enums';
 import { defineStateMachine } from './machine';
 
 export * from './machine';
@@ -72,3 +80,23 @@ export const CANCELLABLE_TRANSACTION_STATES: TransactionStatus[] = [
   'ACCEPTED',
   'AWAITING_FUNDING',
 ];
+
+/** Diaspora Business — invoices. PARTIALLY_PAID/PAID are driven by recorded payments. */
+export const invoiceMachine = defineStateMachine<InvoiceStatus>('Invoice', {
+  DRAFT: ['SENT', 'CANCELLED'],
+  SENT: ['PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED'],
+  PARTIALLY_PAID: ['PAID', 'OVERDUE', 'CANCELLED'],
+  OVERDUE: ['PARTIALLY_PAID', 'PAID', 'CANCELLED'],
+  PAID: [],
+  CANCELLED: [],
+});
+
+/** Diaspora Business — quotes. CONVERTED means an invoice or a Protect transaction was created from it. */
+export const quoteMachine = defineStateMachine<QuoteStatus>('Quote', {
+  DRAFT: ['SENT', 'DECLINED', 'EXPIRED'],
+  SENT: ['ACCEPTED', 'DECLINED', 'EXPIRED'],
+  ACCEPTED: ['CONVERTED', 'EXPIRED'],
+  DECLINED: [],
+  EXPIRED: [],
+  CONVERTED: [],
+});

@@ -1,8 +1,15 @@
+import { walletPart } from './i18n-parts/wallet';
+import { transfersPart } from './i18n-parts/transfers';
+import { businessPart } from './i18n-parts/business';
+import { developersPart } from './i18n-parts/developers';
+import { ddaPart } from './i18n-parts/dda';
+import { jobsPart } from './i18n-parts/jobs';
+
 export type Locale = 'fr' | 'en';
 export const LOCALE_COOKIE = 'dfn_locale';
 export const DEFAULT_LOCALE: Locale = 'fr';
 
-const fr = {
+const baseFr = {
   app: {
     name: 'Diaspora Trust',
     tagline: 'L’infrastructure financière de confiance entre l’Afrique et sa diaspora.',
@@ -117,6 +124,36 @@ const fr = {
     DISMISSED: 'Classée',
     CONTESTED: 'Contestée',
     PENDING_REVIEW: 'À vérifier',
+    CREATED: 'Créé',
+    QUOTED: 'Coté',
+    AUTHORIZED: 'Autorisé',
+    PROCESSING: 'En traitement',
+    REVIEW_REQUIRED: 'Revue requise',
+    SENT: 'Envoyée',
+    PARTIALLY_PAID: 'Partiellement payée',
+    PAID: 'Payée',
+    OVERDUE: 'En retard',
+    CONVERTED: 'Convertie',
+    DELIVERED: 'Livré',
+    EXHAUSTED: 'Abandonné',
+    REMOVED: 'Retiré',
+    RUNNING: 'En cours',
+    COMPLETED: 'Terminé',
+    USED: 'Utilisée',
+    DEPOSIT: 'Dépôt',
+    FUNDING: 'Financement',
+    RELEASE: 'Libération',
+    REFUND: 'Remboursement',
+    REVERSAL: 'Contrepassation',
+    WITHDRAWAL: 'Retrait',
+    FEE: 'Frais',
+    ADJUSTMENT: 'Ajustement',
+    POSTED: 'Comptabilisé',
+    REVERSED: 'Contrepassé',
+    MINTED: 'Émis (fictif)',
+    TRANSFERRED: 'Transféré (fictif)',
+    REDEEMED: 'Racheté (fictif)',
+    VOID: 'Annulé',
   },
   actions: {
     ACCEPT_INVITATION: 'Accepter l’invitation',
@@ -362,9 +399,20 @@ const fr = {
 };
 
 type DeepStringRecord = { [k: string]: string | DeepStringRecord };
+
+/** Feature parts are merged at the top level; each part owns its own namespaces. */
+const fr = {
+  ...baseFr,
+  ...walletPart.fr,
+  ...transfersPart.fr,
+  ...businessPart.fr,
+  ...developersPart.fr,
+  ...ddaPart.fr,
+  ...jobsPart.fr,
+};
 export type Dictionary = typeof fr;
 
-const en: Dictionary = {
+const baseEn: typeof baseFr = {
   app: {
     name: 'Diaspora Trust',
     tagline: 'The trusted financial infrastructure connecting Africa and its global diaspora.',
@@ -479,6 +527,36 @@ const en: Dictionary = {
     DISMISSED: 'Dismissed',
     CONTESTED: 'Contested',
     PENDING_REVIEW: 'Pending review',
+    CREATED: 'Created',
+    QUOTED: 'Quoted',
+    AUTHORIZED: 'Authorized',
+    PROCESSING: 'Processing',
+    REVIEW_REQUIRED: 'Review required',
+    SENT: 'Sent',
+    PARTIALLY_PAID: 'Partially paid',
+    PAID: 'Paid',
+    OVERDUE: 'Overdue',
+    CONVERTED: 'Converted',
+    DELIVERED: 'Delivered',
+    EXHAUSTED: 'Exhausted',
+    REMOVED: 'Removed',
+    RUNNING: 'Running',
+    COMPLETED: 'Completed',
+    USED: 'Used',
+    DEPOSIT: 'Deposit',
+    FUNDING: 'Funding',
+    RELEASE: 'Release',
+    REFUND: 'Refund',
+    REVERSAL: 'Reversal',
+    WITHDRAWAL: 'Withdrawal',
+    FEE: 'Fee',
+    ADJUSTMENT: 'Adjustment',
+    POSTED: 'Posted',
+    REVERSED: 'Reversed',
+    MINTED: 'Minted (simulated)',
+    TRANSFERRED: 'Transferred (simulated)',
+    REDEEMED: 'Redeemed (simulated)',
+    VOID: 'Void',
   },
   actions: {
     ACCEPT_INVITATION: 'Accept invitation',
@@ -721,6 +799,16 @@ const en: Dictionary = {
     step3: 'A licensed partner (simulated in sandbox) confirms funds were received.',
     step4: 'Funds are released milestone by milestone on evidence — or frozen if a dispute opens.',
   },
+};
+
+const en: Dictionary = {
+  ...baseEn,
+  ...walletPart.en,
+  ...transfersPart.en,
+  ...businessPart.en,
+  ...developersPart.en,
+  ...ddaPart.en,
+  ...jobsPart.en,
 };
 
 export const dictionaries: Record<Locale, Dictionary> = { fr, en };

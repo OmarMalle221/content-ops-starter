@@ -11,6 +11,22 @@ export interface TestContext {
 }
 
 const TABLES = [
+  'WebhookDelivery',
+  'WebhookSubscription',
+  'ApiRequestLog',
+  'ApiCredential',
+  'IdempotencyRecord',
+  'InvoicePayment',
+  'InvoiceLine',
+  'Invoice',
+  'QuoteLine',
+  'Quote',
+  'TransferEvent',
+  'Transfer',
+  'FXQuote',
+  'Beneficiary',
+  'MaintenanceRun',
+  'DigitalAssetSimulation',
   'RiskAlertAction',
   'RiskAlert',
   'Notification',

@@ -23,7 +23,10 @@ export interface RiskFacts {
     | 'milestone.approved'
     | 'dispute.opened'
     | 'auth.login_failed'
-    | 'document.uploaded';
+    | 'document.uploaded'
+    | 'transfer.created'
+    | 'transfer.authorized'
+    | 'beneficiary.changed';
   userId?: string;
   organizationId?: string;
   transactionId?: string;
@@ -45,6 +48,12 @@ export interface RiskFacts {
   documentSha256DuplicateCount?: number;
   counterpartyEmailSeenInDisputes?: number;
   accountAgeDays?: number;
+  /** Transfers (Diaspora Transfer) */
+  transfersLast24h?: number;
+  transfersAmountLast24hMinor?: bigint;
+  beneficiaryAgeHours?: number;
+  beneficiaryChangesLast24h?: number;
+  walletBalanceMinor?: bigint;
 }
 
 export interface RiskEvaluation {

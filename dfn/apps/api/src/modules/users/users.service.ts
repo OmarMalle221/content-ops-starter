@@ -33,6 +33,8 @@ export class UsersService {
       globalRole: user.globalRole,
       status: user.status,
       mfaEnabled: user.mfaEnabled,
+      securityPreferences: user.securityPreferences,
+      deletionRequestedAt: user.deletionRequestedAt,
       createdAt: user.createdAt,
       lastLoginAt: user.lastLoginAt,
       identityVerification: latestVerification

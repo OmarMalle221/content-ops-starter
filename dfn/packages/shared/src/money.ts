@@ -19,10 +19,29 @@ export const CURRENCIES: Record<string, CurrencyDefinition> = {
 
 export const SUPPORTED_CURRENCY_CODES = Object.keys(CURRENCIES) as Array<keyof typeof CURRENCIES>;
 
+/**
+ * Simulated digital asset units (research only — never convertible, never on a public chain).
+ * Hypothesis under study: 1 DDA = 1 USD. The parity is NOT guaranteed and must never be
+ * presented as such in any interface.
+ */
+export const SIMULATED_ASSETS: Record<string, CurrencyDefinition> = {
+  DDA: {
+    code: 'DDA',
+    name: 'Diaspora Digital Asset (unité fictive de recherche)',
+    exponent: 2,
+    symbol: 'DDA',
+  },
+};
+export const DDA_CODE = 'DDA';
+
 export function getCurrency(code: string): CurrencyDefinition {
-  const def = CURRENCIES[code];
+  const def = CURRENCIES[code] ?? SIMULATED_ASSETS[code];
   if (!def) throw new Error(`Unsupported currency: ${code}`);
   return def;
+}
+
+export function isSimulatedAsset(code: string): boolean {
+  return code in SIMULATED_ASSETS;
 }
 
 export interface Money {

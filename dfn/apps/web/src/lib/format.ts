@@ -77,6 +77,13 @@ export function statusVariant(status: string): BadgeVariant {
     case 'ACCEPTED':
     case 'ACTIVE':
     case 'CLOSED':
+    case 'PAID':
+    case 'CONVERTED':
+    case 'DELIVERED':
+    case 'COMPLETED':
+    case 'POSTED':
+    case 'DEPOSIT':
+    case 'RELEASE':
     case 'APPROVED':
       return 'success';
     case 'DISPUTED':
@@ -88,6 +95,10 @@ export function statusVariant(status: string): BadgeVariant {
     case 'SUSPENDED':
     case 'DEACTIVATED':
     case 'DECLINED':
+    case 'OVERDUE':
+    case 'EXHAUSTED':
+    case 'REVERSED':
+    case 'VOID':
     case 'HIGH':
       return 'destructive';
     case 'PENDING_ACCEPTANCE':
@@ -100,11 +111,24 @@ export function statusVariant(status: string): BadgeVariant {
     case 'PENDING':
     case 'PENDING_REVIEW':
     case 'REVIEWING':
+    case 'REVIEW_REQUIRED':
+    case 'PROCESSING':
+    case 'PARTIALLY_PAID':
+    case 'RUNNING':
+    case 'SENT':
+    case 'QUOTED':
     case 'MEDIUM':
       return 'warning';
     case 'FUNDED':
     case 'IN_PROGRESS':
     case 'DECIDED':
+    case 'AUTHORIZED':
+    case 'CREATED':
+    case 'FUNDING':
+    case 'REFUND':
+    case 'MINTED':
+    case 'TRANSFERRED':
+    case 'REDEEMED':
     case 'REFUNDED':
       return 'default';
     default:

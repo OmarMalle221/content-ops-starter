@@ -5,6 +5,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { loadEnv, type Env } from './config/env';
 import { EnvModule } from './config/env.module';
 import { PrismaModule } from './common/prisma/prisma.module';
+import { DomainEventsModule } from './common/events/domain-events';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { SessionAuthGuard } from './common/guards/session-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -27,6 +28,11 @@ import { DocumentsModule } from './modules/documents/documents.module';
 import { DisputesModule } from './modules/disputes/disputes.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { SandboxModule } from './modules/sandbox/sandbox.module';
+import { TransfersModule } from './modules/transfers/transfers.module';
+import { BusinessModule } from './modules/business/business.module';
+import { ApiPlatformModule } from './modules/api-platform/api-platform.module';
+import { DdaModule } from './modules/dda/dda.module';
+import { JobsModule } from './modules/jobs/jobs.module';
 
 export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> = {}) {
   const env = loadEnv(envOverrides);
@@ -62,6 +68,7 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
         skipIf: () => env.NODE_ENV === 'test',
       }),
       PrismaModule,
+      DomainEventsModule,
       AuditModule,
       NotificationsModule,
       RiskModule,
@@ -77,6 +84,11 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
       DisputesModule,
       AdminModule,
       SandboxModule,
+      TransfersModule,
+      BusinessModule,
+      ApiPlatformModule,
+      DdaModule,
+      JobsModule,
     ],
     controllers: [HealthController, ReferenceController],
     providers: [

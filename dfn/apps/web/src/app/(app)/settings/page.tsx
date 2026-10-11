@@ -3,6 +3,8 @@ import { PageHeader } from '@/components/shell/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { IdentityVerificationForm } from '@/components/forms/identity-verification-form';
 import { MfaCard, PasswordForm, ProfileForm, SessionsCard } from '@/components/forms/settings-forms';
+import { SecurityPreferencesCard } from '@/components/forms/security-preferences-card';
+import { DeleteAccountCard } from '@/components/forms/delete-account-card';
 import { apiFetch, getSession } from '@/lib/api-server';
 import { getT } from '@/lib/i18n-server';
 
@@ -39,8 +41,12 @@ export default async function SettingsPage() {
         </Card>
         <PasswordForm />
         <MfaCard enabled={user.mfaEnabled} />
+        <SecurityPreferencesCard preferences={(user as any).securityPreferences ?? null} />
         <div className="lg:col-span-2">
           <SessionsCard sessions={sessions} />
+        </div>
+        <div className="lg:col-span-2">
+          <DeleteAccountCard deletionRequestedAt={(user as any).deletionRequestedAt ?? null} />
         </div>
       </div>
     </>

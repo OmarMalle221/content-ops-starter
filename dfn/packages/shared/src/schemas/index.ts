@@ -6,3 +6,8 @@ export * from './transactions';
 export * from './disputes';
 export * from './admin';
 export * from './admin-enums';
+export * from './wallet';
+export * from './transfers';
+export * from './business';
+export * from './api-platform';
+export * from './dda';

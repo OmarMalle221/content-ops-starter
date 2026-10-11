@@ -37,6 +37,22 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v !== 'false'),
+  // ── Phase 3–5
+  JOBS_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false'),
+  JOBS_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+  ANONYMIZE_AFTER_DAYS: z.coerce.number().int().min(0).max(3650).default(30),
+  FX_PROVIDER: z.string().default('sandbox'),
+  FX_QUOTE_TTL_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
+  SANDBOX_SELF_DEPOSIT_DAILY_LIMIT: z
+    .string()
+    .regex(/^\d{1,13}([.,]\d{1,2})?$/)
+    .default('50000.00'),
+  WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(6),
+  WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(500).max(30000).default(5000),
+  IDEMPOTENCY_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(24),
 });
 
 export type Env = z.infer<typeof envSchema>;

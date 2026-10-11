@@ -22,6 +22,14 @@ export const Permission = {
   ADMIN_LEDGER: 'admin:ledger',
   ADMIN_AUDIT: 'admin:audit',
   SANDBOX_PARTNER_SIMULATE: 'sandbox:partner_simulate',
+  BENEFICIARY_MANAGE: 'beneficiary:manage',
+  TRANSFER_CREATE: 'transfer:create',
+  TRANSFER_AUTHORIZE: 'transfer:authorize',
+  INVOICE_MANAGE: 'invoice:manage',
+  API_MANAGE: 'api:manage',
+  ADMIN_TRANSFERS: 'admin:transfers',
+  ADMIN_JOBS: 'admin:jobs',
+  ADMIN_DDA: 'admin:dda',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 
@@ -36,6 +44,11 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.ORG_MANAGE_SETTINGS,
     Permission.ORG_VIEW_REPORTS,
     Permission.WALLET_READ,
+    Permission.BENEFICIARY_MANAGE,
+    Permission.TRANSFER_CREATE,
+    Permission.TRANSFER_AUTHORIZE,
+    Permission.INVOICE_MANAGE,
+    Permission.API_MANAGE,
   ],
   ADMIN: [
     Permission.TRANSACTION_CREATE,
@@ -46,6 +59,11 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.ORG_MANAGE_MEMBERS,
     Permission.ORG_VIEW_REPORTS,
     Permission.WALLET_READ,
+    Permission.BENEFICIARY_MANAGE,
+    Permission.TRANSFER_CREATE,
+    Permission.TRANSFER_AUTHORIZE,
+    Permission.INVOICE_MANAGE,
+    Permission.API_MANAGE,
   ],
   MEMBER: [
     Permission.TRANSACTION_CREATE,
@@ -54,6 +72,8 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.DOCUMENT_UPLOAD,
     Permission.DISPUTE_OPEN,
     Permission.WALLET_READ,
+    Permission.TRANSFER_CREATE,
+    Permission.INVOICE_MANAGE,
   ],
   VIEWER: [Permission.TRANSACTION_READ, Permission.WALLET_READ, Permission.ORG_VIEW_REPORTS],
 };
@@ -66,6 +86,8 @@ export const GLOBAL_ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     Permission.ADMIN_RISK,
     Permission.ADMIN_AUDIT,
     Permission.ADMIN_LEDGER,
+    Permission.ADMIN_TRANSFERS,
+    Permission.ADMIN_JOBS,
   ],
   ADMIN: [
     Permission.ADMIN_USERS,
@@ -75,6 +97,9 @@ export const GLOBAL_ROLE_PERMISSIONS: Record<GlobalRole, Permission[]> = {
     Permission.ADMIN_LEDGER,
     Permission.ADMIN_AUDIT,
     Permission.SANDBOX_PARTNER_SIMULATE,
+    Permission.ADMIN_TRANSFERS,
+    Permission.ADMIN_JOBS,
+    Permission.ADMIN_DDA,
   ],
 };
 

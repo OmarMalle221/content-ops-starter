@@ -44,11 +44,24 @@ model User {
   failedLoginCount Int          @default(0)
   lockedUntil      DateTime?
   lastLoginAt      DateTime?
+  securityPreferences Json?
+  deletionRequestedAt DateTime?
+  anonymizedAt     DateTime?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
   deletedAt        DateTime?
 
   sessions               Session[]
+  beneficiaries          Beneficiary[]           @relation("BeneficiaryCreator")
+  createdTransfers       Transfer[]              @relation("TransferCreator")
+  reviewedTransfers      Transfer[]              @relation("TransferReviewer")
+  fxQuotes               FXQuote[]               @relation("FxQuoteCreator")
+  invoices               Invoice[]               @relation("InvoiceCreator")
+  quotes                 Quote[]                 @relation("QuoteCreator")
+  invoicePayments        InvoicePayment[]        @relation("InvoicePaymentRecorder")
+  apiCredentials         ApiCredential[]         @relation("ApiCredentialCreator")
+  webhookSubscriptions   WebhookSubscription[]   @relation("WebhookCreator")
+  ddaOperations          DigitalAssetSimulation[] @relation("DdaCreator")
   memberships            OrganizationMember[]
   identityVerifications  IdentityVerification[]
   notifications          Notification[]
@@ -135,6 +148,10 @@ model Organization {
   transfers             Transfer[]
   fxQuotes              FXQuote[]
   digitalAssetSims      DigitalAssetSimulation[]
+  ddaCounterpartyOps    DigitalAssetSimulation[] @relation("DdaCounterparty")
+  beneficiaries         Beneficiary[]
+  invoices              Invoice[]
+  quotes                Quote[]
 
   @@index([type])
 }
@@ -243,6 +260,8 @@ model Counterparty {
   updatedAt            DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices     Invoice[]
+  quotes       Quote[]
 
   @@index([organizationId])
 }
@@ -311,6 +330,8 @@ model Transaction {
   fundingRequests FundingRequest[]
   providerEvents  ProviderEvent[]
   riskAlerts      RiskAlert[]
+  invoices        Invoice[]
+  quotes          Quote[]
 
   @@index([buyerOrganizationId, status])
   @@index([sellerOrganizationId, status])
@@ -616,13 +637,19 @@ model TransactionEvent {
 
 // ───────────────────────────── Financial ledger ─────────────────────────────
 
+enum CurrencyKind {
+  FIAT
+  SIMULATED_ASSET
+}
+
 model Currency {
-  code      String   @id @db.Char(3)
+  code      String       @id @db.Char(3)
   name      String
   exponent  Int
   symbol    String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  kind      CurrencyKind @default(FIAT)
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
 
   transactions   Transaction[]
   ledgerAccounts LedgerAccount[]
@@ -886,48 +913,311 @@ enum TransferStatus {
   REVIEW_REQUIRED
 }
 
+enum FxQuoteStatus {
+  QUOTED
+  USED
+  EXPIRED
+}
+
 model FXQuote {
-  id                   String   @id @default(uuid()) @db.Uuid
-  organizationId       String   @db.Uuid
-  sourceCurrency       String   @db.Char(3)
-  destinationCurrency  String   @db.Char(3)
-  sourceAmountMinor    BigInt
-  rateNumerator        BigInt
-  rateDenominator      BigInt
-  feeMinor             BigInt
+  id                     String        @id @default(uuid()) @db.Uuid
+  organizationId         String        @db.Uuid
+  createdByUserId        String?       @db.Uuid
+  originCountry          String?       @db.Char(2)
+  destinationCountry     String?       @db.Char(2)
+  sourceCurrency         String        @db.Char(3)
+  destinationCurrency    String        @db.Char(3)
+  sourceAmountMinor      BigInt
+  rateNumerator          BigInt
+  rateDenominator        BigInt
+  feeBps                 Int           @default(0)
+  fixedFeeMinor          BigInt        @default(0)
+  feeMinor               BigInt
   destinationAmountMinor BigInt
-  provider             String
-  expiresAt            DateTime
-  createdAt            DateTime @default(now())
+  provider               String
+  status                 FxQuoteStatus @default(QUOTED)
+  expiresAt              DateTime
+  createdAt              DateTime      @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id])
+  createdBy    User?        @relation("FxQuoteCreator", fields: [createdByUserId], references: [id])
   transfers    Transfer[]
 
-  @@index([organizationId])
+  @@index([organizationId, createdAt])
+}
+
+enum BeneficiaryMethod {
+  BANK_ACCOUNT
+  MOBILE_MONEY
+}
+
+enum BeneficiaryStatus {
+  ACTIVE
+  REMOVED
+}
+
+model Beneficiary {
+  id                      String            @id @default(uuid()) @db.Uuid
+  organizationId          String            @db.Uuid
+  createdByUserId         String            @db.Uuid
+  name                    String
+  country                 String            @db.Char(2)
+  currencyCode            String            @db.Char(3)
+  method                  BeneficiaryMethod
+  // Account identifier is encrypted at rest; only a masked form is ever returned.
+  accountIdentifierEnc    String
+  accountIdentifierMasked String
+  institutionName         String?
+  phone                   String?
+  email                   String?
+  status                  BeneficiaryStatus @default(ACTIVE)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  removedAt               DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("BeneficiaryCreator", fields: [createdByUserId], references: [id])
+  transfers    Transfer[]
+
+  @@index([organizationId, status])
 }
 
 model Transfer {
-  id                 String         @id @default(uuid()) @db.Uuid
-  reference          String         @unique
-  organizationId     String         @db.Uuid
-  providerId         String?        @db.Uuid
-  quoteId            String?        @db.Uuid
-  originCountry      String         @db.Char(2)
-  destinationCountry String         @db.Char(2)
-  sourceCurrency     String         @db.Char(3)
-  destinationCurrency String        @db.Char(3)
-  sourceAmountMinor  BigInt
-  status             TransferStatus @default(CREATED)
-  beneficiary        Json
-  failureReason      String?
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                             String         @id @default(uuid()) @db.Uuid
+  reference                      String         @unique
+  organizationId                 String         @db.Uuid
+  createdByUserId                String         @db.Uuid
+  providerId                     String?        @db.Uuid
+  quoteId                        String?        @db.Uuid
+  beneficiaryId                  String?        @db.Uuid
+  originCountry                  String         @db.Char(2)
+  destinationCountry             String         @db.Char(2)
+  sourceCurrency                 String         @db.Char(3)
+  destinationCurrency            String         @db.Char(3)
+  sourceAmountMinor              BigInt
+  feeMinor                       BigInt         @default(0)
+  destinationAmountMinor         BigInt         @default(0)
+  rateNumerator                  BigInt         @default(1)
+  rateDenominator                BigInt         @default(1)
+  status                         TransferStatus @default(CREATED)
+  purpose                        String?
+  /** Snapshot of the beneficiary at creation (masked identifier only). */
+  beneficiary                    Json
+  failureReason                  String?
+  reviewReason                   String?
+  reviewedByUserId               String?        @db.Uuid
+  reviewedAt                     DateTime?
+  riskScore                      Int?
+  externalRef                    String?
+  sourceLedgerTransactionId      String?        @db.Uuid
+  destinationLedgerTransactionId String?        @db.Uuid
+  reversalLedgerTransactionId    String?        @db.Uuid
+  quotedAt                       DateTime?
+  authorizedAt                   DateTime?
+  processingAt                   DateTime?
+  settledAt                      DateTime?
+  failedAt                       DateTime?
+  cancelledAt                    DateTime?
+  metadata                       Json?
+  createdAt                      DateTime       @default(now())
+  updatedAt                      DateTime       @updatedAt
 
-  organization Organization     @relation(fields: [organizationId], references: [id])
-  provider     PaymentProvider? @relation(fields: [providerId], references: [id])
-  quote        FXQuote?         @relation(fields: [quoteId], references: [id])
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  createdBy      User             @relation("TransferCreator", fields: [createdByUserId], references: [id])
+  reviewedBy     User?            @relation("TransferReviewer", fields: [reviewedByUserId], references: [id])
+  provider       PaymentProvider? @relation(fields: [providerId], references: [id])
+  quote          FXQuote?         @relation(fields: [quoteId], references: [id])
+  beneficiaryRef Beneficiary?     @relation(fields: [beneficiaryId], references: [id])
+  events         TransferEvent[]
 
   @@index([organizationId, status])
+  @@index([status, updatedAt])
+}
+
+model TransferEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  transferId  String   @db.Uuid
+  type        String
+  actorUserId String?  @db.Uuid
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  transfer Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@index([transferId, createdAt])
+}
+
+// ───────────────────────────── Diaspora Business (Phase 4) ──────────────────
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  CONVERTED
+}
+
+model Invoice {
+  id              String        @id @default(uuid()) @db.Uuid
+  organizationId  String        @db.Uuid
+  createdByUserId String        @db.Uuid
+  counterpartyId  String?       @db.Uuid
+  transactionId   String?       @db.Uuid
+  quoteId         String?       @unique @db.Uuid
+  number          String
+  customerName    String
+  customerEmail   String?
+  status          InvoiceStatus @default(DRAFT)
+  currencyCode    String        @db.Char(3)
+  issueDate       DateTime      @default(now())
+  dueDate         DateTime
+  subtotalMinor   BigInt        @default(0)
+  taxMinor        BigInt        @default(0)
+  totalMinor      BigInt        @default(0)
+  paidMinor       BigInt        @default(0)
+  notes           String?
+  sentAt          DateTime?
+  paidAt          DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User          @relation("InvoiceCreator", fields: [createdByUserId], references: [id])
+  counterparty Counterparty? @relation(fields: [counterpartyId], references: [id])
+  transaction  Transaction?  @relation(fields: [transactionId], references: [id])
+  quote        Quote?        @relation(fields: [quoteId], references: [id])
+  lines        InvoiceLine[]
+  payments     InvoicePayment[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([dueDate])
+}
+
+model InvoiceLine {
+  id             String @id @default(uuid()) @db.Uuid
+  invoiceId      String @db.Uuid
+  position       Int
+  description    String
+  quantity       Int    @default(1)
+  unitPriceMinor BigInt
+  totalMinor     BigInt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, position])
+}
+
+enum InvoicePaymentMethod {
+  WALLET_SIMULATED
+  PROTECT_RELEASE
+  EXTERNAL_RECORDED
+}
+
+model InvoicePayment {
+  id                  String               @id @default(uuid()) @db.Uuid
+  invoiceId           String               @db.Uuid
+  recordedByUserId    String               @db.Uuid
+  amountMinor         BigInt
+  method              InvoicePaymentMethod
+  reference           String?
+  ledgerTransactionId String?              @db.Uuid
+  paidAt              DateTime             @default(now())
+  createdAt           DateTime             @default(now())
+
+  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  recordedBy User    @relation("InvoicePaymentRecorder", fields: [recordedByUserId], references: [id])
+
+  @@index([invoiceId])
+}
+
+model Quote {
+  id                     String      @id @default(uuid()) @db.Uuid
+  organizationId         String      @db.Uuid
+  createdByUserId        String      @db.Uuid
+  counterpartyId         String?     @db.Uuid
+  convertedTransactionId String?     @db.Uuid
+  number                 String
+  customerName           String
+  customerEmail          String?
+  status                 QuoteStatus @default(DRAFT)
+  currencyCode           String      @db.Char(3)
+  validUntil             DateTime
+  subtotalMinor          BigInt      @default(0)
+  taxMinor               BigInt      @default(0)
+  totalMinor             BigInt      @default(0)
+  notes                  String?
+  sentAt                 DateTime?
+  acceptedAt             DateTime?
+  declinedAt             DateTime?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  organization         Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy            User          @relation("QuoteCreator", fields: [createdByUserId], references: [id])
+  counterparty         Counterparty? @relation(fields: [counterpartyId], references: [id])
+  convertedTransaction Transaction?  @relation(fields: [convertedTransactionId], references: [id])
+  invoice              Invoice?
+  lines                QuoteLine[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+}
+
+model QuoteLine {
+  id             String @id @default(uuid()) @db.Uuid
+  quoteId        String @db.Uuid
+  position       Int
+  description    String
+  quantity       Int    @default(1)
+  unitPriceMinor BigInt
+  totalMinor     BigInt
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@unique([quoteId, position])
+}
+
+// ───────────────────────────── Scheduled jobs (Phase 3) ─────────────────────
+
+enum MaintenanceJobName {
+  BALANCE_SNAPSHOTS
+  RECONCILIATION
+  EXPIRE_STALE
+  ANONYMIZE_DELETED
+  TRANSFER_PROCESSING
+  WEBHOOK_RETRY
+  INVOICE_OVERDUE
+}
+
+enum MaintenanceRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model MaintenanceRun {
+  id          String               @id @default(uuid()) @db.Uuid
+  jobName     MaintenanceJobName
+  status      MaintenanceRunStatus @default(RUNNING)
+  triggeredBy String               @default("scheduler")
+  startedAt   DateTime             @default(now())
+  finishedAt  DateTime?
+  summary     Json?
+  error       String?
+
+  @@index([jobName, startedAt])
 }
 
 // ───────────────────────────── Governance ───────────────────────────────────
@@ -1030,40 +1320,116 @@ model Notification {
   @@index([userId, createdAt])
 }
 
-// ───────────────────────────── API platform (Phase 5 — schema reserved) ─────
+// ───────────────────────────── API platform (Phase 5) ───────────────────────
 
 model ApiCredential {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @db.Uuid
-  name           String
-  keyPrefix      String
-  keyHash        String    @unique
-  scopes         String[]  @default([])
-  lastUsedAt     DateTime?
-  revokedAt      DateTime?
-  createdAt      DateTime  @default(now())
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid
+  createdByUserId    String?   @db.Uuid
+  name               String
+  description        String?
+  keyPrefix          String
+  keyHash            String    @unique
+  scopes             String[]  @default([])
+  rateLimitPerMinute Int       @default(120)
+  rotatedFromId      String?   @db.Uuid
+  expiresAt          DateTime?
+  lastUsedAt         DateTime?
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?           @relation("ApiCredentialCreator", fields: [createdByUserId], references: [id])
+  requestLogs  ApiRequestLog[]
 
   @@index([organizationId])
+  @@index([keyPrefix])
+}
+
+model ApiRequestLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  credentialId String   @db.Uuid
+  method       String
+  path         String
+  statusCode   Int
+  durationMs   Int
+  ip           String?
+  requestId    String?
+  createdAt    DateTime @default(now())
+
+  credential ApiCredential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+
+  @@index([credentialId, createdAt])
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  scopeKey       String
+  idempotencyKey String
+  method         String
+  path           String
+  requestHash    String
+  statusCode     Int
+  responseBody   Json
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@unique([scopeKey, idempotencyKey])
+  @@index([expiresAt])
 }
 
 model WebhookSubscription {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @db.Uuid
-  url            String
-  secretEnc      String
-  events         String[]  @default([])
-  isActive       Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  revokedAt      DateTime?
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  createdByUserId String?   @db.Uuid
+  url             String
+  description     String?
+  secretEnc       String
+  events          String[]  @default([])
+  isActive        Boolean   @default(true)
+  failureCount    Int       @default(0)
+  lastDeliveryAt  DateTime?
+  lastRotatedAt   DateTime?
+  createdAt       DateTime  @default(now())
+  revokedAt       DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?             @relation("WebhookCreator", fields: [createdByUserId], references: [id])
+  deliveries   WebhookDelivery[]
 
   @@index([organizationId])
 }
 
-// ───────────────────────────── DDA research sandbox (Phase 5 — reserved) ────
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  EXHAUSTED
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid()) @db.Uuid
+  subscriptionId String                @db.Uuid
+  eventType      String
+  eventId        String
+  payload        Json
+  signature      String
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  nextAttemptAt  DateTime?
+  lastStatusCode Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([subscriptionId, createdAt])
+}
+
+// ───────────────────────────── DDA research sandbox (Phase 5) ───────────────
+// Fictitious units only. No public chain, no real money, no convertibility.
 
 enum DigitalAssetSimStatus {
   MINTED
@@ -1072,15 +1438,31 @@ enum DigitalAssetSimStatus {
   VOID
 }
 
+enum DdaOperation {
+  MINT
+  TRANSFER
+  REDEEM
+  RESERVE_ADJUSTMENT
+}
+
 model DigitalAssetSimulation {
-  id             String                @id @default(uuid()) @db.Uuid
-  organizationId String                @db.Uuid
-  unitsMinor     BigInt
-  status         DigitalAssetSimStatus @default(MINTED)
-  note           String?
-  createdAt      DateTime              @default(now())
+  id                        String                @id @default(uuid()) @db.Uuid
+  reference                 String                @unique
+  organizationId            String                @db.Uuid
+  counterpartyOrganizationId String?              @db.Uuid
+  createdByUserId           String?               @db.Uuid
+  operation                 DdaOperation          @default(MINT)
+  unitsMinor                BigInt
+  reserveDeltaUsdMinor      BigInt                @default(0)
+  status                    DigitalAssetSimStatus @default(MINTED)
+  ledgerTransactionId       String?               @db.Uuid
+  note                      String?
+  metadata                  Json?
+  createdAt                 DateTime              @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  counterparty Organization? @relation("DdaCounterparty", fields: [counterpartyOrganizationId], references: [id])
+  createdBy    User?         @relation("DdaCreator", fields: [createdByUserId], references: [id])
 
-  @@index([organizationId])
+  @@index([organizationId, createdAt])
 }
