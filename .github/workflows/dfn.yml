@@ -1,0 +1,118 @@
+name: DFN (Diaspora Financial Network) CI
+
+on:
+  push:
+    paths: ['dfn/**', '.github/workflows/dfn.yml']
+  pull_request:
+    paths: ['dfn/**', '.github/workflows/dfn.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dfn-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: dfn
+
+env:
+  DFN_MODE: sandbox
+  SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789abcdef
+  DOCUMENT_ENCRYPTION_KEY: '3333333333333333333333333333333333333333333333333333333333333333'
+
+jobs:
+  quality:
+    name: Typecheck, lint, unit, ledger & API integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dfn
+          POSTGRES_PASSWORD: dfn
+          POSTGRES_DB: dfn_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dfn" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn_test?schema=public
+      TEST_DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn_test?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dfn/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm --filter @dfn/database migrate:deploy
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm --filter @dfn/api lint
+      - run: pnpm --filter @dfn/web lint
+      - run: pnpm test:unit
+      - run: pnpm test:api
+      - run: pnpm audit --audit-level=high || echo "::warning::pnpm audit reported issues — review before any non-sandbox deployment"
+
+  e2e:
+    name: Build & Playwright end-to-end
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dfn
+          POSTGRES_PASSWORD: dfn
+          POSTGRES_DB: dfn
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dfn" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn?schema=public
+      API_PORT: '4000'
+      API_PUBLIC_URL: http://localhost:4000
+      WEB_PUBLIC_URL: http://localhost:3000
+      CORS_ORIGINS: http://localhost:3000
+      API_INTERNAL_URL: http://localhost:4000
+      STORAGE_DIR: /tmp/dfn-storage
+      LOG_LEVEL: warn
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dfn/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm --filter @dfn/database migrate:deploy
+      - run: pnpm --filter @dfn/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @dfn/web build
+      - name: Start API and web
+        run: |
+          (pnpm --filter @dfn/api start > api.log 2>&1 &)
+          (pnpm --filter @dfn/web start > web.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://localhost:4000/v1/health && break; sleep 2; done
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/ > /dev/null && break; sleep 2; done
+      - run: pnpm --filter @dfn/web test:e2e
+        env: { CI: 'true' }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-e2e-report
+          path: |
+            dfn/apps/web/playwright-report
+            dfn/api.log
+            dfn/web.log
+          retention-days: 7

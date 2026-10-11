@@ -1,0 +1,66 @@
+# API Diaspora Trust — sandbox
+
+- Base : `http://localhost:4000` (proxy web : `http://localhost:3000/api`)
+- Documentation interactive : `GET /docs` (Swagger UI) — export : [`openapi.json`](./openapi.json) (`pnpm --filter @dfn/api openapi:export`)
+- Guide partenaires (clés API, scopes, idempotence, webhooks signés) : [`PARTNERS.md`](./PARTNERS.md)
+- Toutes les réponses portent `x-dfn-mode: sandbox` et `x-dfn-disclaimer`. **Aucun fonds réel** : financements, règlements de transferts, taux FX, paiements de factures et unités DDA sont simulés.
+
+## Authentification
+
+Deux modes :
+
+1. **Session** (interface web et tests) : cookie `dfn_session` (httpOnly, SameSite=Lax). Obtenir une session : `POST /v1/auth/register` ou `POST /v1/auth/login`. Si `mfaRequired` est vrai, appeler `POST /v1/auth/mfa/verify`. Un en-tête `Authorization: Bearer <token de session>` est également accepté pour les tests.
+2. **Clé API partenaire** : `Authorization: Bearer dfn_sk_…`. La clé est créée depuis la console `/developers` (`POST /v1/api-credentials`), affichée une seule fois, hachée en base, limitée par **scopes** et par **débit** (`rateLimitPerMinute`). Le contexte obtenu est un membre de l'organisation émettrice uniquement ; les routes d'authentification, d'administration, de simulation et de gestion des clés ne sont jamais accessibles par clé (`403 SCOPE_FORBIDDEN`). Détails dans `PARTNERS.md`.
+
+## Idempotence
+
+Sur `POST`, `PATCH`, `PUT` et `DELETE`, envoyer `Idempotency-Key: <chaîne unique ≤ 255>`. Une même clé avec la même requête (méthode + chemin + corps canonique) renvoie la réponse initiale avec `Idempotent-Replayed: true` ; une même clé avec un corps différent renvoie `422 IDEMPOTENCY_KEY_REUSED` ; une requête encore en cours renvoie `409 IDEMPOTENCY_IN_PROGRESS`. Les réponses sont conservées `IDEMPOTENCY_TTL_HOURS` heures (24 par défaut).
+
+## Format d'erreur
+
+```json
+{
+  "statusCode": 409,
+  "code": "RELEASE_FROZEN",
+  "message": "A dispute is open: releases are frozen",
+  "details": {},
+  "requestId": "…"
+}
+```
+
+Codes : `VALIDATION_FAILED`, `UNAUTHENTICATED`, `MFA_REQUIRED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `INVALID_TRANSITION`, `RELEASE_FROZEN`, `INSUFFICIENT_FUNDS`, `LEDGER_UNBALANCED`, `RATE_LIMITED`, `ACCOUNT_LOCKED`, `INVITATION_INVALID`, `VERIFICATION_REQUIRED`, `UNSUPPORTED_FILE`, `SANDBOX_LIMIT_REACHED`, `CORRIDOR_UNSUPPORTED`, `QUOTE_EXPIRED`, `DAILY_LIMIT_EXCEEDED`, `JOB_ALREADY_RUNNING`, `JOB_NOT_REGISTERED`, `ACCOUNT_HAS_OPEN_ITEMS`, `DELETION_ALREADY_REQUESTED`, `ACCOUNT_ALREADY_ANONYMIZED`, `NO_DELETION_REQUEST`, `SCOPE_FORBIDDEN`, `API_KEY_INVALID`, `API_KEY_REVOKED`, `API_KEY_EXPIRED`, `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_IN_PROGRESS`, `NOT_AVAILABLE`.
+
+## Montants
+
+Entrée : chaînes décimales (`"18500.00"`). Sortie : `{ "minor": "1850000", "decimal": "18500.00", "currency": "CAD" }`. Devises fiat : CAD, USD, EUR, XOF, GNF. L'unité `DDA` n'apparaît que dans le laboratoire de recherche réservé aux administrateurs.
+
+## Principaux groupes d'endpoints
+
+| Groupe                 | Endpoints                                                                                                                                                                                                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| auth                   | `POST /v1/auth/{register,login,logout,password}`, `GET /v1/auth/me`, `POST /v1/auth/mfa/{setup,enable,verify,disable}`, `GET /v1/auth/sessions`, `POST /v1/auth/sessions/revoke-others`                                                                                                       |
+| users                  | `GET/PATCH /v1/users/me`, `GET/PUT /v1/users/me/security-preferences`, `POST /v1/users/me/deletion-request`, `GET …/deletion-request/status`, `POST …/deletion-request/:id/deletion-cancel`                                                                                                   |
+| organizations          | `GET/POST /v1/organizations`, `GET /v1/organizations/:id`, `POST …/members/invite`, `PATCH/DELETE …/members/:memberId`, `POST /v1/organizations/invitations/accept`, `POST …/verification`, `GET/POST …/counterparties`                                                                       |
+| verifications          | `GET/POST /v1/verifications/identity`                                                                                                                                                                                                                                                         |
+| transactions (Protect) | `GET/POST /v1/transactions`, `GET /v1/transactions/:id`, `GET …/events`, `POST …/invitation/resend`, `POST …/accept-terms`, `POST …/cancel`, `POST …/funding/request`, `POST …/milestones/:mid/{submit,approve,request-changes}`                                                              |
+| invitations            | `GET /v1/invitations/:token` (public), `POST /v1/invitations/{accept,decline}`                                                                                                                                                                                                                |
+| documents              | `POST /v1/documents`, `POST /v1/transactions/:id/documents` (multipart `file`), `GET /v1/documents`, `GET /v1/transactions/:id/documents`, `GET /v1/documents/:id/download`, `POST /v1/documents/:id/review` (staff), `DELETE /v1/documents/:id`                                              |
+| disputes               | `POST /v1/transactions/:id/disputes`, `POST /v1/transactions/:id/refund-request`, `GET /v1/disputes`, `GET /v1/disputes/:id`, `POST …/messages`, `POST …/appeal`, staff : `POST …/{review,decide,close}`                                                                                      |
+| wallets                | `GET /v1/wallets/:organizationId`, `GET …/summary`, `GET …/:currency/entries`, `GET …/:currency/statement.csv`, `POST /v1/wallets/estimate` (estimation FX simulée)                                                                                                                           |
+| beneficiaries          | `GET/POST /v1/beneficiaries`, `DELETE /v1/beneficiaries/:id` (identifiants masqués en lecture)                                                                                                                                                                                                |
+| transfers              | `POST /v1/transfers/quotes`, `GET /v1/transfers/quotes/:id`, `GET/POST /v1/transfers`, `GET /v1/transfers/:id`, `GET …/receipt`, `POST …/authorize` (MFA selon préférences), `POST …/cancel`                                                                                                  |
+| invoices / quotes      | `GET/POST /v1/invoices`, `GET /v1/invoices.csv`, `GET /v1/invoices/:id`, `GET …/document`, `PATCH …`, `POST …/{send,payments,cancel}` ; `GET/POST /v1/quotes`, `GET /v1/quotes/:id`, `GET …/document`, `PATCH …`, `POST …/{send,accept,decline,convert}`                                      |
+| reports                | `GET /v1/organizations/:id/reports/{summary,transactions.csv,invoices.csv,commissions}`                                                                                                                                                                                                       |
+| api-credentials        | `GET /v1/api-credentials/catalog`, `GET/POST /v1/api-credentials`, `GET /v1/api-credentials/:id`, `POST …/rotate`, `DELETE …` (révocation), `GET …/logs` — session uniquement (rôle OWNER/ADMIN de l'organisation)                                                                            |
+| webhooks               | `GET/POST /v1/webhooks`, `GET/PATCH/DELETE /v1/webhooks/:id`, `POST …/rotate-secret`, `POST …/test`, `GET …/deliveries`, `POST …/deliveries/:deliveryId/retry`                                                                                                                                |
+| notifications          | `GET /v1/notifications`, `POST /v1/notifications/:id/read`, `POST /v1/notifications/read-all`                                                                                                                                                                                                 |
+| admin (staff)          | `GET /v1/admin/{stats,users,verifications,risk-alerts,audit-logs,ledger,transactions}`, `POST /v1/admin/users/:id/{status,role}`, `POST /v1/admin/verifications/:id/review`, `POST /v1/admin/risk-alerts/:id/actions`, `POST /v1/admin/ledger/reconcile`, `POST /v1/admin/maintenance/expire` |
+| admin — transferts     | `GET /v1/admin/transfers`, `GET /v1/admin/transfers/:id`, `POST …/review` (approbation / rejet motivés)                                                                                                                                                                                       |
+| admin — tâches         | `GET /v1/admin/jobs`, `GET /v1/admin/jobs/runs`, `POST /v1/admin/jobs/:name/run`                                                                                                                                                                                                              |
+| admin — DDA (ADMIN)    | `GET /v1/admin/dda/{overview,operations,holdings,organizations,trace/:reference}`, `POST /v1/admin/dda/{mint,transfer,redeem,reserve-adjustments,stress-test}` — enveloppe `simulated: true` sur chaque réponse                                                                               |
+| sandbox                | `POST /v1/sandbox/partner/funding-events` (webhook simulé de financement), `POST /v1/sandbox/partner/transfer-events` (règlement / échec simulé d'un transfert), `POST /v1/sandbox/wallets/deposit` (staff), `POST /v1/sandbox/wallets/self-deposit` (plafonné par jour)                      |
+| reference / health     | `GET /v1/reference`, `GET /v1/health`                                                                                                                                                                                                                                                         |
+
+## Webhooks sortants (résumé)
+
+Événements : `transaction.created`, `transaction.party_accepted`, `funding.confirmed`, `milestone.submitted`, `milestone.released`, `transaction.settled`, `transaction.cancelled`, `dispute.opened`, `dispute.closed`, `transfer.settled`, `transfer.failed`, `invoice.paid`. Charge `{ id, type, createdAt, sandbox: true, data }`, en-têtes `X-DFN-Event`, `X-DFN-Delivery`, `X-DFN-Signature: t=<unix>,v1=<HMAC-SHA256>`, `X-DFN-Mode: sandbox`. Vérification avec `verifySignature` de `@dfn/payment-adapters` (exemples Node et Python dans `PARTNERS.md`). Relances `2^n` minutes jusqu'à `WEBHOOK_MAX_ATTEMPTS`, désactivation automatique après 50 échecs consécutifs, adresses privées refusées.

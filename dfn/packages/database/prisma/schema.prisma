@@ -1,0 +1,1473 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Diaspora Financial Network — PostgreSQL schema (Prisma 6)
+// SANDBOX ONLY: every monetary value in this schema is fictitious.
+// Conventions: UUID primary keys, UTC timestamps, explicit state enums,
+// amounts stored as BigInt minor units (cents / francs) with the currency code.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Identity & access ────────────────────────────
+
+enum GlobalRole {
+  USER
+  COMPLIANCE
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model User {
+  id               String       @id @default(uuid()) @db.Uuid
+  email            String       @unique
+  passwordHash     String
+  firstName        String
+  lastName         String
+  phone            String?
+  country          String?      @db.Char(2)
+  locale           String       @default("fr")
+  globalRole       GlobalRole   @default(USER)
+  status           UserStatus   @default(ACTIVE)
+  mfaEnabled       Boolean      @default(false)
+  mfaSecretEnc     String?
+  failedLoginCount Int          @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  securityPreferences Json?
+  deletionRequestedAt DateTime?
+  anonymizedAt     DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+
+  sessions               Session[]
+  beneficiaries          Beneficiary[]           @relation("BeneficiaryCreator")
+  createdTransfers       Transfer[]              @relation("TransferCreator")
+  reviewedTransfers      Transfer[]              @relation("TransferReviewer")
+  fxQuotes               FXQuote[]               @relation("FxQuoteCreator")
+  invoices               Invoice[]               @relation("InvoiceCreator")
+  quotes                 Quote[]                 @relation("QuoteCreator")
+  invoicePayments        InvoicePayment[]        @relation("InvoicePaymentRecorder")
+  apiCredentials         ApiCredential[]         @relation("ApiCredentialCreator")
+  webhookSubscriptions   WebhookSubscription[]   @relation("WebhookCreator")
+  ddaOperations          DigitalAssetSimulation[] @relation("DdaCreator")
+  memberships            OrganizationMember[]
+  identityVerifications  IdentityVerification[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]              @relation("AuditActor")
+  createdTransactions    Transaction[]           @relation("TransactionCreator")
+  uploadedDocuments      Document[]              @relation("DocumentUploader")
+  disputeMessages        DisputeMessage[]
+  disputeDecisions       DisputeDecision[]
+  riskAlerts             RiskAlert[]
+  parties                TransactionParty[]
+  contractAcceptances    ContractAcceptance[]
+  evidences              Evidence[]
+  assignedDisputes       Dispute[]               @relation("DisputeAssignee")
+  riskAlertActions       RiskAlertAction[]
+  transactionEvents      TransactionEvent[]
+  reviewedIdentities     IdentityVerification[]  @relation("IdentityReviewer")
+  reviewedBusinesses     BusinessVerification[]  @relation("BusinessReviewer")
+  reviewedDocuments      Document[]              @relation("DocumentReviewer")
+  resolvedRiskAlerts     RiskAlert[]             @relation("RiskResolver")
+  organizationInvites    OrganizationInvitation[] @relation("OrgInviteSender")
+
+  @@index([globalRole])
+  @@index([status])
+}
+
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  tokenHash   String    @unique
+  mfaVerified Boolean   @default(false)
+  ip          String?
+  userAgent   String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum OrganizationType {
+  PERSONAL
+  BUSINESS
+}
+
+enum VerificationStatus {
+  NOT_STARTED
+  PENDING
+  SIMULATED_PASS
+  SIMULATED_FAIL
+  REJECTED
+  EXPIRED
+}
+
+model Organization {
+  id                 String             @id @default(uuid()) @db.Uuid
+  name               String
+  type               OrganizationType
+  country            String             @db.Char(2)
+  legalName          String?
+  registrationNumber String?
+  website            String?
+  verificationStatus VerificationStatus @default(NOT_STARTED)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  deletedAt          DateTime?
+
+  members               OrganizationMember[]
+  invitations           OrganizationInvitation[]
+  businessVerifications BusinessVerification[]
+  counterparties        Counterparty[]
+  buyerTransactions     Transaction[]            @relation("BuyerOrg")
+  sellerTransactions    Transaction[]            @relation("SellerOrg")
+  parties               TransactionParty[]
+  documents             Document[]
+  wallets               Wallet[]
+  auditLogs             AuditLog[]
+  riskAlerts            RiskAlert[]
+  apiCredentials        ApiCredential[]
+  webhookSubscriptions  WebhookSubscription[]
+  transfers             Transfer[]
+  fxQuotes              FXQuote[]
+  digitalAssetSims      DigitalAssetSimulation[]
+  ddaCounterpartyOps    DigitalAssetSimulation[] @relation("DdaCounterparty")
+  beneficiaries         Beneficiary[]
+  invoices              Invoice[]
+  quotes                Quote[]
+
+  @@index([type])
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  userId         String   @db.Uuid
+  role           OrgRole  @default(MEMBER)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model OrganizationInvitation {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  email           String
+  role            OrgRole   @default(MEMBER)
+  tokenHash       String    @unique
+  invitedByUserId String    @db.Uuid
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("OrgInviteSender", fields: [invitedByUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+// ───────────────────────────── Verification (KYC / KYB) ─────────────────────
+
+enum VerificationLevel {
+  BASIC
+  ENHANCED
+}
+
+model IdentityVerification {
+  id               String             @id @default(uuid()) @db.Uuid
+  userId           String             @db.Uuid
+  level            VerificationLevel  @default(BASIC)
+  provider         String // "sandbox" until a licensed KYC provider is contracted
+  providerRef      String?
+  status           VerificationStatus @default(PENDING)
+  // Non-sensitive declaration only (document type, issuing country). Never raw document data.
+  declaredData     Json
+  providerResponse Json?
+  reviewedById     String?            @db.Uuid
+  reviewNotes      String?
+  reviewedAt       DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("IdentityReviewer", fields: [reviewedById], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+model BusinessVerification {
+  id               String             @id @default(uuid()) @db.Uuid
+  organizationId   String             @db.Uuid
+  provider         String
+  providerRef      String?
+  status           VerificationStatus @default(PENDING)
+  declaredData     Json
+  providerResponse Json?
+  reviewedById     String?            @db.Uuid
+  reviewNotes      String?
+  reviewedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reviewedBy   User?        @relation("BusinessReviewer", fields: [reviewedById], references: [id])
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model Counterparty {
+  id                   String   @id @default(uuid()) @db.Uuid
+  organizationId       String   @db.Uuid
+  name                 String
+  email                String?
+  phone                String?
+  country              String?  @db.Char(2)
+  notes                String?
+  linkedOrganizationId String?  @db.Uuid
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices     Invoice[]
+  quotes       Quote[]
+
+  @@index([organizationId])
+}
+
+// ───────────────────────────── Diaspora Protect ─────────────────────────────
+
+enum TransactionStatus {
+  DRAFT
+  PENDING_ACCEPTANCE
+  ACCEPTED
+  AWAITING_FUNDING
+  FUNDED
+  IN_PROGRESS
+  DISPUTED
+  SETTLED
+  REFUNDED
+  CANCELLED
+  EXPIRED
+}
+
+enum TransactionCategory {
+  VEHICLE
+  GOODS
+  SERVICES
+  REAL_ESTATE
+  OTHER
+}
+
+model Transaction {
+  id                  String              @id @default(uuid()) @db.Uuid
+  reference           String              @unique
+  createdByUserId     String              @db.Uuid
+  buyerOrganizationId String              @db.Uuid
+  sellerOrganizationId String?            @db.Uuid
+  title               String
+  description         String
+  category            TransactionCategory @default(GOODS)
+  currencyCode        String              @db.Char(3)
+  amountMinor         BigInt
+  feeMinor            BigInt              @default(0)
+  feeBps              Int                 @default(150)
+  status              TransactionStatus   @default(DRAFT)
+  releaseFrozen       Boolean             @default(false)
+  originCountry       String              @db.Char(2)
+  destinationCountry  String              @db.Char(2)
+  acceptedAt          DateTime?
+  fundedAt            DateTime?
+  settledAt           DateTime?
+  cancelledAt         DateTime?
+  expiresAt           DateTime?
+  metadata            Json?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  createdBy          User          @relation("TransactionCreator", fields: [createdByUserId], references: [id])
+  buyerOrganization  Organization  @relation("BuyerOrg", fields: [buyerOrganizationId], references: [id])
+  sellerOrganization Organization? @relation("SellerOrg", fields: [sellerOrganizationId], references: [id])
+  currency           Currency      @relation(fields: [currencyCode], references: [code])
+
+  parties         TransactionParty[]
+  contract        Contract?
+  milestones      Milestone[]
+  documents       Document[]
+  disputes        Dispute[]
+  events          TransactionEvent[]
+  fundingRequests FundingRequest[]
+  providerEvents  ProviderEvent[]
+  riskAlerts      RiskAlert[]
+  invoices        Invoice[]
+  quotes          Quote[]
+
+  @@index([buyerOrganizationId, status])
+  @@index([sellerOrganizationId, status])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum PartyRole {
+  BUYER
+  SELLER
+}
+
+enum PartyStatus {
+  INVITED
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+model TransactionParty {
+  id              String      @id @default(uuid()) @db.Uuid
+  transactionId   String      @db.Uuid
+  role            PartyRole
+  organizationId  String?     @db.Uuid
+  userId          String?     @db.Uuid
+  invitedEmail    String
+  invitedName     String?
+  status          PartyStatus @default(INVITED)
+  inviteTokenHash String?     @unique
+  inviteExpiresAt DateTime?
+  invitedAt       DateTime    @default(now())
+  acceptedAt      DateTime?
+  createdAt       DateTime    @default(now())
+
+  transaction  Transaction   @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  user         User?         @relation(fields: [userId], references: [id])
+  acceptances  ContractAcceptance[]
+  openedDisputes Dispute[]
+
+  @@unique([transactionId, role])
+  @@index([invitedEmail])
+  @@index([userId])
+}
+
+enum ContractStatus {
+  DRAFT
+  PENDING_ACCEPTANCE
+  ACCEPTED
+  SUPERSEDED
+  VOID
+}
+
+model Contract {
+  id               String         @id @default(uuid()) @db.Uuid
+  transactionId    String         @unique @db.Uuid
+  status           ContractStatus @default(DRAFT)
+  currentVersionId String?        @unique @db.Uuid
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  transaction    Transaction       @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  currentVersion ContractVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  versions       ContractVersion[] @relation("ContractVersions")
+}
+
+model ContractVersion {
+  id              String   @id @default(uuid()) @db.Uuid
+  contractId      String   @db.Uuid
+  version         Int
+  templateCode    String
+  templateVersion String
+  terms           Json
+  bodyText        String
+  contentHash     String
+  createdByUserId String   @db.Uuid
+  createdAt       DateTime @default(now())
+
+  contract    Contract             @relation("ContractVersions", fields: [contractId], references: [id], onDelete: Cascade)
+  currentOf   Contract?            @relation("CurrentVersion")
+  acceptances ContractAcceptance[]
+
+  @@unique([contractId, version])
+}
+
+model ContractAcceptance {
+  id                String   @id @default(uuid()) @db.Uuid
+  contractVersionId String   @db.Uuid
+  partyId           String   @db.Uuid
+  userId            String   @db.Uuid
+  ip                String?
+  userAgent         String?
+  acceptedAt        DateTime @default(now())
+
+  contractVersion ContractVersion  @relation(fields: [contractVersionId], references: [id], onDelete: Cascade)
+  party           TransactionParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [id])
+
+  @@unique([contractVersionId, partyId])
+}
+
+enum MilestoneStatus {
+  PENDING
+  SUBMITTED
+  CHANGES_REQUESTED
+  APPROVED
+  RELEASED
+  REFUNDED
+  CANCELLED
+}
+
+model Milestone {
+  id                  String          @id @default(uuid()) @db.Uuid
+  transactionId       String          @db.Uuid
+  sequence            Int
+  title               String
+  description         String?
+  amountMinor         BigInt
+  requiredEvidence    String[]        @default([])
+  status              MilestoneStatus @default(PENDING)
+  submittedAt         DateTime?
+  approvedAt          DateTime?
+  releasedAt          DateTime?
+  rejectionNote       String?
+  ledgerTransactionId String?         @db.Uuid
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  evidences   Evidence[]
+
+  @@unique([transactionId, sequence])
+  @@index([status])
+}
+
+model Evidence {
+  id                String   @id @default(uuid()) @db.Uuid
+  milestoneId       String?  @db.Uuid
+  disputeId         String?  @db.Uuid
+  documentId        String   @db.Uuid
+  submittedByUserId String   @db.Uuid
+  note              String?
+  createdAt         DateTime @default(now())
+
+  milestone   Milestone? @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  dispute     Dispute?   @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  document    Document   @relation(fields: [documentId], references: [id])
+  submittedBy User       @relation(fields: [submittedByUserId], references: [id])
+
+  @@index([milestoneId])
+  @@index([disputeId])
+}
+
+enum DocumentKind {
+  CONTRACT
+  INVOICE
+  PROFORMA
+  IDENTITY
+  BUSINESS_REGISTRATION
+  PROOF_OF_SHIPMENT
+  BILL_OF_LADING
+  CUSTOMS
+  INSPECTION_REPORT
+  PHOTO
+  RECEIPT
+  OTHER
+}
+
+enum DocumentStatus {
+  PENDING_REVIEW
+  ACCEPTED
+  REJECTED
+}
+
+model Document {
+  id               String         @id @default(uuid()) @db.Uuid
+  organizationId   String         @db.Uuid
+  uploadedByUserId String         @db.Uuid
+  transactionId    String?        @db.Uuid
+  kind             DocumentKind   @default(OTHER)
+  title            String
+  fileName         String
+  mimeType         String
+  sizeBytes        Int
+  sha256           String
+  storageKey       String         @unique
+  encrypted        Boolean        @default(true)
+  status           DocumentStatus @default(PENDING_REVIEW)
+  reviewedById     String?        @db.Uuid
+  reviewNote       String?
+  reviewedAt       DateTime?
+  retentionUntil   DateTime?
+  createdAt        DateTime       @default(now())
+  deletedAt        DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  uploadedBy   User         @relation("DocumentUploader", fields: [uploadedByUserId], references: [id])
+  reviewedBy   User?        @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+  transaction  Transaction? @relation(fields: [transactionId], references: [id])
+  evidences    Evidence[]
+  disputeMessages DisputeMessage[]
+
+  @@index([organizationId])
+  @@index([transactionId])
+  @@index([status])
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  DECIDED
+  APPEALED
+  CLOSED
+}
+
+enum DisputeReason {
+  NOT_DELIVERED
+  NOT_AS_DESCRIBED
+  DAMAGED
+  DOCUMENT_MISMATCH
+  PAYMENT_ISSUE
+  OTHER
+}
+
+model Dispute {
+  id               String        @id @default(uuid()) @db.Uuid
+  transactionId    String        @db.Uuid
+  openedByPartyId  String        @db.Uuid
+  reason           DisputeReason
+  description      String
+  status           DisputeStatus @default(OPEN)
+  assignedToUserId String?       @db.Uuid
+  appealDeadline   DateTime?
+  openedAt         DateTime      @default(now())
+  closedAt         DateTime?
+  updatedAt        DateTime      @updatedAt
+
+  transaction  Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  openedBy     TransactionParty @relation(fields: [openedByPartyId], references: [id])
+  assignedTo   User?            @relation("DisputeAssignee", fields: [assignedToUserId], references: [id])
+  messages     DisputeMessage[]
+  decisions    DisputeDecision[]
+  evidences    Evidence[]
+
+  @@index([transactionId])
+  @@index([status])
+}
+
+model DisputeMessage {
+  id           String   @id @default(uuid()) @db.Uuid
+  disputeId    String   @db.Uuid
+  authorUserId String   @db.Uuid
+  body         String
+  documentId   String?  @db.Uuid
+  internal     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  dispute  Dispute   @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  author   User      @relation(fields: [authorUserId], references: [id])
+  document Document? @relation(fields: [documentId], references: [id])
+
+  @@index([disputeId])
+}
+
+enum DisputeOutcome {
+  RELEASE_TO_SELLER
+  REFUND_TO_BUYER
+  SPLIT
+  DISMISSED
+}
+
+model DisputeDecision {
+  id                String         @id @default(uuid()) @db.Uuid
+  disputeId         String         @db.Uuid
+  decidedByUserId   String         @db.Uuid
+  outcome           DisputeOutcome
+  sellerAmountMinor BigInt         @default(0)
+  buyerAmountMinor  BigInt         @default(0)
+  rationale         String
+  isFinal           Boolean        @default(false)
+  executedAt        DateTime?
+  createdAt         DateTime       @default(now())
+
+  dispute   Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  decidedBy User    @relation(fields: [decidedByUserId], references: [id])
+
+  @@index([disputeId])
+}
+
+model TransactionEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  transactionId String   @db.Uuid
+  type          String
+  actorUserId   String?  @db.Uuid
+  payload       Json?
+  createdAt     DateTime @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  actor       User?       @relation(fields: [actorUserId], references: [id])
+
+  @@index([transactionId, createdAt])
+}
+
+// ───────────────────────────── Financial ledger ─────────────────────────────
+
+enum CurrencyKind {
+  FIAT
+  SIMULATED_ASSET
+}
+
+model Currency {
+  code      String       @id @db.Char(3)
+  name      String
+  exponent  Int
+  symbol    String?
+  kind      CurrencyKind @default(FIAT)
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+
+  transactions   Transaction[]
+  ledgerAccounts LedgerAccount[]
+  ledgerEntries  LedgerEntry[]
+  wallets        Wallet[]
+}
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum BalanceSide {
+  DEBIT
+  CREDIT
+}
+
+enum LedgerOwnerType {
+  PLATFORM
+  PROVIDER
+  ORGANIZATION
+  TRANSACTION
+}
+
+enum LedgerAccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+model LedgerAccount {
+  id            String              @id @default(uuid()) @db.Uuid
+  code          String              @unique
+  name          String
+  type          LedgerAccountType
+  normalBalance BalanceSide
+  currencyCode  String              @db.Char(3)
+  ownerType     LedgerOwnerType
+  ownerId       String?             @db.Uuid
+  allowNegative Boolean             @default(false)
+  status        LedgerAccountStatus @default(ACTIVE)
+  // Optimistic concurrency token bumped on every posting that touches the account
+  version       Int                 @default(0)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  currency  Currency          @relation(fields: [currencyCode], references: [code])
+  entries   LedgerEntry[]
+  snapshots BalanceSnapshot[]
+  wallet    Wallet?
+  differences ReconciliationDifference[]
+
+  @@index([ownerType, ownerId])
+  @@index([currencyCode])
+}
+
+enum LedgerTransactionKind {
+  DEPOSIT
+  FUNDING
+  RELEASE
+  FEE
+  REFUND
+  REVERSAL
+  ADJUSTMENT
+  WITHDRAWAL
+}
+
+enum LedgerTransactionStatus {
+  POSTED
+  REVERSED
+}
+
+model LedgerTransaction {
+  id             String                  @id @default(uuid()) @db.Uuid
+  idempotencyKey String                  @unique
+  kind           LedgerTransactionKind
+  status         LedgerTransactionStatus @default(POSTED)
+  description    String
+  reference      String?
+  reversesId     String?                 @unique @db.Uuid
+  metadata       Json?
+  postedAt       DateTime                @default(now())
+
+  reverses   LedgerTransaction? @relation("Reversal", fields: [reversesId], references: [id])
+  reversedBy LedgerTransaction? @relation("Reversal")
+  entries    LedgerEntry[]
+
+  @@index([reference])
+  @@index([kind])
+  @@index([postedAt])
+}
+
+model LedgerEntry {
+  id                  String      @id @default(uuid()) @db.Uuid
+  ledgerTransactionId String      @db.Uuid
+  accountId           String      @db.Uuid
+  direction           BalanceSide
+  amountMinor         BigInt
+  currencyCode        String      @db.Char(3)
+  /// Monotonic insertion sequence (commit order under the account lock): snapshots and
+  /// reconciliation partition entries on it, never on timestamps.
+  seq                 BigInt      @unique @default(autoincrement())
+  createdAt           DateTime    @default(now())
+
+  ledgerTransaction LedgerTransaction @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+  account           LedgerAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  currency          Currency          @relation(fields: [currencyCode], references: [code])
+
+  @@index([accountId, createdAt])
+  @@index([ledgerTransactionId])
+}
+
+model BalanceSnapshot {
+  id           String   @id @default(uuid()) @db.Uuid
+  accountId    String   @db.Uuid
+  balanceMinor BigInt
+  entryCount   Int
+  /// Highest LedgerEntry.seq included in this snapshot (null for legacy snapshots).
+  lastSeq      BigInt?
+  asOf         DateTime @default(now())
+
+  account LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, asOf])
+}
+
+enum ReconciliationStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model ReconciliationJob {
+  id               String               @id @default(uuid()) @db.Uuid
+  status           ReconciliationStatus @default(RUNNING)
+  startedAt        DateTime             @default(now())
+  finishedAt       DateTime?
+  accountsChecked  Int                  @default(0)
+  differencesFound Int                  @default(0)
+  summary          Json?
+
+  differences ReconciliationDifference[]
+}
+
+model ReconciliationDifference {
+  id            String   @id @default(uuid()) @db.Uuid
+  jobId         String   @db.Uuid
+  accountId     String   @db.Uuid
+  expectedMinor BigInt
+  actualMinor   BigInt
+  note          String
+  createdAt     DateTime @default(now())
+
+  job     ReconciliationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  account LedgerAccount     @relation(fields: [accountId], references: [id])
+
+  @@index([jobId])
+}
+
+model Wallet {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @db.Uuid
+  currencyCode    String   @db.Char(3)
+  ledgerAccountId String   @unique @db.Uuid
+  createdAt       DateTime @default(now())
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  currency      Currency      @relation(fields: [currencyCode], references: [code])
+  ledgerAccount LedgerAccount @relation(fields: [ledgerAccountId], references: [id])
+
+  @@unique([organizationId, currencyCode])
+}
+
+// ───────────────────────────── Payment partners (sandbox) ───────────────────
+
+enum ProviderMode {
+  SANDBOX
+  LIVE
+}
+
+model PaymentProvider {
+  id        String       @id @default(uuid()) @db.Uuid
+  code      String       @unique
+  name      String
+  mode      ProviderMode @default(SANDBOX)
+  isActive  Boolean      @default(true)
+  config    Json?
+  createdAt DateTime     @default(now())
+
+  events          ProviderEvent[]
+  fundingRequests FundingRequest[]
+  transfers       Transfer[]
+}
+
+enum ProviderEventStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+model ProviderEvent {
+  id             String              @id @default(uuid()) @db.Uuid
+  providerId     String              @db.Uuid
+  transactionId  String?             @db.Uuid
+  type           String
+  externalRef    String?
+  idempotencyKey String              @unique
+  payload        Json
+  status         ProviderEventStatus @default(RECEIVED)
+  error          String?
+  createdAt      DateTime            @default(now())
+  processedAt    DateTime?
+
+  provider    PaymentProvider @relation(fields: [providerId], references: [id])
+  transaction Transaction?    @relation(fields: [transactionId], references: [id])
+
+  @@index([transactionId])
+  @@index([type])
+}
+
+enum FundingStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+model FundingRequest {
+  id                  String        @id @default(uuid()) @db.Uuid
+  transactionId       String        @db.Uuid
+  providerId          String        @db.Uuid
+  reference           String        @unique
+  amountMinor         BigInt
+  currencyCode        String        @db.Char(3)
+  status              FundingStatus @default(PENDING)
+  instructions        Json
+  confirmedAt         DateTime?
+  expiresAt           DateTime
+  ledgerTransactionId String?       @db.Uuid
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  transaction Transaction     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  provider    PaymentProvider @relation(fields: [providerId], references: [id])
+
+  @@index([transactionId])
+  @@index([status])
+}
+
+// ───────────────────────────── Transfers (Phase 4 — schema reserved) ────────
+
+enum TransferStatus {
+  CREATED
+  QUOTED
+  AUTHORIZED
+  PROCESSING
+  SETTLED
+  FAILED
+  EXPIRED
+  CANCELLED
+  REVIEW_REQUIRED
+}
+
+enum FxQuoteStatus {
+  QUOTED
+  USED
+  EXPIRED
+}
+
+model FXQuote {
+  id                     String        @id @default(uuid()) @db.Uuid
+  organizationId         String        @db.Uuid
+  createdByUserId        String?       @db.Uuid
+  originCountry          String?       @db.Char(2)
+  destinationCountry     String?       @db.Char(2)
+  sourceCurrency         String        @db.Char(3)
+  destinationCurrency    String        @db.Char(3)
+  sourceAmountMinor      BigInt
+  rateNumerator          BigInt
+  rateDenominator        BigInt
+  feeBps                 Int           @default(0)
+  fixedFeeMinor          BigInt        @default(0)
+  feeMinor               BigInt
+  destinationAmountMinor BigInt
+  provider               String
+  status                 FxQuoteStatus @default(QUOTED)
+  expiresAt              DateTime
+  createdAt              DateTime      @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  createdBy    User?        @relation("FxQuoteCreator", fields: [createdByUserId], references: [id])
+  transfers    Transfer[]
+
+  @@index([organizationId, createdAt])
+}
+
+enum BeneficiaryMethod {
+  BANK_ACCOUNT
+  MOBILE_MONEY
+}
+
+enum BeneficiaryStatus {
+  ACTIVE
+  REMOVED
+}
+
+model Beneficiary {
+  id                      String            @id @default(uuid()) @db.Uuid
+  organizationId          String            @db.Uuid
+  createdByUserId         String            @db.Uuid
+  name                    String
+  country                 String            @db.Char(2)
+  currencyCode            String            @db.Char(3)
+  method                  BeneficiaryMethod
+  // Account identifier is encrypted at rest; only a masked form is ever returned.
+  accountIdentifierEnc    String
+  accountIdentifierMasked String
+  institutionName         String?
+  phone                   String?
+  email                   String?
+  status                  BeneficiaryStatus @default(ACTIVE)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  removedAt               DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("BeneficiaryCreator", fields: [createdByUserId], references: [id])
+  transfers    Transfer[]
+
+  @@index([organizationId, status])
+}
+
+model Transfer {
+  id                             String         @id @default(uuid()) @db.Uuid
+  reference                      String         @unique
+  organizationId                 String         @db.Uuid
+  createdByUserId                String         @db.Uuid
+  providerId                     String?        @db.Uuid
+  quoteId                        String?        @db.Uuid
+  beneficiaryId                  String?        @db.Uuid
+  originCountry                  String         @db.Char(2)
+  destinationCountry             String         @db.Char(2)
+  sourceCurrency                 String         @db.Char(3)
+  destinationCurrency            String         @db.Char(3)
+  sourceAmountMinor              BigInt
+  feeMinor                       BigInt         @default(0)
+  destinationAmountMinor         BigInt         @default(0)
+  rateNumerator                  BigInt         @default(1)
+  rateDenominator                BigInt         @default(1)
+  status                         TransferStatus @default(CREATED)
+  purpose                        String?
+  /** Snapshot of the beneficiary at creation (masked identifier only). */
+  beneficiary                    Json
+  failureReason                  String?
+  reviewReason                   String?
+  reviewedByUserId               String?        @db.Uuid
+  reviewedAt                     DateTime?
+  riskScore                      Int?
+  externalRef                    String?
+  sourceLedgerTransactionId      String?        @db.Uuid
+  destinationLedgerTransactionId String?        @db.Uuid
+  reversalLedgerTransactionId    String?        @db.Uuid
+  quotedAt                       DateTime?
+  authorizedAt                   DateTime?
+  processingAt                   DateTime?
+  settledAt                      DateTime?
+  failedAt                       DateTime?
+  cancelledAt                    DateTime?
+  metadata                       Json?
+  createdAt                      DateTime       @default(now())
+  updatedAt                      DateTime       @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  createdBy      User             @relation("TransferCreator", fields: [createdByUserId], references: [id])
+  reviewedBy     User?            @relation("TransferReviewer", fields: [reviewedByUserId], references: [id])
+  provider       PaymentProvider? @relation(fields: [providerId], references: [id])
+  quote          FXQuote?         @relation(fields: [quoteId], references: [id])
+  beneficiaryRef Beneficiary?     @relation(fields: [beneficiaryId], references: [id])
+  events         TransferEvent[]
+
+  @@index([organizationId, status])
+  @@index([status, updatedAt])
+}
+
+model TransferEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  transferId  String   @db.Uuid
+  type        String
+  actorUserId String?  @db.Uuid
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  transfer Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@index([transferId, createdAt])
+}
+
+// ───────────────────────────── Diaspora Business (Phase 4) ──────────────────
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  CONVERTED
+}
+
+model Invoice {
+  id              String        @id @default(uuid()) @db.Uuid
+  organizationId  String        @db.Uuid
+  createdByUserId String        @db.Uuid
+  counterpartyId  String?       @db.Uuid
+  transactionId   String?       @db.Uuid
+  quoteId         String?       @unique @db.Uuid
+  number          String
+  customerName    String
+  customerEmail   String?
+  status          InvoiceStatus @default(DRAFT)
+  currencyCode    String        @db.Char(3)
+  issueDate       DateTime      @default(now())
+  dueDate         DateTime
+  subtotalMinor   BigInt        @default(0)
+  taxMinor        BigInt        @default(0)
+  totalMinor      BigInt        @default(0)
+  paidMinor       BigInt        @default(0)
+  notes           String?
+  sentAt          DateTime?
+  paidAt          DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User          @relation("InvoiceCreator", fields: [createdByUserId], references: [id])
+  counterparty Counterparty? @relation(fields: [counterpartyId], references: [id])
+  transaction  Transaction?  @relation(fields: [transactionId], references: [id])
+  quote        Quote?        @relation(fields: [quoteId], references: [id])
+  lines        InvoiceLine[]
+  payments     InvoicePayment[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([dueDate])
+}
+
+model InvoiceLine {
+  id             String @id @default(uuid()) @db.Uuid
+  invoiceId      String @db.Uuid
+  position       Int
+  description    String
+  quantity       Int    @default(1)
+  unitPriceMinor BigInt
+  totalMinor     BigInt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, position])
+}
+
+enum InvoicePaymentMethod {
+  WALLET_SIMULATED
+  PROTECT_RELEASE
+  EXTERNAL_RECORDED
+}
+
+model InvoicePayment {
+  id                  String               @id @default(uuid()) @db.Uuid
+  invoiceId           String               @db.Uuid
+  recordedByUserId    String               @db.Uuid
+  amountMinor         BigInt
+  method              InvoicePaymentMethod
+  reference           String?
+  ledgerTransactionId String?              @db.Uuid
+  paidAt              DateTime             @default(now())
+  createdAt           DateTime             @default(now())
+
+  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  recordedBy User    @relation("InvoicePaymentRecorder", fields: [recordedByUserId], references: [id])
+
+  @@index([invoiceId])
+}
+
+model Quote {
+  id                     String      @id @default(uuid()) @db.Uuid
+  organizationId         String      @db.Uuid
+  createdByUserId        String      @db.Uuid
+  counterpartyId         String?     @db.Uuid
+  convertedTransactionId String?     @db.Uuid
+  number                 String
+  customerName           String
+  customerEmail          String?
+  status                 QuoteStatus @default(DRAFT)
+  currencyCode           String      @db.Char(3)
+  validUntil             DateTime
+  subtotalMinor          BigInt      @default(0)
+  taxMinor               BigInt      @default(0)
+  totalMinor             BigInt      @default(0)
+  notes                  String?
+  sentAt                 DateTime?
+  acceptedAt             DateTime?
+  declinedAt             DateTime?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  organization         Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy            User          @relation("QuoteCreator", fields: [createdByUserId], references: [id])
+  counterparty         Counterparty? @relation(fields: [counterpartyId], references: [id])
+  convertedTransaction Transaction?  @relation(fields: [convertedTransactionId], references: [id])
+  invoice              Invoice?
+  lines                QuoteLine[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+}
+
+model QuoteLine {
+  id             String @id @default(uuid()) @db.Uuid
+  quoteId        String @db.Uuid
+  position       Int
+  description    String
+  quantity       Int    @default(1)
+  unitPriceMinor BigInt
+  totalMinor     BigInt
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@unique([quoteId, position])
+}
+
+// ───────────────────────────── Scheduled jobs (Phase 3) ─────────────────────
+
+enum MaintenanceJobName {
+  BALANCE_SNAPSHOTS
+  RECONCILIATION
+  EXPIRE_STALE
+  ANONYMIZE_DELETED
+  TRANSFER_PROCESSING
+  WEBHOOK_RETRY
+  INVOICE_OVERDUE
+}
+
+enum MaintenanceRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model MaintenanceRun {
+  id          String               @id @default(uuid()) @db.Uuid
+  jobName     MaintenanceJobName
+  status      MaintenanceRunStatus @default(RUNNING)
+  triggeredBy String               @default("scheduler")
+  startedAt   DateTime             @default(now())
+  finishedAt  DateTime?
+  summary     Json?
+  error       String?
+
+  @@index([jobName, startedAt])
+}
+
+// ───────────────────────────── Governance ───────────────────────────────────
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  actorUserId    String?  @db.Uuid
+  organizationId String?  @db.Uuid
+  action         String
+  entityType     String
+  entityId       String?
+  ip             String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  actor        User?         @relation("AuditActor", fields: [actorUserId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([createdAt])
+}
+
+enum RiskSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RiskAlertStatus {
+  OPEN
+  REVIEWING
+  CONFIRMED
+  DISMISSED
+  CONTESTED
+}
+
+model RiskAlert {
+  id             String          @id @default(uuid()) @db.Uuid
+  userId         String?         @db.Uuid
+  organizationId String?         @db.Uuid
+  transactionId  String?         @db.Uuid
+  ruleCode       String
+  severity       RiskSeverity
+  score          Int
+  explanation    Json
+  status         RiskAlertStatus @default(OPEN)
+  resolvedById   String?         @db.Uuid
+  resolutionNote String?
+  resolvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+
+  user         User?         @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  transaction  Transaction?  @relation(fields: [transactionId], references: [id])
+  resolvedBy   User?         @relation("RiskResolver", fields: [resolvedById], references: [id])
+  actions      RiskAlertAction[]
+
+  @@index([status, severity])
+  @@index([transactionId])
+  @@index([userId])
+}
+
+model RiskAlertAction {
+  id          String   @id @default(uuid()) @db.Uuid
+  alertId     String   @db.Uuid
+  actorUserId String   @db.Uuid
+  action      String
+  note        String?
+  createdAt   DateTime @default(now())
+
+  alert RiskAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  actor User      @relation(fields: [actorUserId], references: [id])
+
+  @@index([alertId])
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+}
+
+model Notification {
+  id        String              @id @default(uuid()) @db.Uuid
+  userId    String              @db.Uuid
+  channel   NotificationChannel @default(IN_APP)
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  sentAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+// ───────────────────────────── API platform (Phase 5) ───────────────────────
+
+model ApiCredential {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid
+  createdByUserId    String?   @db.Uuid
+  name               String
+  description        String?
+  keyPrefix          String
+  keyHash            String    @unique
+  scopes             String[]  @default([])
+  rateLimitPerMinute Int       @default(120)
+  rotatedFromId      String?   @db.Uuid
+  expiresAt          DateTime?
+  lastUsedAt         DateTime?
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?           @relation("ApiCredentialCreator", fields: [createdByUserId], references: [id])
+  requestLogs  ApiRequestLog[]
+
+  @@index([organizationId])
+  @@index([keyPrefix])
+}
+
+model ApiRequestLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  credentialId String   @db.Uuid
+  method       String
+  path         String
+  statusCode   Int
+  durationMs   Int
+  ip           String?
+  requestId    String?
+  createdAt    DateTime @default(now())
+
+  credential ApiCredential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+
+  @@index([credentialId, createdAt])
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  scopeKey       String
+  idempotencyKey String
+  method         String
+  path           String
+  requestHash    String
+  statusCode     Int
+  responseBody   Json
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@unique([scopeKey, idempotencyKey])
+  @@index([expiresAt])
+}
+
+model WebhookSubscription {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  createdByUserId String?   @db.Uuid
+  url             String
+  description     String?
+  secretEnc       String
+  events          String[]  @default([])
+  isActive        Boolean   @default(true)
+  failureCount    Int       @default(0)
+  lastDeliveryAt  DateTime?
+  lastRotatedAt   DateTime?
+  createdAt       DateTime  @default(now())
+  revokedAt       DateTime?
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?             @relation("WebhookCreator", fields: [createdByUserId], references: [id])
+  deliveries   WebhookDelivery[]
+
+  @@index([organizationId])
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  EXHAUSTED
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid()) @db.Uuid
+  subscriptionId String                @db.Uuid
+  eventType      String
+  eventId        String
+  payload        Json
+  signature      String
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  nextAttemptAt  DateTime?
+  lastStatusCode Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([subscriptionId, createdAt])
+}
+
+// ───────────────────────────── DDA research sandbox (Phase 5) ───────────────
+// Fictitious units only. No public chain, no real money, no convertibility.
+
+enum DigitalAssetSimStatus {
+  MINTED
+  TRANSFERRED
+  REDEEMED
+  VOID
+}
+
+enum DdaOperation {
+  MINT
+  TRANSFER
+  REDEEM
+  RESERVE_ADJUSTMENT
+}
+
+model DigitalAssetSimulation {
+  id                        String                @id @default(uuid()) @db.Uuid
+  reference                 String                @unique
+  organizationId            String                @db.Uuid
+  counterpartyOrganizationId String?              @db.Uuid
+  createdByUserId           String?               @db.Uuid
+  operation                 DdaOperation          @default(MINT)
+  unitsMinor                BigInt
+  reserveDeltaUsdMinor      BigInt                @default(0)
+  status                    DigitalAssetSimStatus @default(MINTED)
+  ledgerTransactionId       String?               @db.Uuid
+  note                      String?
+  metadata                  Json?
+  createdAt                 DateTime              @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  counterparty Organization? @relation("DdaCounterparty", fields: [counterpartyOrganizationId], references: [id])
+  createdBy    User?         @relation("DdaCreator", fields: [createdByUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+}

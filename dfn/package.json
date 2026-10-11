@@ -1,0 +1,46 @@
+{
+  "name": "dfn",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Diaspora Financial Network (Diaspora Trust) — sandbox-only financial infrastructure monorepo",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @dfn/api --filter @dfn/web dev",
+    "dev:api": "pnpm --filter @dfn/api dev",
+    "dev:web": "pnpm --filter @dfn/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "test:unit": "pnpm --filter './packages/*' test",
+    "test:api": "pnpm --filter @dfn/api test",
+    "test:e2e": "pnpm --filter @dfn/web test:e2e",
+    "db:generate": "pnpm --filter @dfn/database generate",
+    "db:migrate": "pnpm --filter @dfn/database migrate:deploy",
+    "db:migrate:dev": "pnpm --filter @dfn/database migrate:dev",
+    "db:seed": "pnpm --filter @dfn/database seed",
+    "db:reset": "pnpm --filter @dfn/database reset",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,yml,yaml}\""
+  },
+  "devDependencies": {
+    "prettier": "3.6.2",
+    "typescript": "5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "argon2",
+      "@swc/core",
+      "esbuild",
+      "sharp",
+      "unrs-resolver",
+      "msgpackr-extract"
+    ]
+  }
+}

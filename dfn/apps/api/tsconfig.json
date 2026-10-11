@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "dist",
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@dfn/shared": ["../../packages/shared/src/index.ts"],
+      "@dfn/database": ["../../packages/database/src/index.ts"],
+      "@dfn/financial-ledger": ["../../packages/financial-ledger/src/index.ts"],
+      "@dfn/compliance": ["../../packages/compliance/src/index.ts"],
+      "@dfn/payment-adapters": ["../../packages/payment-adapters/src/index.ts"],
+      "@dfn/contracts": ["../../packages/contracts/src/index.ts"]
+    }
+  },
+  "include": ["src", "test", "scripts"],
+  "ts-node": { "transpileOnly": true, "require": ["tsconfig-paths/register"] }
+}
