@@ -352,6 +352,10 @@ model Transaction {
   @@index([sellerOrganizationId, status])
   @@index([status])
   @@index([createdAt])
+  /// Transaction lists are ordered by updatedAt per buyer / seller organisation (and globally for staff).
+  @@index([buyerOrganizationId, updatedAt])
+  @@index([sellerOrganizationId, updatedAt])
+  @@index([updatedAt])
 }
 
 enum PartyRole {

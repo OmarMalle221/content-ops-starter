@@ -60,7 +60,9 @@ export function BeneficiaryCreateDialog({ organizationId }: { organizationId: st
               method: form.method,
               accountIdentifier: form.accountIdentifier.trim(),
               institutionName: form.institutionName.trim() || undefined,
-              phone: (isMobile ? form.phone || form.accountIdentifier : form.phone).trim() || undefined,
+              // Only a phone the user actually typed: the account identifier (even a mobile-money
+              // number) is stored encrypted and must never be copied into a clear-text field.
+              phone: form.phone.trim() || undefined,
               email: form.email.trim() || undefined,
             },
           });

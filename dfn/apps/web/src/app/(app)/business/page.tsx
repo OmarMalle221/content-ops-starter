@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight, FileText } from 'lucide-react';
+import { ArrowRight, FileText, Link2 } from 'lucide-react';
 import { minorToDecimalString } from '@dfn/shared';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Stat } from '@dfn/ui';
 import { BusinessHeader } from '@/components/business/business-header';
@@ -19,12 +19,17 @@ export default async function BusinessPage({
 }) {
   const ws = await resolveWorkspace(searchParams);
   const { t, locale, organizationId, qs } = ws;
-  const [txs, wallet, invoices, quotes] = await Promise.all([
+  const [txs, wallet, invoices, quotes, linkRequests] = await Promise.all([
     apiFetch<any>(`/v1/transactions?organizationId=${organizationId}&pageSize=100`),
     apiFetch<any>(`/v1/wallets/${organizationId}`),
     apiFetch<any>(`/v1/invoices?organizationId=${organizationId}&pageSize=100`),
     apiFetch<any>(`/v1/quotes?organizationId=${organizationId}&status=SENT,ACCEPTED&pageSize=100`),
+    // Link requests received (consent): OWNER / ADMIN only.
+    ws.canDecideLinks
+      ? apiFetch<{ items: unknown[] }>(`/v1/organizations/${organizationId}/link-requests?status=PENDING`)
+      : Promise.resolve({ items: [] as unknown[] }),
   ]);
+  const pendingLinks = linkRequests.items.length;
   const active = txs.items.filter(
     (x: any) => !['SETTLED', 'REFUNDED', 'CANCELLED', 'EXPIRED'].includes(x.status),
   ).length;
@@ -57,6 +62,25 @@ export default async function BusinessPage({
         subtitle={t('business.subtitle')}
         basePath="/business"
       />
+      {pendingLinks > 0 ? (
+        <Card className="mb-6 border-primary/40">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Link2 className="h-4 w-4" /> {t('counterpartyLinks.received')}
+              </CardTitle>
+              <CardDescription>
+                {pendingLinks} {t('counterpartyLinks.pending')} · {t('counterpartyLinks.receivedHint')}
+              </CardDescription>
+            </div>
+            <Button asChild size="sm">
+              <Link href={`/business/links?${qs}`}>
+                {t('counterpartyLinks.review')} <ArrowRight />
+              </Link>
+            </Button>
+          </CardHeader>
+        </Card>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label={t('nav.transactions')}

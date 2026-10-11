@@ -12,8 +12,16 @@ import { unsafeDestinationReason } from './ssrf';
 
 /** Consecutive failures after which a subscription is switched off automatically. */
 export const AUTO_DISABLE_AFTER_FAILURES = 50;
-/** Max deliveries retried by one WEBHOOK_RETRY run (keeps a run well under the job lock timeout). */
+/** Max deliveries attempted by one WEBHOOK_RETRY run (bounded run time; the rest waits for the next run). */
 const RETRY_BATCH = 200;
+/** Share of a run's budget reserved for stale PENDING deliveries (never attempted). */
+const STALE_PENDING_BATCH = 100;
+/**
+ * A delivery still PENDING this long after its creation was never attempted (the process crashed
+ * or restarted between the insert and the first POST): WEBHOOK_RETRY attempts it. Far above the
+ * longest in-flight first attempt (WEBHOOK_TIMEOUT_MS ≤ 30 s), so a live attempt is never doubled.
+ */
+export const STALE_PENDING_AFTER_MS = 5 * 60_000;
 
 export interface WebhookEnvelope {
   id: string;
@@ -65,7 +73,7 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.unsubscribe = this.bus.on((event) => this.onEvent(event));
-    this.registry.register('WEBHOOK_RETRY', () => this.retryDue());
+    this.registry.register('WEBHOOK_RETRY', (ctx) => this.retryDue(new Date(), ctx.signal));
   }
 
   async onModuleDestroy() {
@@ -154,7 +162,13 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
     try {
       // Dispatch-time SSRF guard: the hostname is resolved now, so a DNS name that points (or was
       // re-pointed) to a private address is refused even if it passed the lexical check at creation.
-      const unsafe = await unsafeDestinationReason(subscription.url, this.env.NODE_ENV);
+      // Egress allowlist (WEBHOOK_ALLOWED_HOSTS) is enforced at dispatch time too, not only when the
+      // subscription is created, so tightening the list takes effect on existing subscriptions.
+      const unsafe = await unsafeDestinationReason(
+        subscription.url,
+        this.env.NODE_ENV,
+        this.env.WEBHOOK_ALLOWED_HOSTS,
+      );
       if (unsafe) throw new Error(`Destination refused: ${unsafe}`);
       const secret = openString(this.env, KeyPurpose.WEBHOOKS, subscription.secretEnc);
       signature = signatureHeader(secret, timestamp, rawBody);
@@ -239,22 +253,42 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
     return updated;
   }
 
-  /** WEBHOOK_RETRY job: replays due FAILED deliveries and purges expired idempotency records. */
-  async retryDue(now = new Date()): Promise<JobResult> {
+  /**
+   * WEBHOOK_RETRY job: attempts the deliveries stuck in PENDING for more than 5 minutes (never
+   * attempted: crash between creation and first POST), replays the due FAILED ones, and purges
+   * expired idempotency records. Batch-bounded; stops between deliveries when `signal` aborts
+   * (job lease lost) — whatever is left is picked up by the next run.
+   */
+  async retryDue(now = new Date(), signal?: AbortSignal): Promise<JobResult> {
+    const activeSubscription = { isActive: true, revokedAt: null };
+    const stalePending = await this.prisma.webhookDelivery.findMany({
+      where: {
+        status: 'PENDING',
+        attempts: 0,
+        createdAt: { lte: new Date(now.getTime() - STALE_PENDING_AFTER_MS) },
+        subscription: activeSubscription,
+      },
+      orderBy: { createdAt: 'asc' },
+      take: STALE_PENDING_BATCH,
+      select: { id: true },
+    });
     const due = await this.prisma.webhookDelivery.findMany({
       where: {
         status: 'FAILED',
         nextAttemptAt: { lte: now },
-        subscription: { isActive: true, revokedAt: null },
+        subscription: activeSubscription,
       },
       orderBy: { nextAttemptAt: 'asc' },
-      take: RETRY_BATCH,
+      take: RETRY_BATCH - stalePending.length,
       select: { id: true },
     });
     let delivered = 0;
     let failed = 0;
     let exhausted = 0;
-    for (const { id } of due) {
+    let attempted = 0;
+    for (const { id } of [...stalePending, ...due]) {
+      if (signal?.aborted) break;
+      attempted++;
       try {
         const result = await this.deliver(id, 'retry');
         if (result.status === 'DELIVERED') delivered++;
@@ -267,9 +301,18 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+    signal?.throwIfAborted();
     const purged = await this.prisma.idempotencyRecord.deleteMany({ where: { expiresAt: { lt: now } } });
     return {
-      summary: { due: due.length, delivered, failed, exhausted, idempotencyRecordsPurged: purged.count },
+      summary: {
+        due: due.length,
+        stalePending: stalePending.length,
+        attempted,
+        delivered,
+        failed,
+        exhausted,
+        idempotencyRecordsPurged: purged.count,
+      },
     };
   }
 

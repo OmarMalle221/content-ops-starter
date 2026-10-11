@@ -29,7 +29,8 @@ export const REGULATORY_GATES: readonly RegulatoryGateDefinition[] = [
   },
   {
     code: 'R2',
-    title: 'Fournisseur KYC/KYB et criblage sanctions contractualisé ; fin des statuts SIMULATED_* en production',
+    title:
+      'Fournisseur KYC/KYB et criblage sanctions contractualisé ; fin des statuts SIMULATED_* en production',
     jurisdiction: 'Toutes',
     referenceDoc: 'docs/compliance/KYC_KYB.md',
     level: RegulatoryGateLevel.BLOCKING,

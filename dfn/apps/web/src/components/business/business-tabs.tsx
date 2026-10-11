@@ -8,9 +8,12 @@ import { useI18n } from '@/lib/i18n-client';
 export function BusinessTabs({
   organizationId,
   canViewReports,
+  canDecideLinks = false,
 }: {
   organizationId: string;
   canViewReports: boolean;
+  /** OWNER / ADMIN: link requests received from other organisations. */
+  canDecideLinks?: boolean;
 }) {
   const { t } = useI18n();
   const pathname = usePathname();
@@ -18,6 +21,7 @@ export function BusinessTabs({
   const tabs = [
     { href: '/business', key: 'bizTabs.overview', exact: true },
     { href: '/business/clients', key: 'bizTabs.clients' },
+    ...(canDecideLinks ? [{ href: '/business/links', key: 'bizTabs.links' }] : []),
     { href: '/business/quotes', key: 'bizTabs.quotes' },
     { href: '/business/invoices', key: 'bizTabs.invoices' },
     ...(canViewReports ? [{ href: '/business/reports', key: 'bizTabs.reports' }] : []),

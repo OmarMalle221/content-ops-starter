@@ -1,0 +1,33 @@
+# Docker build context = the dfn/ directory. Keep it small and free of secrets and local state.
+# Dependencies and build outputs are recreated inside the images.
+**/node_modules
+**/.next
+apps/*/dist
+apps/web/out
+**/.turbo
+**/*.tsbuildinfo
+**/coverage
+**/test-results
+**/playwright-report
+**/*.log
+
+# Secrets and local configuration: never sent to the daemon, never baked into a layer.
+**/.env
+**/.env.*
+!.env.example
+
+# Local data: documents storage (STORAGE_DIR default ./storage — NOT src/common/storage, which is
+# source code), backups, database dumps.
+storage
+apps/api/storage
+backups
+**/*.dump
+**/*.dump.age
+**/*.dump.gpg
+
+# VCS, editors, OS noise.
+.git
+.github
+**/.DS_Store
+**/.idea
+**/.vscode

@@ -10,6 +10,7 @@ import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RiskService } from '../risk/risk.service';
 
 @Injectable()
 export class VerificationsService {
@@ -20,6 +21,7 @@ export class VerificationsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     @Inject(ENV) env: Env,
+    private readonly risk: RiskService,
   ) {
     this.kyc = createKycProvider(env.KYC_PROVIDER);
     this.sanctions = createSanctionsProvider(env.SANCTIONS_PROVIDER);
@@ -96,6 +98,7 @@ export class VerificationsService {
             ruleCode: 'SANCTIONS_POTENTIAL_MATCH',
             severity: 'HIGH',
             score: 60,
+            dueAt: this.risk.slaDueAt('HIGH'),
             explanation: {
               summary: 'Potential sanctions list match (simulated screening)',
               factors: {

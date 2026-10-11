@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerThroughUi } from './journey-helpers';
 
 const PASSWORD = 'CorrectHorse42Battery';
 const run = Date.now().toString(36);
@@ -6,15 +7,8 @@ const buyerEmail = `e2e-buyer-${run}@example.com`;
 const sellerEmail = `e2e-seller-${run}@example.com`;
 
 async function register(page: Page, email: string, firstName: string, lastName: string, country: string) {
-  await page.goto('/register');
-  await page.getByLabel(/Prénom|First name/).fill(firstName);
-  await page.getByLabel(/^Nom$|Last name/).fill(lastName);
-  await page.getByLabel(/Courriel|Email/).fill(email);
-  await page.getByLabel(/Pays|Country/).selectOption(country);
-  await page.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  // Throttle-tolerant (the API accepts 5 registrations per minute and client IP).
+  await registerThroughUi(page, { email, firstName, lastName, country });
 }
 
 async function verifyIdentity(page: Page) {
@@ -72,9 +66,14 @@ test('buyer creates a protected transaction, seller joins, funding is simulated 
   await seller.getByLabel(/Pays|Country/).selectOption('SN');
   await seller.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
   await seller.getByRole('checkbox').check();
-  await seller.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
-  // Registering with the invitation token joins the transaction automatically.
-  await expect(seller).toHaveURL(/\/invite\//);
+  // Registering with the invitation token joins the transaction automatically. The submit is
+  // retried while the API throttles registrations (5 per minute and client IP); the form keeps
+  // its values and the register URL only carries `next` URL-encoded.
+  await expect(async () => {
+    if (/\/invite\//.test(seller.url())) return;
+    await seller.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
+    await expect(seller).toHaveURL(/\/invite\//, { timeout: 10_000 });
+  }).toPass({ timeout: 90_000, intervals: [2_000, 5_000, 10_000] });
   await seller.getByRole('link', { name: /Détails|Details/ }).click();
   await expect(seller).toHaveURL(/\/transactions\//);
   const txUrl = seller.url();
@@ -86,7 +85,7 @@ test('buyer creates a protected transaction, seller joins, funding is simulated 
   await page.goto('/login');
   await page.getByLabel(/Courriel|Email/).fill(buyerEmail);
   await page.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
-  await page.getByRole('button', { name: /Se connecter|Sign in/ }).click();
+  await page.getByRole('button', { name: /^(Se connecter|Sign in)$/ }).click();
   await expect(page).toHaveURL(/\/dashboard/);
   await page.goto(txUrl);
   await page.getByRole('button', { name: /Accepter les conditions|Accept terms/ }).click();

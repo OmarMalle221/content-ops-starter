@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TransferStatus } from '../enums';
 import { countrySchema, currencySchema, decimalAmountSchema } from './common';
+import { mfaProofShape } from './passkeys';
 
 export const createFxQuoteSchema = z
   .object({
@@ -33,11 +34,11 @@ export const createTransferSchema = z.object({
 export type CreateTransferInput = z.infer<typeof createTransferSchema>;
 
 export const authorizeTransferSchema = z.object({
-  /** Required when the user has MFA enabled or requireMfaForTransfers is set. */
-  mfaCode: z
-    .string()
-    .regex(/^\d{6}$/)
-    .optional(),
+  /**
+   * Fresh MFA proof, required when the user has MFA enabled and requireMfaForTransfers is set:
+   * `mfaCode` (TOTP or recovery code) or `passkeyAssertion` (STEP_UP challenge of this session).
+   */
+  ...mfaProofShape,
 });
 export type AuthorizeTransferInput = z.infer<typeof authorizeTransferSchema>;
 

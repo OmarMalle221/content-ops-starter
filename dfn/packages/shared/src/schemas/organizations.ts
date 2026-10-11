@@ -32,10 +32,25 @@ export type SubmitBusinessVerificationInput = z.infer<typeof submitBusinessVerif
 
 export const createCounterpartySchema = z.object({
   name: z.string().trim().min(1).max(120),
+  /**
+   * When it belongs to an active DFN user, a link request is sent to their personal workspace
+   * (consent required — see counterparty-links.ts). The response never reveals whether it matched.
+   */
   email: emailSchema.optional(),
   phone: z.string().trim().max(30).optional(),
   country: countrySchema.optional(),
   notes: z.string().trim().max(1000).optional(),
-  /** Optional link to a DFN organisation (enables wallet-to-wallet invoice payments). */
+  /**
+   * Optional link request towards a DFN organisation the caller belongs to (enables wallet-to-wallet
+   * invoice payments once the target organisation accepts it).
+   */
   linkedOrganizationId: z.string().uuid().optional(),
 });
+export type CreateCounterpartyInput = z.infer<typeof createCounterpartySchema>;
+
+/**
+ * Staff (ADMIN) write inside an organisation they do not belong to ("support" access): the request
+ * must carry a justification in this header (URI-encode non-ASCII characters). It is audited.
+ */
+export const SUPPORT_REASON_HEADER = 'x-support-reason';
+export const supportReasonSchema = z.string().trim().min(10).max(500);

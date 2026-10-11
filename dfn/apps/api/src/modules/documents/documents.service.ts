@@ -1,7 +1,13 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { randomUUID } from 'node:crypto';
-import { ErrorCode, Permission, TransactionEventType, type DocumentMetadataInput } from '@dfn/shared';
+import {
+  globalRoleHas,
+  ErrorCode,
+  Permission,
+  TransactionEventType,
+  type DocumentMetadataInput,
+} from '@dfn/shared';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { sha256Hex } from '../../common/crypto';
@@ -13,7 +19,7 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { RiskService } from '../risk/risk.service';
 import { TransactionAccessService } from '../transactions/transaction-access.service';
 import { TransactionEventsService } from '../transactions/transaction-events.service';
-import { StorageService } from './storage.service';
+import { DocumentStorageService } from './storage.service';
 
 const ALLOWED: Record<string, { ext: string[]; magic: (b: Buffer) => boolean }> = {
   'application/pdf': { ext: ['pdf'], magic: (b) => b.subarray(0, 5).toString('latin1') === '%PDF-' },
@@ -40,7 +46,7 @@ export interface UploadedFile {
 export class DocumentsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: StorageService,
+    private readonly storage: DocumentStorageService,
     private readonly audit: AuditService,
     private readonly organizations: OrganizationsService,
     private readonly access: TransactionAccessService,
@@ -92,49 +98,64 @@ export class DocumentsService {
     }
     const sha256 = sha256Hex(file.buffer);
     const storageKey = `${organizationId}/${randomUUID()}`;
-    await this.storage.put(storageKey, file.buffer);
+    const stored = await this.storage.put(storageKey, file.buffer);
     const safeName = file.originalname.replace(/[^\w.\- ()]/g, '_').slice(0, 140);
     const requestMeta_ = requestMeta(req);
-    const doc = await this.prisma.$transaction(async (db) => {
-      const created = await db.document.create({
-        data: {
-          organizationId,
-          uploadedByUserId: auth.userId,
-          transactionId,
-          kind: meta.kind,
-          title: meta.title ?? safeName,
-          fileName: safeName,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
-          sha256,
-          storageKey,
-          encrypted: true,
-          retentionUntil: new Date(Date.now() + 7 * 365 * 86_400_000),
-        },
-      });
-      if (transactionId) {
-        await this.events.record(
-          transactionId,
-          TransactionEventType.DOCUMENT_UPLOADED,
-          auth.userId,
-          { documentId: created.id, kind: meta.kind, title: created.title },
+    const doc = await this.prisma
+      .$transaction(async (db) => {
+        const created = await db.document.create({
+          data: {
+            organizationId,
+            uploadedByUserId: auth.userId,
+            transactionId,
+            kind: meta.kind,
+            title: meta.title ?? safeName,
+            fileName: safeName,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            sha256,
+            storageKey,
+            encrypted: true,
+            storageDriver: stored.storageDriver,
+            encryptionKeyId: stored.encryptionKeyId,
+            retentionUntil: new Date(Date.now() + 7 * 365 * 86_400_000),
+          },
+        });
+        if (transactionId) {
+          await this.events.record(
+            transactionId,
+            TransactionEventType.DOCUMENT_UPLOADED,
+            auth.userId,
+            { documentId: created.id, kind: meta.kind, title: created.title },
+            db,
+          );
+        }
+        await this.audit.log(
+          {
+            actorUserId: auth.userId,
+            organizationId,
+            action: 'document.uploaded',
+            entityType: 'Document',
+            entityId: created.id,
+            metadata: {
+              kind: meta.kind,
+              sizeBytes: file.size,
+              sha256,
+              transactionId,
+              storageDriver: stored.storageDriver,
+              encryptionKeyId: stored.encryptionKeyId,
+            },
+            ...requestMeta_,
+          },
           db,
         );
-      }
-      await this.audit.log(
-        {
-          actorUserId: auth.userId,
-          organizationId,
-          action: 'document.uploaded',
-          entityType: 'Document',
-          entityId: created.id,
-          metadata: { kind: meta.kind, sizeBytes: file.size, sha256, transactionId },
-          ...requestMeta_,
-        },
-        db,
-      );
-      return created;
-    });
+        return created;
+      })
+      .catch(async (err: unknown) => {
+        // The row was not written: do not leave an orphan blob behind.
+        await this.storage.remove({ storageKey, storageDriver: stored.storageDriver });
+        throw err;
+      });
     if (transactionId) {
       const duplicates = await this.prisma.document.count({
         where: { sha256, transactionId: { not: transactionId }, deletedAt: null },
@@ -224,7 +245,8 @@ export class DocumentsService {
   async download(auth: AuthContext, id: string, req: Request) {
     const doc = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
     if (!doc || !(await this.canAccess(auth, doc))) throw DomainError.notFound('Document');
-    const bytes = await this.storage.get(doc.storageKey);
+    // Decrypts with the recorded key and re-checks the SHA-256: never serves corrupted content.
+    const bytes = await this.storage.read(doc, auth.userId);
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId: doc.organizationId,
@@ -279,11 +301,18 @@ export class DocumentsService {
   async softDelete(auth: AuthContext, id: string, req: Request) {
     const doc = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
     if (!doc) throw DomainError.notFound('Document');
-    if (doc.uploadedByUserId !== auth.userId && !isStaff(auth)) throw DomainError.forbidden();
+    // The uploader may delete their own document; staff need the support-write permission (ADMIN):
+    // reading tenant data never implies the right to destroy it.
+    if (
+      doc.uploadedByUserId !== auth.userId &&
+      !globalRoleHas(auth.globalRole, Permission.ADMIN_SUPPORT_WRITE)
+    ) {
+      throw DomainError.forbidden();
+    }
     const used = await this.prisma.evidence.count({ where: { documentId: id } });
     if (used > 0) throw DomainError.conflict('Document is attached as evidence and cannot be deleted');
     await this.prisma.document.update({ where: { id }, data: { deletedAt: new Date() } });
-    await this.storage.delete(doc.storageKey);
+    await this.storage.remove(doc);
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId: doc.organizationId,

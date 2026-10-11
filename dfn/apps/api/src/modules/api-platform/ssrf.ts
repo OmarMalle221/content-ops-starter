@@ -14,8 +14,48 @@ import { DomainError } from '../../common/domain-error';
  *     rejects if ANY resolved address is private, so DNS names pointing at internal ranges
  *     (and DNS rebinding between two deliveries) are refused too.
  *
+ * Optional egress allowlist (`WEBHOOK_ALLOWED_HOSTS`, comma-separated exact hosts or `*.suffix`):
+ * when configured, any host outside the list is refused by both layers — including under
+ * `NODE_ENV=test`, so that it is testable. It never relaxes the private-address checks.
+ *
  * The `NODE_ENV=test` exception exists only so that the integration tests can run a local receiver.
  */
+
+function normalizeHost(hostname: string): string {
+  return hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
+}
+
+/** Parses the allowlist; null when unset or blank (no restriction). */
+export function parseAllowedHosts(allowedHosts: string | undefined | null): string[] | null {
+  if (!allowedHosts) return null;
+  const entries = allowedHosts
+    .split(',')
+    .map((h) => normalizeHost(h))
+    .filter((h) => h.length > 0);
+  return entries.length ? entries : null;
+}
+
+/**
+ * Exact host match, or `*.suffix` matching any sub-domain of `suffix` (one label or more) — but not
+ * `suffix` itself. Comparison is case-insensitive and ignores a trailing dot and IPv6 brackets.
+ */
+export function isHostAllowed(hostname: string, allowedHosts: string | undefined | null): boolean {
+  const list = parseAllowedHosts(allowedHosts);
+  if (!list) return true;
+  const host = normalizeHost(hostname);
+  if (!host) return false;
+  return list.some((entry) => {
+    if (entry.startsWith('*.')) {
+      const suffix = entry.slice(1); // ".example.com"
+      return suffix.length > 1 && host.endsWith(suffix) && host.length > suffix.length;
+    }
+    return host === entry;
+  });
+}
 
 function ipv4ToInt(ip: string): number | null {
   const parts = ip.split('.');
@@ -117,7 +157,11 @@ export function isPrivateWebhookHost(hostname: string): boolean {
   return false;
 }
 
-export function assertSafeWebhookUrl(url: string, nodeEnv: string | undefined = process.env.NODE_ENV) {
+export function assertSafeWebhookUrl(
+  url: string,
+  nodeEnv: string | undefined = process.env.NODE_ENV,
+  allowedHosts?: string,
+) {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -132,6 +176,15 @@ export function assertSafeWebhookUrl(url: string, nodeEnv: string | undefined = 
       ApiPlatformErrorCode.WEBHOOK_URL_FORBIDDEN,
       'Webhook URL must not embed credentials',
       HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+  // The allowlist applies in every environment (test included); it does not bypass the checks below.
+  if (!isHostAllowed(parsed.hostname, allowedHosts)) {
+    throw new DomainError(
+      ApiPlatformErrorCode.WEBHOOK_URL_FORBIDDEN,
+      'Webhook host is not in the allowed destinations of this platform (WEBHOOK_ALLOWED_HOSTS)',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      { hostname: parsed.hostname },
     );
   }
   if (nodeEnv === 'test') return parsed;
@@ -153,6 +206,7 @@ export function assertSafeWebhookUrl(url: string, nodeEnv: string | undefined = 
 export async function unsafeDestinationReason(
   url: string,
   nodeEnv: string | undefined = process.env.NODE_ENV,
+  allowedHosts?: string,
 ): Promise<string | null> {
   let parsed: URL;
   try {
@@ -160,6 +214,8 @@ export async function unsafeDestinationReason(
   } catch {
     return 'invalid URL';
   }
+  if (!isHostAllowed(parsed.hostname, allowedHosts))
+    return `host ${parsed.hostname} is not in the webhook allowlist`;
   if (nodeEnv === 'test') return null;
   const host = parsed.hostname;
   if (isPrivateWebhookHost(host)) return `private host ${host}`;

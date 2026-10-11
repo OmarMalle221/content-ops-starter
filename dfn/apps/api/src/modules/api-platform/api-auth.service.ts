@@ -1,16 +1,24 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
 import type { Request } from 'express';
 import { API_KEY_PREFIX, ApiPlatformErrorCode, ErrorCode, Permission, orgRoleHas } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
 import { sha256Hex } from '../../common/crypto';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { RedisConnectionService } from '../../common/redis';
 import { requestMeta } from '../../common/request-meta';
+import { ENV, type Env } from '../../config/env';
 import { requiredScopeFor } from './api-scopes';
-import { SlidingWindowRateLimiter, type RateLimitDecision } from './rate-limiter';
+import { createRateLimitStore, type RateLimitDecision, type RateLimitStore } from './rate-limiter';
 
 /** Minimum delay between two `lastUsedAt` writes for the same credential. */
 const LAST_USED_WRITE_INTERVAL_MS = 60_000;
+/** Per-key quotas are expressed per minute. */
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Store keys (namespaced `dfn:rl:` by the Redis store). */
+const windowKey = (credentialId: string) => `apikey:${credentialId}`;
+const lastUsedKey = (credentialId: string) => `lastused:${credentialId}`;
 
 /**
  * Authenticates partner API keys (`Authorization: Bearer dfn_sk_…`) and enforces per-key scopes
@@ -18,12 +26,21 @@ const LAST_USED_WRITE_INTERVAL_MS = 60_000;
  */
 @Injectable()
 export class ApiAuthService {
-  private readonly limiter = new SlidingWindowRateLimiter(60_000);
-  private readonly lastUsedWrites = new Map<string, number>();
-  /** rateLimitPerMinute of the keys seen by this replica (filled at authentication). */
+  /**
+   * Sliding windows and the `lastUsedAt` throttle, in memory or in Redis (RATE_LIMIT_STORE):
+   * with Redis, every replica shares the same counters.
+   */
+  readonly rateLimitStore: RateLimitStore;
+  /** rateLimitPerMinute of the keys seen by this replica (a cache of the DB value, filled at authentication). */
   private readonly limits = new Map<string, number>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(ENV) env: Env,
+    @Optional() redis?: RedisConnectionService,
+  ) {
+    this.rateLimitStore = createRateLimitStore(env.RATE_LIMIT_STORE, redis);
+  }
 
   /** The bearer token when, and only when, it looks like a sandbox secret key. */
   apiKeyFromRequest(req: Request): string | undefined {
@@ -103,7 +120,7 @@ export class ApiAuthService {
       );
     }
     this.limits.set(credential.id, credential.rateLimitPerMinute);
-    this.touchLastUsed(credential.id);
+    void this.touchLastUsed(credential.id);
     const meta = requestMeta(req);
     return {
       userId: creator.id,
@@ -144,7 +161,7 @@ export class ApiAuthService {
       limit = credential?.rateLimitPerMinute ?? 120;
       this.limits.set(credentialId, limit);
     }
-    return this.limiter.hit(credentialId, limit);
+    return this.rateLimitStore.hit(windowKey(credentialId), limit, RATE_LIMIT_WINDOW_MS);
   }
 
   /** Throws 403 SCOPE_FORBIDDEN when the key does not carry the scope the route requires. */
@@ -177,21 +194,28 @@ export class ApiAuthService {
     );
   }
 
-  /** Forget in-memory counters of a revoked credential. */
+  /** Forget the counters of a revoked or rotated credential (fire-and-forget). */
   forget(credentialId: string) {
-    this.limiter.reset(credentialId);
-    this.lastUsedWrites.delete(credentialId);
     this.limits.delete(credentialId);
+    void Promise.all([
+      this.rateLimitStore.reset(windowKey(credentialId)),
+      this.rateLimitStore.reset(lastUsedKey(credentialId)),
+    ]).catch(() => undefined);
   }
 
-  /** `lastUsedAt` is written at most once per minute per key (fire-and-forget). */
-  private touchLastUsed(credentialId: string) {
-    const now = Date.now();
-    const last = this.lastUsedWrites.get(credentialId) ?? 0;
-    if (now - last < LAST_USED_WRITE_INTERVAL_MS) return;
-    this.lastUsedWrites.set(credentialId, now);
-    void this.prisma.apiCredential
-      .update({ where: { id: credentialId }, data: { lastUsedAt: new Date(now) } })
-      .catch(() => undefined);
+  /**
+   * `lastUsedAt` is written at most once per minute per key, across replicas when the store is
+   * Redis (SET NX PX). Fire-and-forget: authentication never waits for it.
+   */
+  touchLastUsed(credentialId: string): Promise<boolean> {
+    const now = new Date();
+    return this.rateLimitStore
+      .claim(lastUsedKey(credentialId), LAST_USED_WRITE_INTERVAL_MS)
+      .then(async (claimed) => {
+        if (!claimed) return false;
+        await this.prisma.apiCredential.update({ where: { id: credentialId }, data: { lastUsedAt: now } });
+        return true;
+      })
+      .catch(() => false);
   }
 }

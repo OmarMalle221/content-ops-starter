@@ -1,14 +1,21 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
-import { Badge, Button, Input, Label } from '@dfn/ui';
+import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
+import { Badge, Button } from '@dfn/ui';
 import { api, errorMessage } from '@/lib/api-client';
 import { formatMoney } from '@/lib/format';
 import { useI18n } from '@/lib/i18n-client';
 import { ActionDialog } from '@/components/transactions/action-dialog';
+import { StepUpFields } from '@/components/security/step-up-fields';
+import { isMfaCodeInput, type StepUpProof } from '@/components/security/webauthn-client';
 import type { TransferDto } from './types';
 
-/** Authorisation dialog: debits the fictitious wallet; asks for a TOTP code when the user has MFA. */
+/**
+ * Authorisation dialog: debits the fictitious wallet. When the user has MFA it asks for a fresh
+ * proof — TOTP code, recovery code, or (if this browser supports WebAuthn and the account has a
+ * passkey) a passkey assertion for a STEP_UP challenge of this session.
+ */
 export function AuthorizeTransferDialog({
   transfer,
   mfaEnabled,
@@ -22,7 +29,7 @@ export function AuthorizeTransferDialog({
 }) {
   const { t, locale } = useI18n();
   const [code, setCode] = useState('');
-  const codeValid = /^\d{6}$/.test(code);
+  const assertion = useRef<AuthenticationResponseJSON | null>(null);
   return (
     <ActionDialog
       trigger={
@@ -34,13 +41,19 @@ export function AuthorizeTransferDialog({
       description={t('xfer.authorizeDescription')}
       confirmLabel={t('xfer.authorize')}
       variant={variant}
-      disabled={mfaEnabled && !codeValid}
+      disabled={mfaEnabled && !isMfaCodeInput(code)}
       onConfirm={async () => {
+        const proof: StepUpProof = assertion.current
+          ? { passkeyAssertion: assertion.current }
+          : mfaEnabled
+            ? { mfaCode: code }
+            : {};
+        assertion.current = null;
         let updated: TransferDto;
         try {
           updated = await api<TransferDto>(`/v1/transfers/${transfer.id}/authorize`, {
             method: 'POST',
-            json: mfaEnabled ? { mfaCode: code } : {},
+            json: proof,
           });
         } catch (e) {
           throw new Error(errorMessage(e));
@@ -65,19 +78,18 @@ export function AuthorizeTransferDialog({
         </dd>
       </dl>
       {mfaEnabled ? (
-        <div className="space-y-2">
-          <Label htmlFor="transfer-mfa-code">{t('xfer.mfaCode')}</Label>
-          <Input
-            id="transfer-mfa-code"
-            inputMode="numeric"
-            pattern="\d{6}"
-            maxLength={6}
-            autoComplete="one-time-code"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-          />
-          <p className="text-xs text-muted-foreground">{t('xfer.mfaHint')}</p>
-        </div>
+        <StepUpFields
+          id="transfer-mfa-code"
+          code={code}
+          onCodeChange={setCode}
+          hint={t('passkeys.transfer.codeHint')}
+          passkeyLabel={t('passkeys.transfer.usePasskey')}
+          onPasskey={(a, form) => {
+            // The dialog's own submit path runs the request (loading, error, close on success).
+            assertion.current = a;
+            form?.requestSubmit();
+          }}
+        />
       ) : null}
     </ActionDialog>
   );

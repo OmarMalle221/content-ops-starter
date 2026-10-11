@@ -1,11 +1,11 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { registerThroughUi } from './journey-helpers';
 
 /**
  * Phases 3–5 smoke scenario: Wallet (sandbox deposit, balances), Transfer (quote → authorise →
  * processing), Business (invoice page) and the partner API (key scoping), all through the web
  * origin. Every screen must carry the sandbox disclaimer and render no raw translation key.
  */
-const PASSWORD = 'CorrectHorse42Battery';
 const WEB_URL = process.env.E2E_WEB_URL ?? 'http://localhost:3000';
 const run = Date.now().toString(36);
 const email = `e2e-wallet-${run}@example.com`;
@@ -13,15 +13,8 @@ const RAW_KEY =
   /\b(nav|wallet|walletPlus|xfer|transfers|invoicing|business|dev|webhooks|beneficiary|jobsAdmin|ddaLab)\.[a-zA-Z]+(\.[a-zA-Z]+)*\b/;
 
 async function register(page: Page) {
-  await page.goto('/register');
-  await page.getByLabel(/Prénom|First name/).fill('Fatou');
-  await page.getByLabel(/^Nom$|Last name/).fill('Ndiaye');
-  await page.getByLabel(/Courriel|Email/).fill(email);
-  await page.getByLabel(/Pays|Country/).selectOption('CA');
-  await page.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  // Throttle-tolerant (the API accepts 5 registrations per minute and client IP).
+  await registerThroughUi(page, { email, firstName: 'Fatou', lastName: 'Ndiaye', country: 'CA' });
 }
 
 /** JSON call through the web proxy with the browser session (CSRF: first-party Origin). */

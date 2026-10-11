@@ -104,6 +104,25 @@ describe('beneficiaries', () => {
     expect(bad.body.code).toBe('VALIDATION_FAILED');
   });
 
+  it('never stores the mobile-money identifier in the clear-text phone field', async () => {
+    const a = await createWalletActors(ctx, '-phone');
+    const created = await a.owner.post('/v1/beneficiaries', {
+      ...MOMO_BENEFICIARY,
+      accountIdentifier: '+221 77 999 88 77',
+      phone: '+221779998877',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.phone).toBeNull();
+    expect(JSON.stringify(created.body)).not.toContain('99988');
+    const other = await a.owner.post('/v1/beneficiaries', {
+      ...MOMO_BENEFICIARY,
+      accountIdentifier: '+221770001122',
+      phone: '+221 70 123 45 67',
+    });
+    expect(other.status).toBe(201);
+    expect(other.body.phone).toBe('+221 70 123 45 67');
+  });
+
   it('isolates tenants (404) and enforces org roles (403)', async () => {
     const a = await createWalletActors(ctx);
     const mine = await a.owner.post('/v1/beneficiaries', {

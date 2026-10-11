@@ -3,7 +3,6 @@ import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { z } from 'zod';
 import {
-  createCounterpartySchema,
   createOrganizationSchema,
   inviteMemberSchema,
   submitBusinessVerificationSchema,
@@ -91,20 +90,5 @@ export class OrganizationsController {
     @Req() req: Request,
   ) {
     return this.organizations.submitBusinessVerification(auth, id, body, req);
-  }
-
-  @Get(':id/counterparties')
-  counterparties(@CurrentUser() auth: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
-    return this.organizations.listCounterparties(auth, id);
-  }
-
-  @Post(':id/counterparties')
-  createCounterparty(
-    @CurrentUser() auth: AuthContext,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body(zodBody(createCounterpartySchema)) body: z.infer<typeof createCounterpartySchema>,
-    @Req() req: Request,
-  ) {
-    return this.organizations.createCounterparty(auth, id, body, req);
   }
 }

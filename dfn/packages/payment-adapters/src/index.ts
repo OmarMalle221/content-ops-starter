@@ -3,3 +3,7 @@ export * from './sandbox.provider';
 export * from './registry';
 export * from './signature';
 export * from './fx';
+export * from './reference-http';
+export * from './fx-http-reference';
+export * from './payout';
+export * from './payout-http-reference';

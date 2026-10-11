@@ -2,18 +2,29 @@ import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { authenticator } from 'otplib';
 import type { Request } from 'express';
-import { ErrorCode, type LoginInput, type RegisterInput, KeyPurpose } from '@dfn/shared';
+import {
+  ErrorCode,
+  type LoginInput,
+  type MfaDisableInput,
+  type MfaVerifyInput,
+  type RecoveryCodesRegenerateInput,
+  type RegisterInput,
+  KeyPurpose,
+} from '@dfn/shared';
 import { DomainError } from '../../common/domain-error';
 import { sha256Hex } from '../../common/crypto';
-import { openString, sealString } from '../../common/keyring';
+import { sealString } from '../../common/keyring';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RiskService } from '../risk/risk.service';
 import { SessionService } from './session.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { AuthContext } from '../../common/auth-context';
+import { MfaVerifierService } from './mfa-verifier.service';
+import { RecoveryCodesService } from './recovery-codes.service';
 
 const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
@@ -26,6 +37,9 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly risk: RiskService,
     private readonly organizations: OrganizationsService,
+    private readonly mfa: MfaVerifierService,
+    private readonly recoveryCodes: RecoveryCodesService,
+    private readonly notifications: NotificationsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -150,49 +164,78 @@ export class AuthService {
     });
   }
 
-  // ── MFA (TOTP). Secrets are stored encrypted with the platform key. ──
+  // ── MFA (TOTP). Secrets are stored encrypted with the platform key (KeyPurpose.MFA). ──
+  // Every code check goes through MfaVerifierService (anti-replay, recovery codes, passkeys).
+
   async mfaSetup(auth: AuthContext) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (user.mfaEnabled) throw DomainError.conflict('MFA is already enabled');
     const secret = authenticator.generateSecret();
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { mfaSecretEnc: sealString(this.env, KeyPurpose.MFA, secret) },
+      // A new secret starts a fresh anti-replay history: steps of the old secret mean nothing.
+      data: { mfaSecretEnc: sealString(this.env, KeyPurpose.MFA, secret), mfaLastUsedStep: null },
     });
     const otpauthUrl = authenticator.keyuri(user.email, 'Diaspora Trust (sandbox)', secret);
     return { secret, otpauthUrl };
   }
 
+  /**
+   * Confirms the enrolment with a code of the freshly configured app, enables MFA and returns the
+   * 10 recovery codes — shown once, stored hashed. The confirmation code is checked but not
+   * burnt (ADR-0009): it proves the configuration, it authenticates nothing.
+   */
   async mfaEnable(auth: AuthContext, code: string, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+    if (user.mfaEnabled) throw DomainError.conflict('MFA is already enabled');
     if (!user.mfaSecretEnc) throw DomainError.validation('Run MFA setup first');
-    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
-    if (!authenticator.verify({ token: code, secret })) throw DomainError.validation('Invalid code');
-    await this.prisma.user.update({ where: { id: user.id }, data: { mfaEnabled: true } });
-    await this.sessions.markMfaVerified(auth.sessionId);
-    await this.audit.log({
-      actorUserId: user.id,
-      action: 'auth.mfa_enabled',
-      entityType: 'User',
-      entityId: user.id,
-      ...requestMeta(req),
+    await this.mfa.verifyTotp(user.id, code, {
+      consume: false,
+      invalid: () => DomainError.validation('Invalid code'),
     });
-    return { enabled: true };
+    const recoveryCodes = await this.prisma.$transaction(async (db) => {
+      await db.user.update({ where: { id: user.id }, data: { mfaEnabled: true } });
+      const codes = await this.recoveryCodes.replaceAll(user.id, db);
+      await this.audit.log(
+        {
+          actorUserId: user.id,
+          action: 'auth.mfa_enabled',
+          entityType: 'User',
+          entityId: user.id,
+          metadata: { recoveryCodesGenerated: codes.length },
+          ...requestMeta(req),
+        },
+        db,
+      );
+      return codes;
+    });
+    await this.sessions.markMfaVerified(auth.sessionId);
+    return { enabled: true, recoveryCodes };
   }
 
-  async mfaVerify(auth: AuthContext, code: string, req: Request) {
+  /** Login MFA step: TOTP code (anti-replay), recovery code or passkey assertion (STEP_UP). */
+  async mfaVerify(auth: AuthContext, input: MfaVerifyInput, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (!user.mfaEnabled || !user.mfaSecretEnc) throw DomainError.validation('MFA is not enabled');
-    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
-    if (!authenticator.verify({ token: code, secret })) {
+    let method: string;
+    try {
+      method = await this.mfa.assertFreshProof(
+        auth,
+        { mfaCode: input.code, passkeyAssertion: input.passkeyAssertion },
+        'auth.login_mfa',
+        { code: ErrorCode.MFA_REQUIRED, message: 'Invalid code' },
+        req,
+      );
+    } catch (err) {
       await this.audit.log({
         actorUserId: user.id,
         action: 'auth.mfa_failed',
         entityType: 'User',
         entityId: user.id,
+        metadata: { reason: err instanceof DomainError ? err.code : 'error' },
         ...requestMeta(req),
       });
-      throw new DomainError(ErrorCode.MFA_REQUIRED, 'Invalid code', HttpStatus.UNAUTHORIZED);
+      throw err;
     }
     await this.sessions.markMfaVerified(auth.sessionId);
     await this.audit.log({
@@ -200,28 +243,121 @@ export class AuthService {
       action: 'auth.mfa_verified',
       entityType: 'Session',
       entityId: auth.sessionId,
+      metadata: { method },
       ...requestMeta(req),
     });
-    return { verified: true };
+    return { verified: true, method };
   }
 
-  async mfaDisable(auth: AuthContext, code: string, req: Request) {
+  /** Disabling MFA is itself a step-up operation; recovery codes are discarded with the secret. */
+  async mfaDisable(auth: AuthContext, input: MfaDisableInput, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (!user.mfaEnabled || !user.mfaSecretEnc) throw DomainError.validation('MFA is not enabled');
-    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
-    if (!authenticator.verify({ token: code, secret })) throw DomainError.validation('Invalid code');
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { mfaEnabled: false, mfaSecretEnc: null },
-    });
-    await this.audit.log({
-      actorUserId: user.id,
-      action: 'auth.mfa_disabled',
-      entityType: 'User',
-      entityId: user.id,
-      ...requestMeta(req),
+    const method = await this.mfa.assertFreshProof(
+      auth,
+      { mfaCode: input.code, passkeyAssertion: input.passkeyAssertion },
+      'mfa.disable',
+      { code: ErrorCode.VALIDATION_FAILED, message: 'Invalid code', status: HttpStatus.BAD_REQUEST },
+      req,
+    );
+    await this.prisma.$transaction(async (db) => {
+      await db.user.update({
+        where: { id: user.id },
+        data: { mfaEnabled: false, mfaSecretEnc: null },
+      });
+      await this.recoveryCodes.deleteAll(user.id, db);
+      await this.audit.log(
+        {
+          actorUserId: user.id,
+          action: 'auth.mfa_disabled',
+          entityType: 'User',
+          entityId: user.id,
+          metadata: { stepUp: method },
+          ...requestMeta(req),
+        },
+        db,
+      );
     });
     return { enabled: false };
+  }
+
+  /** Second factors of the account (also readable before the login MFA step). */
+  async mfaStatus(auth: AuthContext) {
+    const [user, passkeyCount, recovery] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId }, select: { mfaEnabled: true } }),
+      this.prisma.webAuthnCredential.count({ where: { userId: auth.userId, revokedAt: null } }),
+      this.recoveryCodes.summary(auth.userId),
+    ]);
+    const methods: string[] = [];
+    if (user.mfaEnabled) methods.push('totp', 'recovery_code');
+    if (passkeyCount > 0) methods.push('passkey');
+    return {
+      mfaEnabled: user.mfaEnabled,
+      passkeyCount,
+      recoveryCodesRemaining: user.mfaEnabled ? recovery.remaining : 0,
+      methods,
+    };
+  }
+
+  async recoveryCodesSummary(auth: AuthContext) {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: auth.userId },
+      select: { mfaEnabled: true },
+    });
+    const summary = await this.recoveryCodes.summary(auth.userId);
+    return {
+      ...summary,
+      remaining: user.mfaEnabled ? summary.remaining : 0,
+      mfaEnabled: user.mfaEnabled,
+      nextActions: user.mfaEnabled ? ['REGENERATE'] : [],
+    };
+  }
+
+  /** New batch of recovery codes (old ones invalidated). Requires a fresh MFA proof. */
+  async regenerateRecoveryCodes(auth: AuthContext, proof: RecoveryCodesRegenerateInput, req: Request) {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: auth.userId },
+      select: { mfaEnabled: true },
+    });
+    if (!user.mfaEnabled) throw DomainError.validation('MFA is not enabled');
+    const method = await this.mfa.assertFreshProof(
+      auth,
+      proof,
+      'mfa.recovery_codes_regenerate',
+      {
+        code: ErrorCode.STEP_UP_REQUIRED,
+        message: 'A fresh second factor (code or passkey) is required to regenerate recovery codes',
+      },
+      req,
+    );
+    const recoveryCodes = await this.prisma.$transaction(async (db) => {
+      const codes = await this.recoveryCodes.replaceAll(auth.userId, db);
+      await this.audit.log(
+        {
+          actorUserId: auth.userId,
+          action: 'auth.mfa_recovery_codes_regenerated',
+          entityType: 'User',
+          entityId: auth.userId,
+          metadata: { stepUp: method, count: codes.length },
+          ...requestMeta(req),
+        },
+        db,
+      );
+      await this.notifications.notify(
+        {
+          userId: auth.userId,
+          type: 'auth.mfa_recovery_codes_regenerated',
+          title: 'Nouveaux codes de secours',
+          body:
+            'De nouveaux codes de secours ont été générés : les anciens ne fonctionnent plus. ' +
+            'Si vous n’êtes pas à l’origine de cette opération, changez votre mot de passe immédiatement.',
+          data: { count: codes.length },
+        },
+        db,
+      );
+      return codes;
+    });
+    return { recoveryCodes };
   }
 
   async changePassword(auth: AuthContext, currentPassword: string, newPassword: string, req: Request) {

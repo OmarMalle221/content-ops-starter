@@ -1,5 +1,6 @@
 import { hostname } from 'node:os';
 import { z } from 'zod';
+import { isValidStructuringThresholdSpec } from '@dfn/compliance';
 
 const envSchema = z
   .object({
@@ -89,10 +90,14 @@ const envSchema = z
     REVIEW_SLA_HOURS_LOW: z.coerce.number().int().min(1).max(2160).default(168),
     /** Structuring detection: rolling window and aggregate threshold (decimal, per currency). */
     STRUCTURING_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+    /** Default and per-currency thresholds, e.g. "10000.00,XOF:4400000,GNF:63000000" (≈ 10 000 CAD). */
     STRUCTURING_THRESHOLD: z
       .string()
-      .regex(/^\d{1,13}([.,]\d{1,2})?$/)
-      .default('10000.00'),
+      .refine(
+        isValidStructuringThresholdSpec,
+        'Expected "decimal" and/or "CCC:decimal" entries, comma-separated',
+      )
+      .default('10000.00,XOF:4400000,GNF:63000000'),
     PAYOUT_PROVIDER: z.string().default('sandbox'),
   })
   .superRefine((v, ctx) => {

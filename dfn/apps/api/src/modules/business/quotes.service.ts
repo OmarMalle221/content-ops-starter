@@ -35,10 +35,11 @@ import {
   addDays,
   allocateDocumentNumber,
   computeDocumentTotals,
-  deriveTaxBps,
+  linkedCustomerUserIds,
   parseDay,
   retryOnUniqueViolation,
   startOfUtcDay,
+  storedTaxBps,
 } from './business.utils';
 
 const QUOTE_STATUSES = new Set<string>(Object.values(QuoteStatusEnum));
@@ -92,9 +93,15 @@ export class QuotesService {
     return { quote, access };
   }
 
-  private assertIssuerManage(auth: AuthContext, quote: QuoteWithRelations, access: DocumentAccess) {
+  /** Issuer only; non-member staff are read-only unless an ADMIN acts for support (audited). */
+  private async assertIssuerManage(
+    auth: AuthContext,
+    quote: QuoteWithRelations,
+    access: DocumentAccess,
+    req: Request,
+  ) {
     if (access.role === 'CUSTOMER') throw DomainError.forbidden('Only the issuing organisation can do this');
-    return this.orgs.assertMember(auth, quote.organizationId, Permission.INVOICE_MANAGE);
+    return this.orgs.authorizeWrite(auth, quote.organizationId, Permission.INVOICE_MANAGE, req);
   }
 
   private async assertCounterparty(organizationId: string, counterpartyId: string | undefined) {
@@ -104,19 +111,14 @@ export class QuotesService {
     return cp;
   }
 
-  private async customerUserId(email: string | null): Promise<string | null> {
-    if (!email) return null;
-    const user = await this.prisma.user.findUnique({ where: { email }, select: { id: true, status: true } });
-    return user && user.status === 'ACTIVE' ? user.id : null;
-  }
-
   // ───────────────────────────── CRUD ───────────────────────────────────────
 
   async create(auth: AuthContext, input: CreateQuoteInput, req: Request) {
-    const membership = this.orgs.resolveActingOrganization(
+    const membership = await this.orgs.resolveActingOrganizationForWrite(
       auth,
       input.organizationId,
       Permission.INVOICE_MANAGE,
+      req,
     );
     const organizationId = membership.organizationId;
     await this.assertCounterparty(organizationId, input.counterpartyId);
@@ -138,6 +140,7 @@ export class QuotesService {
             currencyCode: input.currencyCode,
             validUntil,
             subtotalMinor: totals.subtotalMinor,
+            taxBps: input.taxBps,
             taxMinor: totals.taxMinor,
             totalMinor: totals.totalMinor,
             notes: input.notes ?? null,
@@ -155,6 +158,8 @@ export class QuotesService {
               number,
               total: minorToDecimalString(totals.totalMinor, input.currencyCode),
               currency: input.currencyCode,
+              taxBps: input.taxBps,
+              support: membership.via === 'STAFF_SUPPORT',
             },
             ...meta,
           },
@@ -183,11 +188,14 @@ export class QuotesService {
     const scope: Prisma.QuoteWhereInput = {};
     if (query.organizationId) {
       this.orgs.assertMember(auth, query.organizationId, Permission.TRANSACTION_READ);
-      if (query.scope === 'RECEIVED') scope.counterparty = { linkedOrganizationId: query.organizationId };
+      // RECEIVED = addressed to the organisation through an ACCEPTED counterparty link only.
+      if (query.scope === 'RECEIVED')
+        scope.counterparty = { linkedOrganizationId: query.organizationId, linkStatus: 'ACCEPTED' };
       else scope.organizationId = query.organizationId;
     } else if (!isStaff(auth)) {
       const orgIds = auth.memberships.map((m) => m.organizationId);
-      if (query.scope === 'RECEIVED') scope.counterparty = { linkedOrganizationId: { in: orgIds } };
+      if (query.scope === 'RECEIVED')
+        scope.counterparty = { linkedOrganizationId: { in: orgIds }, linkStatus: 'ACCEPTED' };
       else scope.organizationId = { in: orgIds };
     }
     // Lazy expiry for the listed scope, so pipelines never show stale "SENT" quotes.
@@ -233,7 +241,7 @@ export class QuotesService {
 
   async update(auth: AuthContext, id: string, input: Partial<CreateQuoteInput>, req: Request) {
     const { quote, access } = await this.loadFor(auth, id);
-    this.assertIssuerManage(auth, quote, access);
+    const actor = await this.assertIssuerManage(auth, quote, access, req);
     if (quote.status !== 'DRAFT') {
       throw DomainError.invalidTransition(`Only draft quotes can be edited (current: ${quote.status})`);
     }
@@ -247,7 +255,8 @@ export class QuotesService {
         quantity: l.quantity,
         unitPrice: minorToDecimalString(l.unitPriceMinor, quote.currencyCode),
       }));
-    const taxBps = input.taxBps ?? deriveTaxBps(quote.subtotalMinor, quote.taxMinor);
+    // The persisted rate is kept exactly when the edit does not resend it (see storedTaxBps).
+    const taxBps = input.taxBps ?? storedTaxBps(quote);
     const totals = computeDocumentTotals(lines, taxBps, currencyCode);
     const validUntil = input.validUntil ? parseDay(input.validUntil, 'validUntil') : undefined;
     if (validUntil && validUntil < startOfUtcDay())
@@ -265,6 +274,7 @@ export class QuotesService {
           validUntil,
           notes: input.notes !== undefined ? input.notes : undefined,
           subtotalMinor: totals.subtotalMinor,
+          taxBps,
           taxMinor: totals.taxMinor,
           totalMinor: totals.totalMinor,
           lines: { create: totals.lines },
@@ -277,7 +287,7 @@ export class QuotesService {
           action: 'quote.updated',
           entityType: 'Quote',
           entityId: id,
-          metadata: { fields: Object.keys(input) },
+          metadata: { fields: Object.keys(input), taxBps, support: actor.via === 'STAFF_SUPPORT' },
           ...meta,
         },
         db,
@@ -298,7 +308,7 @@ export class QuotesService {
     req: Request,
   ) {
     const { quote, access } = await this.loadFor(auth, id);
-    this.assertIssuerManage(auth, quote, access);
+    const actor = await this.assertIssuerManage(auth, quote, access, req);
     quoteMachine.assertTransition(quote.status, target);
     const meta = requestMeta(req);
     await this.prisma.$transaction(async (db) => {
@@ -310,7 +320,12 @@ export class QuotesService {
           action,
           entityType: 'Quote',
           entityId: id,
-          metadata: { number: quote.number, from: quote.status, ...metadata },
+          metadata: {
+            number: quote.number,
+            from: quote.status,
+            ...metadata,
+            support: actor.via === 'STAFF_SUPPORT',
+          },
           ...meta,
         },
         db,
@@ -321,10 +336,10 @@ export class QuotesService {
 
   async send(auth: AuthContext, id: string, req: Request) {
     const quote = await this.transition(auth, id, 'SENT', 'quote.sent', { sentAt: new Date() }, {}, req);
-    const customerId = await this.customerUserId(quote.customerEmail);
-    if (customerId) {
-      await this.notifications.notify({
-        userId: customerId,
+    // Only a customer organisation that ACCEPTED the link is notified (consent).
+    const customers = await linkedCustomerUserIds(this.prisma, quote.counterparty);
+    if (customers.length) {
+      await this.notifications.notifyMany(customers, {
         type: 'quote.sent',
         title: `Devis ${quote.number} reçu (sandbox)`,
         body: `${quote.organization.name} vous a adressé le devis ${quote.number} de ${minorToDecimalString(quote.totalMinor, quote.currencyCode)} ${quote.currencyCode} (fictifs), valable jusqu’au ${quote.validUntil.toISOString().slice(0, 10)}. ${BUSINESS_DISCLAIMER_FR}.`,
@@ -364,7 +379,7 @@ export class QuotesService {
   /** ACCEPTED → CONVERTED: creates a DRAFT invoice copying the lines; Protect conversion is not available. */
   async convert(auth: AuthContext, id: string, input: ConvertQuoteInput, req: Request) {
     const { quote, access } = await this.loadFor(auth, id);
-    this.assertIssuerManage(auth, quote, access);
+    const actor = await this.assertIssuerManage(auth, quote, access, req);
     if (input.target === 'PROTECT_TRANSACTION') {
       throw new DomainError(
         'NOT_AVAILABLE',
@@ -391,6 +406,8 @@ export class QuotesService {
             currencyCode: quote.currencyCode,
             dueDate,
             subtotalMinor: quote.subtotalMinor,
+            // The invoice inherits the persisted rate of the quote (not a value re-derived from amounts).
+            taxBps: storedTaxBps(quote),
             taxMinor: quote.taxMinor,
             totalMinor: quote.totalMinor,
             notes: quote.notes,
@@ -418,6 +435,7 @@ export class QuotesService {
               target: 'INVOICE',
               invoiceId: invoice.id,
               invoiceNumber: number,
+              support: actor.via === 'STAFF_SUPPORT',
             },
             ...meta,
           },

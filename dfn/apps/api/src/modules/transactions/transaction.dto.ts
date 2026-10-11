@@ -15,6 +15,8 @@ export function nextActionsFor(
   role: ViewerRole,
   verification: VerificationSnapshot,
   userId: string,
+  /** Staff may only simulate the partner when they hold SANDBOX_PARTNER_SIMULATE (ADMIN). */
+  canSimulatePartner = false,
 ): string[] {
   const actions: string[] = [];
   const buyerParty = tx.parties.find((p) => p.role === 'BUYER');
@@ -40,7 +42,8 @@ export function nextActionsFor(
   }
   if (tx.status === 'AWAITING_FUNDING') {
     const pending = tx.fundingRequests.find((f) => f.status === 'PENDING');
-    if (pending && (role === 'BUYER' || role === 'STAFF')) actions.push('SIMULATE_PARTNER_CONFIRMATION');
+    if (pending && (role === 'BUYER' || (role === 'STAFF' && canSimulatePartner)))
+      actions.push('SIMULATE_PARTNER_CONFIRMATION');
     if (!pending && role === 'BUYER') actions.push('REQUEST_FUNDING');
     if (role === 'BUYER') actions.push('CANCEL');
   }
@@ -65,7 +68,12 @@ export function nextActionsFor(
 export function toTransactionDto(
   tx: TransactionWithRelations,
   role: ViewerRole,
-  extras: { escrowBalanceMinor: bigint; verification: VerificationSnapshot; userId: string },
+  extras: {
+    escrowBalanceMinor: bigint;
+    verification: VerificationSnapshot;
+    userId: string;
+    canSimulatePartner?: boolean;
+  },
 ) {
   const ccy = tx.currencyCode;
   const buyerParty = tx.parties.find((p) => p.role === 'BUYER');
@@ -171,7 +179,13 @@ export function toTransactionDto(
     verification: extras.verification,
     disputes: tx.disputes,
     documentCount: tx._count.documents,
-    nextActions: nextActionsFor(tx, role, extras.verification, extras.userId),
+    nextActions: nextActionsFor(
+      tx,
+      role,
+      extras.verification,
+      extras.userId,
+      extras.canSimulatePartner ?? false,
+    ),
     acceptedAt: tx.acceptedAt,
     fundedAt: tx.fundedAt,
     settledAt: tx.settledAt,

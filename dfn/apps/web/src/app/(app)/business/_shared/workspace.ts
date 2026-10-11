@@ -14,14 +14,18 @@ export interface BusinessWorkspace {
   org: WorkspaceOrg;
   myRole: string | undefined;
   isStaff: boolean;
-  /** OWNER / ADMIN (or staff): members, invitations, verification. */
+  /** OWNER / ADMIN: members and invitations. */
   canManage: boolean;
+  /** ORG_MANAGE_SETTINGS (OWNER): business verification. */
+  canManageSettings: boolean;
   /** INVOICE_MANAGE: create / send / cancel documents, record payments. */
   canInvoice: boolean;
   /** TRANSACTION_CREATE: create client records. */
   canCreateClients: boolean;
   /** ORG_VIEW_REPORTS. */
   canViewReports: boolean;
+  /** ORG_LINK_DECIDE (OWNER / ADMIN): accept or decline counterparty link requests. */
+  canDecideLinks: boolean;
   /** Query string suffix carrying the selected organisation. */
   qs: string;
 }
@@ -31,8 +35,12 @@ export function isoDateInDays(days: number): string {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-function has(role: string | undefined, permission: Permission, isStaff: boolean): boolean {
-  if (isStaff) return true;
+/**
+ * The workspace is always one of the user's own organisations, so the organisation role decides.
+ * Staff get no implicit rights here: platform staff are read-only in organisations they do not
+ * belong to, and keep their real role in the ones they belong to (mirrors the API).
+ */
+function has(role: string | undefined, permission: Permission): boolean {
   if (!role) return false;
   return orgRoleHas(role as OrgRole, permission);
 }
@@ -64,10 +72,12 @@ export async function resolveWorkspace(
     org,
     myRole,
     isStaff,
-    canManage: isStaff || myRole === 'OWNER' || myRole === 'ADMIN',
-    canInvoice: has(myRole, Permission.INVOICE_MANAGE, isStaff),
-    canCreateClients: has(myRole, Permission.TRANSACTION_CREATE, isStaff),
-    canViewReports: has(myRole, Permission.ORG_VIEW_REPORTS, isStaff),
+    canManage: myRole === 'OWNER' || myRole === 'ADMIN',
+    canManageSettings: has(myRole, Permission.ORG_MANAGE_SETTINGS),
+    canInvoice: has(myRole, Permission.INVOICE_MANAGE),
+    canCreateClients: has(myRole, Permission.TRANSACTION_CREATE),
+    canViewReports: has(myRole, Permission.ORG_VIEW_REPORTS),
+    canDecideLinks: has(myRole, Permission.ORG_LINK_DECIDE),
     qs: `organizationId=${organizationId}`,
   };
 }

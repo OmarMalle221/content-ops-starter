@@ -4,13 +4,16 @@ import type { OrgRole, Prisma, PrismaTransactionClient, User } from '@dfn/databa
 import {
   ErrorCode,
   Permission,
+  SUPPORT_REASON_HEADER,
+  globalRoleHas,
   orgRoleHas,
+  supportReasonSchema,
   type CreateOrganizationInput,
   type InviteMemberInput,
   type SubmitBusinessVerificationInput,
 } from '@dfn/shared';
 import { createKycProvider } from '@dfn/compliance';
-import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
+import { isStaff, membershipFor, type AuthContext, type AuthMembership } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { randomToken, sha256Hex } from '../../common/crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -43,7 +46,12 @@ export class OrganizationsService {
     });
   }
 
-  /** Resolves the organisation the user acts for; defaults to the personal workspace. */
+  /**
+   * Resolves the organisation the user acts for; defaults to the personal workspace.
+   * Real memberships only: staff get no implicit access here (money movement, partner credentials,
+   * Protect transactions…). Business / organisation writes by support staff go through
+   * `resolveActingOrganizationForWrite` instead.
+   */
   resolveActingOrganization(auth: AuthContext, organizationId?: string, permission?: Permission) {
     const membership = organizationId
       ? membershipFor(auth, organizationId)
@@ -55,12 +63,107 @@ export class OrganizationsService {
     return membership;
   }
 
-  assertMember(auth: AuthContext, organizationId: string, permission?: Permission) {
-    if (isStaff(auth)) return { organizationId, role: 'OWNER' as OrgRole };
+  /**
+   * Same as `resolveActingOrganization` for an explicit organisation, plus audited staff support
+   * writes (see `authorizeWrite`). Without `organizationId`, the caller's own workspace is used.
+   */
+  async resolveActingOrganizationForWrite(
+    auth: AuthContext,
+    organizationId: string | undefined,
+    permission: Permission,
+    req: Request,
+  ): Promise<TenantAccess> {
+    if (!organizationId) {
+      return { ...this.resolveActingOrganization(auth, undefined, permission), via: 'MEMBERSHIP' };
+    }
+    return this.authorizeWrite(auth, organizationId, permission, req);
+  }
+
+  /**
+   * Synchronous tenant check. Members are checked against their organisation role. Staff (ADMIN /
+   * COMPLIANCE) who are NOT members only get READ access — the intent is derived from the required
+   * permission (no permission or a read permission = read). A write by a non-member staff user is
+   * refused here: support writes must use `authorizeWrite`, which records the support audit.
+   * Anyone else gets a 404 (no existence leak).
+   */
+  assertMember(
+    auth: AuthContext,
+    organizationId: string,
+    permission?: Permission,
+    intent: TenantAccessIntent = intentOf(permission),
+  ): TenantAccess {
     const m = membershipFor(auth, organizationId);
-    if (!m) throw DomainError.notFound('Organization');
-    if (permission && !orgRoleHas(m.role, permission)) throw DomainError.forbidden();
-    return m;
+    if (m) {
+      if (permission && !orgRoleHas(m.role, permission)) throw DomainError.forbidden();
+      return { ...m, via: 'MEMBERSHIP' };
+    }
+    if (!isStaffActor(auth)) throw DomainError.notFound('Organization');
+    if (intent === 'read') return { organizationId, role: 'VIEWER', via: 'STAFF_READ' };
+    throw staffWriteRefusal(auth, permission);
+  }
+
+  /**
+   * Write check with staff support. Members: role check. Non-member staff: only ADMIN
+   * (Permission.ADMIN_SUPPORT_WRITE), only for business / organisation administration permissions
+   * (never money movement, credentials or link consent), only with a justification in the
+   * `X-Support-Reason` header — and every such access is audited as `support.write` BEFORE the
+   * action runs. COMPLIANCE (read-only) gets 403. Anyone else gets 404.
+   */
+  async authorizeWrite(
+    auth: AuthContext,
+    organizationId: string,
+    permission: Permission,
+    req: Request,
+  ): Promise<TenantAccess> {
+    const m = membershipFor(auth, organizationId);
+    if (m) {
+      if (!orgRoleHas(m.role, permission)) {
+        throw DomainError.forbidden(`Your role (${m.role}) does not allow this action`);
+      }
+      return { ...m, via: 'MEMBERSHIP' };
+    }
+    if (!isStaffActor(auth)) throw DomainError.notFound('Organization');
+    if (
+      !globalRoleHas(auth.globalRole, Permission.ADMIN_SUPPORT_WRITE) ||
+      !SUPPORT_WRITABLE.has(permission)
+    ) {
+      throw staffWriteRefusal(auth, permission);
+    }
+    const reason = supportReasonFrom(req);
+    if (!reason) {
+      throw DomainError.validation(
+        'Staff write access to an organisation you do not belong to requires a support reason (X-Support-Reason header, 10–500 characters)',
+        { header: SUPPORT_REASON_HEADER },
+      );
+    }
+    const org = await this.prisma.organization.findFirst({
+      where: { id: organizationId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!org) throw DomainError.notFound('Organization');
+    await this.audit.log({
+      actorUserId: auth.userId,
+      organizationId,
+      action: 'support.write',
+      entityType: 'Organization',
+      entityId: organizationId,
+      metadata: {
+        support: true,
+        reason,
+        permission,
+        globalRole: auth.globalRole,
+        method: req.method,
+        path: (req.originalUrl ?? req.url ?? '').split('?')[0],
+      },
+      ...requestMeta(req),
+    });
+    return {
+      organizationId,
+      organizationName: org.name,
+      role: 'OWNER',
+      via: 'STAFF_SUPPORT',
+      supportReason: reason,
+    };
   }
 
   async listMine(auth: AuthContext) {
@@ -73,7 +176,7 @@ export class OrganizationsService {
   }
 
   async get(auth: AuthContext, id: string) {
-    this.assertMember(auth, id);
+    this.assertMember(auth, id); // read: members and staff
     const org = await this.prisma.organization.findFirst({
       where: { id, deletedAt: null },
       include: {
@@ -110,7 +213,7 @@ export class OrganizationsService {
   }
 
   async inviteMember(auth: AuthContext, organizationId: string, input: InviteMemberInput, req: Request) {
-    this.assertMember(auth, organizationId, Permission.ORG_MANAGE_MEMBERS);
+    await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
     const token = randomToken(24);
     const invitation = await this.prisma.organizationInvitation.create({
       data: {
@@ -195,7 +298,7 @@ export class OrganizationsService {
     role: OrgRole,
     req: Request,
   ) {
-    const actor = this.assertMember(auth, organizationId, Permission.ORG_MANAGE_MEMBERS);
+    const actor = await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
     const member = await this.prisma.organizationMember.findFirst({
       where: { id: memberId, organizationId },
     });
@@ -220,7 +323,7 @@ export class OrganizationsService {
   }
 
   async removeMember(auth: AuthContext, organizationId: string, memberId: string, req: Request) {
-    this.assertMember(auth, organizationId, Permission.ORG_MANAGE_MEMBERS);
+    await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
     const member = await this.prisma.organizationMember.findFirst({
       where: { id: memberId, organizationId },
     });
@@ -247,7 +350,7 @@ export class OrganizationsService {
     input: SubmitBusinessVerificationInput,
     req: Request,
   ) {
-    this.assertMember(auth, organizationId, Permission.ORG_MANAGE_SETTINGS);
+    await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_SETTINGS, req);
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: organizationId } });
     if (org.type !== 'BUSINESS')
       throw DomainError.validation('Business verification applies to business organisations only');
@@ -287,67 +390,75 @@ export class OrganizationsService {
     });
     return { ...record, simulated: result.simulated };
   }
+}
 
-  async listCounterparties(auth: AuthContext, organizationId: string) {
-    this.assertMember(auth, organizationId);
-    return this.prisma.counterparty.findMany({ where: { organizationId }, orderBy: { name: 'asc' } });
-  }
+// ───────────────────────────── Tenant access model ──────────────────────────
 
-  async createCounterparty(
-    auth: AuthContext,
-    organizationId: string,
-    input: {
-      name: string;
-      email?: string;
-      phone?: string;
-      country?: string;
-      notes?: string;
-      linkedOrganizationId?: string;
-    },
-    req: Request,
-  ) {
-    this.assertMember(auth, organizationId, Permission.TRANSACTION_CREATE);
-    let linkedOrganizationId = input.linkedOrganizationId ?? null;
-    if (linkedOrganizationId) {
-      // An explicit link is only allowed towards an organisation the caller belongs to (e.g. another
-      // workspace of the same person): linking an arbitrary identifier would let anyone probe
-      // organisation ids and push invoices into a tenant that never opted in.
-      const membership = await this.prisma.organizationMember.findFirst({
-        where: {
-          organizationId: linkedOrganizationId,
-          userId: auth.userId,
-          organization: { deletedAt: null },
-        },
-        select: { organizationId: true },
-      });
-      if (!membership) throw DomainError.validation('Linked organisation not found');
-      if (membership.organizationId === organizationId)
-        throw DomainError.validation('A counterparty cannot link to its own organisation');
-    } else if (input.email) {
-      // Auto-link to the personal workspace of a DFN user with that email (lets them pay invoices from their wallet).
-      const user = await this.prisma.user.findUnique({ where: { email: input.email }, select: { id: true } });
-      if (user) {
-        const personal = await this.prisma.organizationMember.findFirst({
-          where: { userId: user.id, role: 'OWNER', organization: { type: 'PERSONAL', deletedAt: null } },
-          select: { organizationId: true },
-        });
-        if (personal && personal.organizationId !== organizationId)
-          linkedOrganizationId = personal.organizationId;
-      }
-    }
-    const { linkedOrganizationId: _ignored, ...rest } = input;
-    const cp = await this.prisma.counterparty.create({
-      data: { organizationId, ...rest, linkedOrganizationId },
-    });
-    await this.audit.log({
-      actorUserId: auth.userId,
-      organizationId,
-      action: 'counterparty.created',
-      entityType: 'Counterparty',
-      entityId: cp.id,
-      metadata: { linkedOrganizationId },
-      ...requestMeta(req),
-    });
-    return cp;
+export type TenantAccessIntent = 'read' | 'write';
+
+/** MEMBERSHIP = real membership; STAFF_READ = staff read-only access; STAFF_SUPPORT = audited support write. */
+export type TenantAccessVia = 'MEMBERSHIP' | 'STAFF_READ' | 'STAFF_SUPPORT';
+
+export interface TenantAccess {
+  organizationId: string;
+  role: OrgRole;
+  via: TenantAccessVia;
+  organizationName?: string;
+  organizationType?: AuthMembership['organizationType'];
+  /** STAFF_SUPPORT only: the justification recorded in the `support.write` audit entry. */
+  supportReason?: string;
+}
+
+/** Permissions that only read tenant data (staff keep read access to every organisation). */
+const READ_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  Permission.TRANSACTION_READ,
+  Permission.WALLET_READ,
+  Permission.ORG_VIEW_REPORTS,
+]);
+
+/**
+ * Writes an ADMIN may perform for support inside an organisation he does not belong to: client
+ * records, invoices / quotes, members and organisation settings. Never: transfers, wallet payments,
+ * beneficiaries, partner credentials, Protect transactions or link consent (ORG_LINK_DECIDE).
+ */
+const SUPPORT_WRITABLE: ReadonlySet<Permission> = new Set<Permission>([
+  Permission.TRANSACTION_CREATE,
+  Permission.INVOICE_MANAGE,
+  Permission.ORG_MANAGE_MEMBERS,
+  Permission.ORG_MANAGE_SETTINGS,
+]);
+
+export function intentOf(permission?: Permission): TenantAccessIntent {
+  return !permission || READ_PERMISSIONS.has(permission) ? 'read' : 'write';
+}
+
+/** Staff role on a session (API keys always act as the key's organisation, never as staff). */
+function isStaffActor(auth: AuthContext): boolean {
+  return isStaff(auth) && !auth.apiCredential;
+}
+
+function staffWriteRefusal(auth: AuthContext, permission?: Permission): DomainError {
+  if (!globalRoleHas(auth.globalRole, Permission.ADMIN_SUPPORT_WRITE)) {
+    return DomainError.forbidden(
+      'Staff accounts have read-only access to organisations they do not belong to',
+    );
   }
+  return DomainError.forbidden(
+    `Support access cannot perform this action on behalf of an organisation${permission ? ` (${permission})` : ''}`,
+  );
+}
+
+/** Reads and validates the support justification header (URI-encoded values are decoded). */
+function supportReasonFrom(req: Request): string | null {
+  const raw = req.headers[SUPPORT_REASON_HEADER];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return null;
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    /* not URI-encoded: keep the raw value */
+  }
+  const parsed = supportReasonSchema.safeParse(decoded);
+  return parsed.success ? parsed.data : null;
 }

@@ -8,7 +8,10 @@ import { api } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 import { ActionDialog } from '@/components/transactions/action-dialog';
 
-/** Creates a client record (counterparty) for the organisation. */
+/**
+ * Creates a client record (counterparty). With an e-mail, the API sends a link request to the
+ * matching DFN account, if any — the answer never says whether one matched (consent workflow).
+ */
 export function CounterpartyCreateDialog({ organizationId }: { organizationId: string }) {
   const { t, locale } = useI18n();
   const router = useRouter();
@@ -21,7 +24,7 @@ export function CounterpartyCreateDialog({ organizationId }: { organizationId: s
         </Button>
       }
       title={t('clientsX.new')}
-      description={t('clientsX.linkedHint')}
+      description={`${t('clientsX.linkedHint')} ${t('counterpartyLinks.consentHint')}`}
       disabled={form.name.trim().length === 0}
       onConfirm={async () => {
         await api(`/v1/organizations/${organizationId}/counterparties`, {

@@ -1,84 +1,277 @@
-# Diaspora Financial Network — local sandbox stack.
-# docker compose up --build  →  web http://localhost:3000 · api http://localhost:4000/docs
-# Données fictives — Aucun fonds réel.
+# ─────────────────────────────────────────────────────────────────────────────
+# Diaspora Financial Network — sandbox stack. SANDBOX ONLY: Données fictives — Aucun fonds réel.
+#
+# No secret has a default value here: copy .env.example to .env and set at least POSTGRES_PASSWORD,
+# REDIS_PASSWORD, SESSION_SECRET and DOCUMENT_ENCRYPTION_KEY (see docs/operations/RUNBOOK.md).
+#
+#   docker compose up -d --build                  web http://localhost:3000 · api http://localhost:4000/docs
+#   docker compose --profile s3 up -d --build     + MinIO (set STORAGE_DRIVER=s3, S3_*, MINIO_ROOT_* in .env)
+#   docker compose --profile seed run --rm seed   demo data (fictitious)
+#
+# Start order: postgres/redis healthy → migrate (prisma migrate deploy, one-shot) → api healthy → web.
+# The API runs with JOBS_DRIVER=bullmq and RATE_LIMIT_STORE=redis, so it can be scaled to several
+# replicas (drop the 4000 host port mapping first; web reaches the replicas through http://api:4000).
+# ─────────────────────────────────────────────────────────────────────────────
 name: dfn-sandbox
+
+x-database-url: &database-url 'postgresql://${POSTGRES_USER:-dfn}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dfn}?schema=public'
+
+x-api-build: &api-build
+  context: .
+  dockerfile: apps/api/Dockerfile
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '5'
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ['no-new-privileges:true']
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: dfn
-      POSTGRES_PASSWORD: dfn
-      POSTGRES_DB: dfn
-    ports: ['5432:5432']
+      POSTGRES_USER: ${POSTGRES_USER:-dfn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dfn}
+    ports: ['127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432']
     volumes: ['pgdata:/var/lib/postgresql/data']
+    security_opt: ['no-new-privileges:true']
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U dfn -d dfn']
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *logging
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports: ['6379:6379']
+    # AOF on (SECURITY.md §12); noeviction is required by BullMQ; password mandatory.
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    ports: ['127.0.0.1:${REDIS_HOST_PORT:-6379}:6379']
+    volumes: ['redisdata:/data']
+    security_opt: ['no-new-privileges:true']
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD-SHELL', 'redis-cli ping | grep -q PONG']
       interval: 5s
       timeout: 3s
       retries: 20
+    logging: *logging
+    restart: unless-stopped
 
-  api:
-    build: { context: ., dockerfile: apps/api/Dockerfile }
+  # Optional S3-compatible document storage (profile "s3"). Image references are overridable
+  # (MINIO_IMAGE / MINIO_MC_IMAGE). Compose interpolates every service, even outside its profile,
+  # so the MinIO credentials are checked when the container starts instead (no default secret:
+  # MinIO would otherwise fall back to its well-known built-in credentials).
+  minio:
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    profiles: [s3]
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        if [ "$${#MINIO_ROOT_USER}" -lt 3 ] || [ "$${#MINIO_ROOT_PASSWORD}" -lt 12 ]; then
+          echo "MINIO_ROOT_USER (>= 3 chars) and MINIO_ROOT_PASSWORD (>= 12 chars) must be set in .env" >&2
+          exit 1
+        fi
+        exec minio server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    ports: ['127.0.0.1:9000:9000', '127.0.0.1:9001:9001']
+    volumes: ['miniodata:/data']
+    security_opt: ['no-new-privileges:true']
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+    restart: unless-stopped
+
+  # One-shot bucket bootstrap (idempotent): private bucket and a least-privilege API user
+  # (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) limited to the objects of that bucket.
+  minio-init:
+    image: ${MINIO_MC_IMAGE:-quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z}
+    profiles: [s3]
+    depends_on:
+      minio: { condition: service_healthy }
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      S3_BUCKET: ${S3_BUCKET:-dfn-documents}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      HOME: /tmp
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        : "$${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env (profile s3)}"
+        : "$${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env (profile s3)}"
+        : "$${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID must be set in .env (profile s3)}"
+        : "$${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY must be set in .env (profile s3)}"
+        mc alias set dfn http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        mc mb --ignore-existing "dfn/$$S3_BUCKET"
+        mc anonymous set none "dfn/$$S3_BUCKET"
+        cat > /tmp/dfn-documents-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::$$S3_BUCKET"]},
+          {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$$S3_BUCKET/*"]}
+        ]}
+        EOF
+        mc admin policy create dfn dfn-documents /tmp/dfn-documents-policy.json >/dev/null
+        mc admin user add dfn "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY" >/dev/null
+        mc admin policy attach dfn dfn-documents --user "$$S3_ACCESS_KEY_ID" >/dev/null 2>&1 || true
+        echo "bucket $$S3_BUCKET ready (private; API user restricted to it)"
+    restart: 'no'
+
+  # One-shot: applies pending Prisma migrations with the API image, then exits 0.
+  migrate:
+    build: *api-build
+    image: dfn-api:${DFN_IMAGE_TAG:-local}
+    <<: *hardening
+    command:
+      [
+        'node',
+        '/app/node_modules/prisma/build/index.js',
+        'migrate',
+        'deploy',
+        '--schema',
+        'prisma/schema.prisma',
+      ]
+    environment:
+      DATABASE_URL: *database-url
+    tmpfs: ['/tmp:size=64m']
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
+    logging: *logging
+    restart: 'no'
+
+  api:
+    build: *api-build
+    image: dfn-api:${DFN_IMAGE_TAG:-local}
+    <<: *hardening
     env_file: [.env]
     environment:
       DFN_MODE: sandbox
       NODE_ENV: production
-      DATABASE_URL: postgresql://dfn:dfn@postgres:5432/dfn?schema=public
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: *database-url
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
+      JOBS_DRIVER: bullmq
+      RATE_LIMIT_STORE: redis
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      DOCUMENT_ENCRYPTION_KEY: ${DOCUMENT_ENCRYPTION_KEY:?set DOCUMENT_ENCRYPTION_KEY in .env}
       API_PORT: '4000'
-      API_PUBLIC_URL: http://localhost:4000
-      WEB_PUBLIC_URL: http://localhost:3000
-      CORS_ORIGINS: http://localhost:3000
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:4000}
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-localhost}
+      WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-http://localhost:3000}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       STORAGE_DIR: /data/storage
-      LOG_LEVEL: info
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-dfn-documents}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    tmpfs: ['/tmp:size=64m']
     volumes: ['storage:/data/storage']
-    ports: ['4000:4000']
+    ports: ['${API_HOST_PORT:-4000}:4000']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully, required: false }
     healthcheck:
       test:
         [
-          'CMD-SHELL',
-          'node -e "fetch(''http://localhost:4000/v1/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
         ]
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 40s
+    stop_grace_period: 30s
+    logging: *logging
+    restart: unless-stopped
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-      args: { API_INTERNAL_URL: http://api:4000 }
-    depends_on:
-      api: { condition: service_healthy }
+      args: { API_INTERNAL_URL: 'http://api:4000' }
+    image: dfn-web:${DFN_IMAGE_TAG:-local}
+    <<: *hardening
     environment:
+      NODE_ENV: production
       API_INTERNAL_URL: http://api:4000
       NEXT_PUBLIC_DFN_MODE: sandbox
-      SESSION_COOKIE_NAME: dfn_session
-    ports: ['3000:3000']
-
-  seed:
-    build: { context: ., dockerfile: apps/api/Dockerfile }
-    profiles: ['seed']
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-dfn_session}
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+    tmpfs:
+      - /tmp:size=64m
+      - /app/apps/web/.next/cache:size=128m,uid=10001,gid=10001,mode=0700
+    ports: ['${WEB_HOST_PORT:-3000}:3000']
     depends_on:
       api: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/dashboard',{redirect:'manual'}).then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 20s
+    logging: *logging
+    restart: unless-stopped
+
+  # Demo data (profile "seed"): runs prisma/seed.ts from the API build stage (dev tools included).
+  seed:
+    profiles: [seed]
+    build:
+      <<: *api-build
+      target: build
+    image: dfn-api-tools:${DFN_IMAGE_TAG:-local}
+    user: '10001:10001'
+    working_dir: /repo/packages/database
+    command: ['node_modules/.bin/tsx', 'prisma/seed.ts']
     environment:
-      DATABASE_URL: postgresql://dfn:dfn@postgres:5432/dfn?schema=public
+      DATABASE_URL: *database-url
       SEED_DEMO_PASSWORD: ${SEED_DEMO_PASSWORD:-}
-    working_dir: /app
-    command: ['pnpm', '--filter', '@dfn/database', 'seed']
+      # Same key material as the api service: the seed seals beneficiary identifiers and the webhook
+      # secret with the key ring, the API must be able to open them.
+      DOCUMENT_ENCRYPTION_KEY: ${DOCUMENT_ENCRYPTION_KEY:?set DOCUMENT_ENCRYPTION_KEY in .env}
+      ENCRYPTION_KEYRING: ${ENCRYPTION_KEYRING:-}
+      HOME: /tmp
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    logging: *logging
+    restart: 'no'
 
 volumes:
   pgdata:
+  redisdata:
   storage:
+  miniodata:

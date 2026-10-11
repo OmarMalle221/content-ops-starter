@@ -24,21 +24,30 @@ type Db = PrismaClient | PrismaTransactionClient;
 export class LedgerService {
   constructor(private readonly prisma: PrismaClient) {}
 
+  /**
+   * Idempotent, concurrency-safe lazy creation: INSERT … ON CONFLICT DO NOTHING (createMany with
+   * skipDuplicates) never raises a unique violation, so it cannot abort an enclosing transaction
+   * when two requests create the same account at the same time; the row is then read back.
+   */
   async ensureAccount(input: EnsureAccountInput, db: Db = this.prisma): Promise<LedgerAccount> {
-    return db.ledgerAccount.upsert({
-      where: { code: input.code },
-      update: {},
-      create: {
-        code: input.code,
-        name: input.name,
-        type: input.type,
-        normalBalance: input.normalBalance,
-        currencyCode: input.currencyCode,
-        ownerType: input.ownerType,
-        ownerId: input.ownerId ?? null,
-        allowNegative: input.allowNegative ?? false,
-      },
+    const existing = await db.ledgerAccount.findUnique({ where: { code: input.code } });
+    if (existing) return existing;
+    await db.ledgerAccount.createMany({
+      data: [
+        {
+          code: input.code,
+          name: input.name,
+          type: input.type,
+          normalBalance: input.normalBalance,
+          currencyCode: input.currencyCode,
+          ownerType: input.ownerType,
+          ownerId: input.ownerId ?? null,
+          allowNegative: input.allowNegative ?? false,
+        },
+      ],
+      skipDuplicates: true,
     });
+    return db.ledgerAccount.findUniqueOrThrow({ where: { code: input.code } });
   }
 
   async getAccountByCode(code: string, db: Db = this.prisma): Promise<LedgerAccount | null> {

@@ -129,7 +129,7 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
         actions={
           <div className="flex items-center gap-2">
             <Badge variant="sandbox">{t('app.sandbox')}</Badge>
-            <StatusBadge status={x.status} />
+            <StatusBadge status={x.status} entity="transfer" />
             <CopyButton value={x.reference} />
           </div>
         }

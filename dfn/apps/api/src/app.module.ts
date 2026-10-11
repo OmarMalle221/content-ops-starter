@@ -5,6 +5,8 @@ import { LoggerModule } from 'nestjs-pino';
 import { loadEnv, type Env } from './config/env';
 import { EnvModule } from './config/env.module';
 import { PrismaModule } from './common/prisma/prisma.module';
+import { RedisConnectionService, RedisModule } from './common/redis';
+import { RedisThrottlerStorage } from './common/throttler';
 import { DomainEventsModule } from './common/events/domain-events';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { SessionAuthGuard } from './common/guards/session-auth.guard';
@@ -65,9 +67,16 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
           genReqId: (req) => (req.headers['x-request-id'] as string) ?? crypto.randomUUID(),
         },
       }),
-      ThrottlerModule.forRoot({
-        throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
-        skipIf: () => env.NODE_ENV === 'test',
+      ThrottlerModule.forRootAsync({
+        imports: [RedisModule],
+        inject: [RedisConnectionService],
+        useFactory: (redis: RedisConnectionService) => ({
+          throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
+          skipIf: () => env.NODE_ENV === 'test',
+          // RATE_LIMIT_STORE=redis: the per-IP throttle is shared by every replica (keys dfn:rl:throttler:*);
+          // memory (default): @nestjs/throttler's in-process storage.
+          storage: env.RATE_LIMIT_STORE === 'redis' ? new RedisThrottlerStorage(redis) : undefined,
+        }),
       }),
       PrismaModule,
       DomainEventsModule,

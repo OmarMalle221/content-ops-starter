@@ -63,4 +63,17 @@ describe('KeyRing', () => {
     expect(() => new KeyRing(LEGACY, `mfa:k1:abcd`)).toThrow(/hex/);
     expect(() => new KeyRing(LEGACY, `mfa:k1:${K1},mfa:k1:${K2}`)).toThrow(/Duplicate/);
   });
+
+  it('never echoes key material in configuration errors', () => {
+    for (const spec of [`mfa:${K1}`, `${K1}:k1:${K2}`, `mfa:${K1}:${K2}`, `mfa:k1:${K1}:extra`]) {
+      let message = '';
+      try {
+        new KeyRing(LEGACY, spec);
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toMatch(/ENCRYPTION_KEYRING entry #1|must be 32-byte hex/);
+      expect(message).not.toMatch(/aaaa|bbbb/);
+    }
+  });
 });

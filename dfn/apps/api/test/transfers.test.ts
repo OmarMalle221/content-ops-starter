@@ -747,12 +747,18 @@ describe('compliance review', () => {
       note: 'changed my mind',
     });
     expect(reReview.status).toBe(409);
-    // The partner can still settle the approved transfer.
-    const settled = await a.compliance.post('/v1/sandbox/partner/transfer-events', {
+    // COMPLIANCE reviews but cannot drive the simulated partner (SANDBOX_PARTNER_SIMULATE is ADMIN
+    // only); the organisation itself can still trigger the sandbox settlement of the approved transfer.
+    const denied = await a.compliance.post('/v1/sandbox/partner/transfer-events', {
       transferReference: transfer.reference,
       outcome: 'SETTLED',
     });
-    expect(settled.status).toBe(200);
+    expect(denied.status).toBe(403);
+    const settled = await a.owner.post('/v1/sandbox/partner/transfer-events', {
+      transferReference: transfer.reference,
+      outcome: 'SETTLED',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
     expect(settled.body.transfer.status).toBe('SETTLED');
 
     // Rejection path.

@@ -17,7 +17,10 @@ const documentBase = {
   customerEmail: emailSchema.optional(),
   currencyCode: currencySchema,
   lines: z.array(lineItemSchema).min(1).max(50),
-  /** Tax expressed in basis points of the subtotal (e.g. 1800 = 18 % TVA). */
+  /**
+   * Tax expressed in basis points of the subtotal (e.g. 1800 = 18 % TVA). Persisted on the document
+   * (Invoice.taxBps / Quote.taxBps): totals are always recomputed from it, never the other way round.
+   */
   taxBps: z.number().int().min(0).max(5000).default(0),
   notes: z.string().trim().max(2000).optional(),
 };
@@ -29,6 +32,7 @@ export const createInvoiceSchema = z.object({
 });
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 
+/** Draft edit: omitted fields keep their stored value (`taxBps` included — no default on partial). */
 export const updateInvoiceSchema = createInvoiceSchema.partial();
 
 export const recordInvoicePaymentSchema = z.object({
@@ -55,6 +59,7 @@ export const createQuoteSchema = z.object({
 });
 export type CreateQuoteInput = z.infer<typeof createQuoteSchema>;
 
+/** Draft edit: omitted fields keep their stored value (`taxBps` included — no default on partial). */
 export const updateQuoteSchema = createQuoteSchema.partial();
 
 export const convertQuoteSchema = z.object({

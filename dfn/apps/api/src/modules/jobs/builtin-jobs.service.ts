@@ -7,7 +7,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { anonymizationCutoff } from './anonymization';
 import { AnonymizationService } from './anonymization.service';
-import { JobRegistry, type JobResult } from './job-registry';
+import { JobRegistry, type JobContext, type JobResult } from './job-registry';
 
 /**
  * Platform-level maintenance jobs. Feature modules (transfers, api-platform, business) register
@@ -28,21 +28,29 @@ export class BuiltinJobsService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.registry.register('BALANCE_SNAPSHOTS', () => this.balanceSnapshots());
+    this.registry.register('BALANCE_SNAPSHOTS', (ctx) => this.balanceSnapshots(ctx.signal));
     this.registry.register('RECONCILIATION', () => this.reconciliation());
     this.registry.register('EXPIRE_STALE', () => this.expireStale());
-    this.registry.register('ANONYMIZE_DELETED', (ctx) => this.anonymizeDeleted(ctx.triggeredBy));
+    this.registry.register('ANONYMIZE_DELETED', (ctx) => this.anonymizeDeleted(ctx.triggeredBy, ctx.signal));
   }
 
-  /** One BalanceSnapshot per ACTIVE ledger account — the anchor used by the reconciliation. */
-  async balanceSnapshots(): Promise<JobResult> {
+  /**
+   * One BalanceSnapshot per ACTIVE ledger account — the anchor used by the reconciliation.
+   * Stops between accounts when the runner lost its lease (`signal`); the next run starts over.
+   */
+  async balanceSnapshots(signal?: JobContext['signal']): Promise<JobResult> {
     const accounts = await this.prisma.ledgerAccount.findMany({
       where: { status: 'ACTIVE' },
       select: { id: true },
       orderBy: { code: 'asc' },
     });
-    for (const account of accounts) await this.ledger.snapshot(account.id);
-    return { summary: { accounts: accounts.length } };
+    let snapshotted = 0;
+    for (const account of accounts) {
+      signal?.throwIfAborted();
+      await this.ledger.snapshot(account.id);
+      snapshotted++;
+    }
+    return { summary: { accounts: snapshotted } };
   }
 
   /** Full ledger reconciliation; staff is notified when anything does not add up. */
@@ -95,8 +103,12 @@ export class BuiltinJobsService implements OnModuleInit {
     return { summary: { transactionsExpired: transactions.expired, fxQuotesExpired: quotes.count } };
   }
 
-  /** Anonymises every user whose deletion grace period (ANONYMIZE_AFTER_DAYS) has elapsed. */
-  async anonymizeDeleted(triggeredBy: string): Promise<JobResult> {
+  /**
+   * Anonymises every user whose deletion grace period (ANONYMIZE_AFTER_DAYS) has elapsed. Each
+   * anonymisation is its own unit of work: when the lease is lost (`signal`) the loop stops before
+   * the next user and the remaining ones are picked up by the next run.
+   */
+  async anonymizeDeleted(triggeredBy: string, signal?: JobContext['signal']): Promise<JobResult> {
     const afterDays = this.env.ANONYMIZE_AFTER_DAYS;
     const cutoff = anonymizationCutoff(new Date(), afterDays);
     const due = await this.prisma.user.findMany({
@@ -107,6 +119,7 @@ export class BuiltinJobsService implements OnModuleInit {
     let anonymized = 0;
     const failed: string[] = [];
     for (const user of due) {
+      signal?.throwIfAborted();
       try {
         await this.anonymization.anonymizeUser(user.id, triggeredBy);
         anonymized++;

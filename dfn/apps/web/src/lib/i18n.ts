@@ -93,6 +93,31 @@ const baseFr = {
     empty: 'Rien à afficher pour le moment.',
   },
   roles: { BUYER: 'Acheteur', SELLER: 'Vendeur', STAFF: 'Équipe DFN' },
+  statusByEntity: {
+    quote: {
+      ACCEPTED: 'Accepté',
+      DECLINED: 'Refusé',
+      EXPIRED: 'Expiré',
+      CONVERTED: 'Converti en facture',
+      SENT: 'Envoyé',
+      DRAFT: 'Brouillon',
+    },
+    transfer: {
+      SETTLED: 'Réglé (simulé)',
+      FAILED: 'Échoué (simulé)',
+      PROCESSING: 'En traitement (simulé)',
+      AUTHORIZED: 'Autorisé',
+      CANCELLED: 'Annulé',
+      EXPIRED: 'Devis expiré',
+    },
+    invoice: {
+      PAID: 'Payée (fictif)',
+      PARTIALLY_PAID: 'Partiellement payée',
+      SENT: 'Envoyée',
+      DRAFT: 'Brouillon',
+      CANCELLED: 'Annulée',
+    },
+  },
   status: {
     DRAFT: 'Brouillon',
     PENDING_ACCEPTANCE: 'En attente du vendeur',
@@ -532,6 +557,31 @@ const baseEn: typeof baseFr = {
     empty: 'Nothing to show yet.',
   },
   roles: { BUYER: 'Buyer', SELLER: 'Seller', STAFF: 'DFN staff' },
+  statusByEntity: {
+    quote: {
+      ACCEPTED: 'Accepted',
+      DECLINED: 'Declined',
+      EXPIRED: 'Expired',
+      CONVERTED: 'Converted to invoice',
+      SENT: 'Sent',
+      DRAFT: 'Draft',
+    },
+    transfer: {
+      SETTLED: 'Settled (simulated)',
+      FAILED: 'Failed (simulated)',
+      PROCESSING: 'Processing (simulated)',
+      AUTHORIZED: 'Authorized',
+      CANCELLED: 'Cancelled',
+      EXPIRED: 'Quote expired',
+    },
+    invoice: {
+      PAID: 'Paid (fictitious)',
+      PARTIALLY_PAID: 'Partially paid',
+      SENT: 'Sent',
+      DRAFT: 'Draft',
+      CANCELLED: 'Cancelled',
+    },
+  },
   status: {
     DRAFT: 'Draft',
     PENDING_ACCEPTANCE: 'Awaiting seller',

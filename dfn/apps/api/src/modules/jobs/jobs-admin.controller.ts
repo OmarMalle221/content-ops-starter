@@ -10,6 +10,7 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { zodBody } from '../../common/pipes/zod-validation.pipe';
 import { requestMeta } from '../../common/request-meta';
 import { AuditService } from '../audit/audit.service';
+import { JobsSchedulerService } from './jobs-scheduler.service';
 import { MaintenanceService, toRunDto } from './maintenance.service';
 
 const jobNameSchema = z.nativeEnum(MaintenanceJobName);
@@ -20,13 +21,23 @@ const listRunsQuerySchema = paginationSchema.extend({ jobName: jobNameSchema.opt
 export class JobsAdminController {
   constructor(
     private readonly maintenance: MaintenanceService,
+    private readonly scheduler: JobsSchedulerService,
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * Jobs, their latest run and current lease, plus the scheduler driver, this replica's instance
+   * id and the next planned executions (BullMQ schedules or the in-process timer).
+   */
   @RequirePermission(Permission.ADMIN_JOBS)
   @Get()
-  list() {
-    return this.maintenance.listJobs();
+  async list() {
+    const [jobs, scheduler] = await Promise.all([this.maintenance.listJobs(), this.scheduler.status()]);
+    return {
+      ...jobs,
+      scheduler,
+      jobs: jobs.jobs.map((job) => ({ ...job, nextRunAt: scheduler.nextRuns[job.name] ?? null })),
+    };
   }
 
   @RequirePermission(Permission.ADMIN_JOBS)

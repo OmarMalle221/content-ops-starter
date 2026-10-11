@@ -61,10 +61,20 @@ export function computeDocumentTotals(
   return { lines: computed, subtotalMinor, taxMinor, totalMinor: subtotalMinor + taxMinor };
 }
 
-/** Best-effort inverse of computeTaxMinor used when a draft is edited without resending taxBps. */
+/**
+ * Best-effort inverse of computeTaxMinor. LEGACY READ FALLBACK ONLY: documents created before the
+ * rate was persisted (taxBps = 0 while taxMinor > 0). Deriving from rounded amounts is lossy (e.g.
+ * 1333 bps on a small subtotal reads back as 1300), so it must never drive a write by itself.
+ */
 export function deriveTaxBps(subtotalMinor: bigint, taxMinor: bigint): number {
   if (subtotalMinor <= 0n) return 0;
   return Number((taxMinor * 10_000n + subtotalMinor / 2n) / subtotalMinor);
+}
+
+/** The persisted tax rate of an invoice / quote, with the legacy derivation as fallback. */
+export function storedTaxBps(doc: { taxBps: number; subtotalMinor: bigint; taxMinor: bigint }): number {
+  if (doc.taxBps === 0 && doc.taxMinor > 0n) return deriveTaxBps(doc.subtotalMinor, doc.taxMinor);
+  return doc.taxBps;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -157,4 +167,26 @@ export async function allocateDocumentNumber(
 
 export function clampNonNegative(value: bigint): bigint {
   return value < 0n ? 0n : value;
+}
+
+/**
+ * Customer-side notification recipients of a document: active OWNER / ADMIN / MEMBER of the
+ * counterparty organisation, ONLY when that organisation accepted the link. A free-text customer
+ * e-mail or a pending / declined / revoked link never notifies anybody on the platform (consent).
+ */
+export async function linkedCustomerUserIds(
+  db: Pick<PrismaTransactionClient, 'organizationMember'>,
+  counterparty: { linkedOrganizationId: string | null; linkStatus: string } | null | undefined,
+): Promise<string[]> {
+  if (!counterparty || counterparty.linkStatus !== 'ACCEPTED' || !counterparty.linkedOrganizationId)
+    return [];
+  const members = await db.organizationMember.findMany({
+    where: {
+      organizationId: counterparty.linkedOrganizationId,
+      role: { in: ['OWNER', 'ADMIN', 'MEMBER'] },
+      user: { status: 'ACTIVE' },
+    },
+    select: { userId: true },
+  });
+  return members.map((m) => m.userId);
 }

@@ -116,7 +116,12 @@ export class BeneficiariesService {
           accountIdentifierEnc: sealString(this.env, KeyPurpose.BENEFICIARIES, identifier),
           accountIdentifierMasked: maskAccountIdentifier(identifier),
           institutionName: input.institutionName ?? null,
-          phone: input.phone ?? null,
+          // A phone identical to the account identifier would expose it in clear text next to the
+          // encrypted, masked identifier: it is dropped (the identifier already reaches the payee).
+          phone:
+            input.phone && input.phone.replace(/\s/g, '') !== identifier.replace(/\s/g, '')
+              ? input.phone
+              : null,
           email: input.email ?? null,
         },
       });

@@ -5,10 +5,15 @@ import type { Request, Response } from 'express';
 import {
   changePasswordSchema,
   loginSchema,
+  mfaDisableSchema,
   mfaEnableSchema,
   mfaVerifySchema,
+  recoveryCodesRegenerateSchema,
   registerSchema,
   type LoginInput,
+  type MfaDisableInput,
+  type MfaVerifyInput,
+  type RecoveryCodesRegenerateInput,
   type RegisterInput,
 } from '@dfn/shared';
 import { AllowPreMfa, Public } from '../../common/decorators/public.decorator';
@@ -101,25 +106,50 @@ export class AuthController {
     return this.auth.mfaEnable(auth, body.code, req);
   }
 
+  /** Login MFA step: TOTP code, recovery code, or passkey assertion (STEP_UP challenge). */
   @AllowPreMfa()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @Post('mfa/verify')
   mfaVerify(
     @CurrentUser() auth: AuthContext,
-    @Body(zodBody(mfaVerifySchema)) body: { code: string },
+    @Body(zodBody(mfaVerifySchema)) body: MfaVerifyInput,
     @Req() req: Request,
   ) {
-    return this.auth.mfaVerify(auth, body.code, req);
+    return this.auth.mfaVerify(auth, body, req);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('mfa/disable')
   mfaDisable(
     @CurrentUser() auth: AuthContext,
-    @Body(zodBody(mfaEnableSchema)) body: { code: string },
+    @Body(zodBody(mfaDisableSchema)) body: MfaDisableInput,
     @Req() req: Request,
   ) {
-    return this.auth.mfaDisable(auth, body.code, req);
+    return this.auth.mfaDisable(auth, body, req);
+  }
+
+  /** Second factors available to this account (readable before the login MFA step). */
+  @AllowPreMfa()
+  @Get('mfa/status')
+  mfaStatus(@CurrentUser() auth: AuthContext) {
+    return this.auth.mfaStatus(auth);
+  }
+
+  @Get('mfa/recovery-codes')
+  recoveryCodes(@CurrentUser() auth: AuthContext) {
+    return this.auth.recoveryCodesSummary(auth);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  @Post('mfa/recovery-codes/regenerate')
+  regenerateRecoveryCodes(
+    @CurrentUser() auth: AuthContext,
+    @Body(zodBody(recoveryCodesRegenerateSchema)) body: RecoveryCodesRegenerateInput,
+    @Req() req: Request,
+  ) {
+    return this.auth.regenerateRecoveryCodes(auth, body, req);
   }
 
   @Post('password')

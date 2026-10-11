@@ -84,7 +84,7 @@ export class WebhooksService {
 
   async create(auth: AuthContext, input: CreateWebhookRequest, req: Request) {
     const membership = this.manager(auth, input.organizationId);
-    assertSafeWebhookUrl(input.url, this.env.NODE_ENV);
+    assertSafeWebhookUrl(input.url, this.env.NODE_ENV, this.env.WEBHOOK_ALLOWED_HOSTS);
     const secret = generateWebhookSecret();
     const subscription = await this.prisma.$transaction(async (tx) => {
       const created = await tx.webhookSubscription.create({
@@ -127,7 +127,8 @@ export class WebhooksService {
   async update(auth: AuthContext, id: string, input: UpdateWebhookInput, req: Request) {
     const current = await this.load(auth, id);
     if (current.revokedAt) throw DomainError.conflict('A deleted webhook cannot be updated');
-    if (input.url !== undefined) assertSafeWebhookUrl(input.url, this.env.NODE_ENV);
+    if (input.url !== undefined)
+      assertSafeWebhookUrl(input.url, this.env.NODE_ENV, this.env.WEBHOOK_ALLOWED_HOSTS);
     const reactivating = input.isActive === true && !current.isActive;
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.webhookSubscription.update({

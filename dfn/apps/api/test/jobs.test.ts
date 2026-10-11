@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { decryptString } from '../src/common/crypto';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import { JobRegistry } from '../src/modules/jobs/job-registry';
 import { MaintenanceService } from '../src/modules/jobs/maintenance.service';
+import { JobLeaseStore } from '../src/modules/jobs/job-lease';
+import { JobsSchedulerService } from '../src/modules/jobs/jobs-scheduler.service';
 import {
   ANONYMIZED_ORGANIZATION_NAME,
   anonymizationCutoff,
@@ -62,6 +65,7 @@ describe('anonymisation rules (pure mapping)', () => {
       country: 'SN',
       mfaSecretEnc: null,
       mfaEnabled: false,
+      mfaLastUsedStep: null,
       passwordHash: '$argon2id$random',
       securityPreferences: null,
       status: 'DEACTIVATED',
@@ -169,7 +173,7 @@ describe('maintenance jobs', () => {
     expect(notifications[0].body).toContain('Données fictives');
   });
 
-  it('serialises concurrent executions of the same job with an advisory lock', async () => {
+  it('serialises concurrent executions of the same job with a job lease', async () => {
     const registry = ctx.app.get(JobRegistry);
     const svc = ctx.app.get(MaintenanceService);
     registry.register('WEBHOOK_RETRY', async () => {
@@ -502,10 +506,33 @@ describe('account deletion', () => {
       },
     });
 
+    // Authentication material that must not survive the account: a passkey and recovery codes.
+    await ctx.prisma.webAuthnCredential.create({
+      data: {
+        userId: user.id,
+        credentialId: 'cred-erase-1',
+        publicKey: Buffer.from('pk'),
+        transports: ['internal'],
+        name: 'iPhone de Test',
+      },
+    });
+    await ctx.prisma.mfaRecoveryCode.createMany({
+      data: [
+        { userId: user.id, codeHash: 'h1' },
+        { userId: user.id, codeHash: 'h2' },
+      ],
+    });
+    // The vendor's counterparty created with the user's email is a pending link request.
+    expect(
+      (await ctx.prisma.counterparty.findUniqueOrThrow({ where: { id: contact.body.id } })).linkStatus,
+    ).toBe('PENDING');
+
     expect((await client.post('/v1/users/me/deletion-request', DELETE_BODY)).status).toBe(200);
     const run = await ctx.app.get(MaintenanceService).run('ANONYMIZE_DELETED', 'test');
     expect(run.status).toBe('COMPLETED');
     expect((run.summary as any).anonymized).toBe(1);
+    expect(await ctx.prisma.webAuthnCredential.count({ where: { userId: user.id } })).toBe(0);
+    expect(await ctx.prisma.mfaRecoveryCode.count({ where: { userId: user.id } })).toBe(0);
 
     const scrubbed = await ctx.prisma.beneficiary.findUniqueOrThrow({ where: { id: beneficiary.body.id } });
     expect(scrubbed).toMatchObject({
@@ -526,6 +553,8 @@ describe('account deletion', () => {
       email: null,
       phone: null,
       organizationId: vendorOrgId,
+      linkStatus: 'REVOKED',
+      linkedOrganizationId: null,
     });
     expect(
       (await ctx.prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } })).customerEmail,
@@ -541,6 +570,9 @@ describe('account deletion', () => {
       beneficiariesAnonymized: 1,
       counterpartiesAnonymized: 1,
       customerEmailsCleared: 2,
+      passkeysDeleted: 1,
+      recoveryCodesDeleted: 2,
+      linkRequestsRevoked: 1,
     });
     // Audit rows keep their network identifiers (audit retention policy); the job stays idempotent.
     const requested = await ctx.prisma.auditLog.findFirstOrThrow({
@@ -673,5 +705,32 @@ describe('account deletion', () => {
     );
     const again = await ctx.app.get(MaintenanceService).run('ANONYMIZE_DELETED', 'test');
     expect((again.summary as any).anonymized).toBe(0);
+  });
+});
+
+describe('in-process scheduler driver (leases)', () => {
+  it('ticks every registered job and skips the ones leased by another instance', async () => {
+    const registry = ctx.app.get(JobRegistry);
+    registry.register('INVOICE_OVERDUE', async () => ({ summary: { overdue: 0 } }));
+    registry.register('WEBHOOK_RETRY', async () => ({ summary: { due: 0 } }));
+    const elsewhere = new JobLeaseStore(ctx.prisma, 'replica-elsewhere', 60);
+    await elsewhere.acquire('RECONCILIATION', randomUUID());
+
+    const scheduler = ctx.app.get(JobsSchedulerService);
+    expect(scheduler.driver).toBe('inprocess');
+    expect(await scheduler.status()).toMatchObject({ driver: 'inprocess', started: false, nextRuns: {} });
+    const outcome = await scheduler.tick('scheduler');
+    expect(outcome.skipped).toEqual(['RECONCILIATION']);
+    expect(outcome.ran).toEqual(expect.arrayContaining(['BALANCE_SNAPSHOTS', 'EXPIRE_STALE']));
+    expect(await ctx.prisma.maintenanceRun.count({ where: { jobName: 'RECONCILIATION' } })).toBe(0);
+    const runs = await ctx.prisma.maintenanceRun.findMany({ where: { jobName: 'BALANCE_SNAPSHOTS' } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      triggeredBy: 'scheduler',
+      instanceId: ctx.app.get(MaintenanceService).instanceId,
+    });
+    // Only the foreign lease remains: every lease taken by the tick was released.
+    const leases = await ctx.prisma.jobLease.findMany();
+    expect(leases.map((l) => l.ownerId)).toEqual(['replica-elsewhere']);
   });
 });

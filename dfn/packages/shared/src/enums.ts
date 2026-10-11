@@ -345,7 +345,8 @@ export const WebAuthnChallengePurpose = {
   AUTHENTICATION: 'AUTHENTICATION',
   STEP_UP: 'STEP_UP',
 } as const;
-export type WebAuthnChallengePurpose = (typeof WebAuthnChallengePurpose)[keyof typeof WebAuthnChallengePurpose];
+export type WebAuthnChallengePurpose =
+  (typeof WebAuthnChallengePurpose)[keyof typeof WebAuthnChallengePurpose];
 
 export const CounterpartyLinkStatus = {
   NONE: 'NONE',

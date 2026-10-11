@@ -1,21 +1,17 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { Request } from 'express';
-import { authenticator } from 'otplib';
 import type { Prisma, PrismaTransactionClient } from '@dfn/database';
 import {
   DEFAULT_SECURITY_PREFERENCES,
   ErrorCode,
   securityPreferencesSchema,
   type SecurityPreferencesInput,
-  KeyPurpose,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
-import { openString } from '../../common/keyring';
-import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
-import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
+import { MfaVerifierService } from '../auth/mfa-verifier.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export interface SecurityPreferences {
@@ -64,7 +60,7 @@ export class SecurityPreferencesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
-    @Inject(ENV) private readonly env: Env,
+    private readonly mfa: MfaVerifierService,
   ) {}
 
   /** Effective preferences of a user (defaults applied). Used by the transfer authorisation flow. */
@@ -84,14 +80,26 @@ export class SecurityPreferencesService {
   async update(auth: AuthContext, input: SecurityPreferencesInput, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: auth.userId },
-      select: { mfaEnabled: true, mfaSecretEnc: true, securityPreferences: true },
+      select: { mfaEnabled: true, securityPreferences: true },
     });
     const before = normalizeSecurityPreferences(user.securityPreferences ?? null);
     const next = normalizeSecurityPreferences(input);
     // A hijacked session must not be able to switch the transfer step-up off or lift the daily
-    // limit: lowering a protection is itself a step-up operation once MFA is enabled.
+    // limit: lowering a protection is itself a step-up operation once MFA is enabled. The proof
+    // is a TOTP code (anti-replay), a recovery code or a passkey assertion (MfaVerifierService).
     const mfaVerified = user.mfaEnabled && lowersSecurity(before, next);
-    if (mfaVerified) this.assertMfaCode(user.mfaSecretEnc, input.mfaCode);
+    const stepUp = mfaVerified
+      ? await this.mfa.assertFreshProof(
+          auth,
+          input,
+          'security_preferences.lower',
+          {
+            code: ErrorCode.MFA_REQUIRED,
+            message: 'A valid two-factor code is required to lower your security preferences',
+          },
+          req,
+        )
+      : null;
     const changed = (Object.keys(next) as Array<keyof SecurityPreferences>).filter(
       (k) => before[k] !== next[k],
     );
@@ -113,6 +121,7 @@ export class SecurityPreferencesService {
             transferAlerts: next.transferAlerts,
             dailyTransferLimit: next.dailyTransferLimit,
             mfaVerified,
+            stepUp,
           },
           ...meta,
         },
@@ -129,17 +138,5 @@ export class SecurityPreferencesService {
       });
     }
     return { ...next, defaults: DEFAULT_SECURITY_PREFERENCES };
-  }
-
-  /** Same verification as the transfer authorisation step-up (TransfersService.assertMfa). */
-  private assertMfaCode(mfaSecretEnc: string | null, mfaCode: string | undefined) {
-    const secret = mfaSecretEnc ? openString(this.env, KeyPurpose.MFA, mfaSecretEnc) : null;
-    if (!mfaCode || !secret || !authenticator.verify({ token: mfaCode, secret })) {
-      throw new DomainError(
-        ErrorCode.MFA_REQUIRED,
-        'A valid two-factor code is required to lower your security preferences',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
   }
 }

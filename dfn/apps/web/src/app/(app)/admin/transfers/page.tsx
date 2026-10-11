@@ -76,7 +76,7 @@ export default async function AdminTransfersPage({
                   <Link href={`/transfers/${x.id}`} className="font-medium text-primary hover:underline">
                     {x.reference}
                   </Link>
-                  <StatusBadge status={x.status} />
+                  <StatusBadge status={x.status} entity="transfer" />
                   {typeof x.riskScore === 'number' ? (
                     <Badge variant={x.riskScore >= 40 ? 'destructive' : 'warning'}>
                       {t('xferAdmin.score')} {x.riskScore}
@@ -153,7 +153,7 @@ export default async function AdminTransfersPage({
                       {formatMoney(x.destination, locale)}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={x.status} />
+                      <StatusBadge status={x.status} entity="transfer" />
                     </TableCell>
                     <TableCell className="tabular-nums">{x.riskScore ?? '—'}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">

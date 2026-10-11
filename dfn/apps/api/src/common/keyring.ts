@@ -55,19 +55,24 @@ export class KeyRing {
   constructor(legacyKeyHex: string, spec?: string) {
     if (!/^[0-9a-f]{64}$/i.test(legacyKeyHex)) throw new KeyRingError('Legacy key must be 32-byte hex');
     this.legacy = Buffer.from(legacyKeyHex, 'hex');
-    for (const raw of (spec ?? '')
+    const entries = (spec ?? '')
       .split(',')
       .map((s) => s.trim())
-      .filter(Boolean)) {
+      .filter(Boolean);
+    for (const [index, raw] of entries.entries()) {
+      // Error messages never echo the raw entry: a malformed entry may contain key material.
+      const where = `ENCRYPTION_KEYRING entry #${index + 1}`;
       const [purpose, keyId, hex, ...rest] = raw.split(':');
       if (rest.length || !purpose || !keyId || !hex) {
-        throw new KeyRingError(
-          `Invalid key ring entry "${raw.slice(0, 40)}…" (expected purpose:keyId:hex64)`,
-        );
+        throw new KeyRingError(`${where} is invalid (expected purpose:keyId:hex64)`);
       }
-      if (!PURPOSES.has(purpose)) throw new KeyRingError(`Unknown key purpose "${purpose}"`);
+      if (!PURPOSES.has(purpose)) {
+        throw new KeyRingError(`${where} has an unknown purpose (expected ${[...PURPOSES].join(', ')})`);
+      }
       if (!KEY_ID_RE.test(keyId) || keyId === LEGACY_KEY_ID) {
-        throw new KeyRingError(`Invalid key id "${keyId}" (1–32 chars [A-Za-z0-9_-], not "legacy")`);
+        throw new KeyRingError(
+          `${where} (${purpose}) has an invalid key id (1–32 chars [A-Za-z0-9_-], not "legacy")`,
+        );
       }
       if (!/^[0-9a-f]{64}$/i.test(hex)) throw new KeyRingError(`Key ${purpose}:${keyId} must be 32-byte hex`);
       const id = `${purpose}:${keyId}`;
@@ -142,6 +147,25 @@ export class KeyRing {
     const id = Buffer.from(keyId, 'ascii');
     const payload = seal(this.keyFor(purpose, keyId), plaintext, aad(purpose, keyId));
     return { sealed: Buffer.concat([BUFFER_MAGIC, Buffer.from([id.length]), id, payload]), keyId };
+  }
+
+  /**
+   * Key id named in a sealed buffer's header ("legacy" when the buffer has no key ring header).
+   * The header is not authenticated on its own: it only selects the key to try, and the GCM tag
+   * (with the purpose and key id bound as additional data) is what proves the blob is genuine.
+   */
+  keyIdOfBuffer(sealed: Buffer): string {
+    if (!sealed.subarray(0, BUFFER_MAGIC.length).equals(BUFFER_MAGIC)) return LEGACY_KEY_ID;
+    const len = sealed[BUFFER_MAGIC.length] ?? 0;
+    const start = BUFFER_MAGIC.length + 1;
+    const keyId = sealed.subarray(start, start + len).toString('ascii');
+    return KEY_ID_RE.test(keyId) ? keyId : LEGACY_KEY_ID;
+  }
+
+  /** True when `keyId` (or "legacy") can open values of this purpose with the current ring. */
+  hasKey(purpose: KeyPurpose, keyId: string | null | undefined): boolean {
+    const id = keyId ?? LEGACY_KEY_ID;
+    return id === LEGACY_KEY_ID || this.entries.has(`${purpose}:${id}`);
   }
 
   /**

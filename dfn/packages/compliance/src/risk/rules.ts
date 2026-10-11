@@ -1,4 +1,7 @@
-import type { RiskRule } from './types';
+import { STRUCTURING_EVENT_KINDS, STRUCTURING_RULE_CODE, structuringSignal } from './structuring';
+import type { RiskEvent, RiskRule } from './types';
+
+export * from './structuring';
 
 const HIGH_VALUE_THRESHOLDS_MINOR: Record<string, bigint> = {
   CAD: 1_500_000n, // 15 000 CAD
@@ -297,6 +300,22 @@ export const riskRules: RiskRule[] = [
           recommendation: 'Monitor; combined with other signals this may indicate an exit scam or takeover.',
         },
       };
+    },
+  },
+  // ───────────────────────────── Structuring (Phase 6) ──────────────────────
+  {
+    code: STRUCTURING_RULE_CODE,
+    description:
+      'Several operations each below the aggregate threshold whose sum reaches it within the rolling window (same user or organisation, same currency and direction)',
+    appliesTo: Object.keys(STRUCTURING_EVENT_KINDS) as RiskEvent[],
+    evaluate(f) {
+      if (!f.structuring) return null;
+      try {
+        return structuringSignal(f.structuring);
+      } catch {
+        // Unsupported currency or malformed threshold: the rule never guesses.
+        return null;
+      }
     },
   },
 ];

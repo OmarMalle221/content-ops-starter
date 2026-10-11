@@ -4,7 +4,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
-import { SANDBOX_DISCLAIMER } from '@dfn/shared';
+import { SANDBOX_DISCLAIMER, SANDBOX_HEADER, SANDBOX_MODE } from '@dfn/shared';
 import { buildAppModule } from './app.module';
 import { env, type Env } from './config/env';
 import { installBigIntJson } from './common/serialize';
@@ -23,6 +23,13 @@ export async function createApp(envOverrides: Partial<Record<keyof Env, string>>
     }),
   );
   app.use(cookieParser());
+  // Tag every response — including guard rejections (401/403/429) that never reach interceptors —
+  // so no client can mistake the sandbox for a live environment.
+  app.use((_req: unknown, res: { setHeader(name: string, value: string): void }, next: () => void) => {
+    res.setHeader(SANDBOX_HEADER, SANDBOX_MODE);
+    res.setHeader('x-dfn-disclaimer', 'Simulated data - no real funds');
+    next();
+  });
   app.enableCors({
     origin: cfg.CORS_ORIGINS.split(',').map((o) => o.trim()),
     credentials: true,

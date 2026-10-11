@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import type { Prisma } from '@dfn/database';
 import { renderProtectContract, type ProtectContractTerms } from '@dfn/contracts';
 import {
+  globalRoleHas,
   CANCELLABLE_TRANSACTION_STATES,
   ErrorCode,
   Permission,
@@ -279,10 +280,19 @@ export class TransactionsService {
   async list(auth: AuthContext, query: ListTransactionsQuery) {
     const orgIds = auth.memberships.map((m) => m.organizationId);
     const asBuyer: Prisma.TransactionWhereInput = { buyerOrganizationId: { in: orgIds } };
+    // Seller-side transactions the user joined personally (invitation accepted before an
+    // organisation was attached) are resolved up front: a `parties: { some }` filter becomes a
+    // correlated EXISTS over every candidate row, far too slow on large tables (docs/operations/PERFORMANCE.md).
+    const sellerPartyTxIds = (
+      await this.prisma.transactionParty.findMany({
+        where: { role: 'SELLER', userId: auth.userId },
+        select: { transactionId: true },
+      })
+    ).map((p) => p.transactionId);
     const asSeller: Prisma.TransactionWhereInput = {
       OR: [
         { sellerOrganizationId: { in: orgIds } },
-        { parties: { some: { role: 'SELLER', userId: auth.userId } } },
+        ...(sellerPartyTxIds.length ? [{ id: { in: sellerPartyTxIds } }] : []),
       ],
     };
     const scope: Prisma.TransactionWhereInput =
@@ -343,7 +353,12 @@ export class TransactionsService {
       this.payments.escrowBalance(tx),
       this.verificationSnapshot(tx),
     ]);
-    return toTransactionDto(tx, role, { escrowBalanceMinor, verification, userId: auth.userId });
+    return toTransactionDto(tx, role, {
+      escrowBalanceMinor,
+      verification,
+      userId: auth.userId,
+      canSimulatePartner: globalRoleHas(auth.globalRole, Permission.SANDBOX_PARTNER_SIMULATE),
+    });
   }
 
   async events_(auth: AuthContext, id: string) {

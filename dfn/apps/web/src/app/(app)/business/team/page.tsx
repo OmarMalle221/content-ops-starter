@@ -12,7 +12,7 @@ export default async function TeamPage({
   searchParams: Promise<{ organizationId?: string }>;
 }) {
   const ws = await resolveWorkspace(searchParams);
-  const { t, organizationId, canManage } = ws;
+  const { t, organizationId, canManage, canManageSettings } = ws;
   const org = await apiFetch<any>(`/v1/organizations/${organizationId}`);
   return (
     <>
@@ -50,7 +50,7 @@ export default async function TeamPage({
           </CardContent>
         </Card>
         {canManage && org.type === 'BUSINESS' ? <InviteMemberCard organizationId={org.id} /> : null}
-        {canManage && org.type === 'BUSINESS' ? <BusinessVerificationCard org={org} /> : null}
+        {canManageSettings && org.type === 'BUSINESS' ? <BusinessVerificationCard org={org} /> : null}
         {org.type !== 'BUSINESS' ? (
           <p className="text-sm text-muted-foreground">{t('bizTabs.noBusiness')}</p>
         ) : null}

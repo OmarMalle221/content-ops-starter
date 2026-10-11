@@ -1,8 +1,21 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import {
   Permission,
+  assignRiskAlertSchema,
+  exportRiskAlertsQuerySchema,
   listAuditLogsQuerySchema,
   listRiskAlertsQuerySchema,
   paginationSchema,
@@ -10,7 +23,11 @@ import {
   riskAlertActionSchema,
   updateUserRoleSchema,
   updateUserStatusSchema,
+  type AssignRiskAlertInput,
+  type ExportRiskAlertsQuery,
+  type ListRiskAlertsQuery,
   type ReviewVerificationInput,
+  type RiskAlertActionName,
 } from '@dfn/shared';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -87,12 +104,57 @@ export class AdminController {
     return this.verifications.adminReview(auth, id, body, req);
   }
 
+  // ───────────────────────────── Compliance review queue (risk alerts) ─────────────────────────────
+
   @RequirePermission(Permission.ADMIN_RISK)
   @Get('risk-alerts')
   riskAlerts(
-    @Query(zodBody(listRiskAlertsQuerySchema)) q: { status?: string; page: number; pageSize: number },
+    @CurrentUser() auth: AuthContext,
+    @Query(zodBody(listRiskAlertsQuerySchema)) q: ListRiskAlertsQuery,
   ) {
-    return this.admin.listRiskAlerts(q.status, q.page, q.pageSize);
+    return this.admin.listRiskAlerts(auth, q);
+  }
+
+  @RequirePermission(Permission.ADMIN_RISK)
+  @Get('risk-alerts.csv')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="risk-alerts-sandbox.csv"')
+  riskAlertsCsv(
+    @CurrentUser() auth: AuthContext,
+    @Query(zodBody(exportRiskAlertsQuerySchema)) q: ExportRiskAlertsQuery,
+    @Req() req: Request,
+  ) {
+    return this.admin.riskAlertsCsv(auth, q, req);
+  }
+
+  @RequirePermission(Permission.ADMIN_RISK)
+  @Get('risk-alerts/stats')
+  riskAlertStats(@CurrentUser() auth: AuthContext) {
+    return this.admin.riskAlertStats(auth);
+  }
+
+  @RequirePermission(Permission.ADMIN_RISK)
+  @Get('risk-alerts/assignees')
+  riskAlertAssignees() {
+    return this.admin.riskAlertAssignees();
+  }
+
+  @RequirePermission(Permission.ADMIN_RISK)
+  @Get('risk-alerts/:id')
+  riskAlert(@CurrentUser() auth: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
+    return this.admin.getRiskAlert(auth, id);
+  }
+
+  @RequirePermission(Permission.ADMIN_RISK)
+  @HttpCode(200)
+  @Post('risk-alerts/:id/assign')
+  assignRiskAlert(
+    @CurrentUser() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(zodBody(assignRiskAlertSchema)) body: AssignRiskAlertInput,
+    @Req() req: Request,
+  ) {
+    return this.admin.assignRiskAlert(auth, id, body, req);
   }
 
   @RequirePermission(Permission.ADMIN_RISK)
@@ -101,7 +163,7 @@ export class AdminController {
     @CurrentUser() auth: AuthContext,
     @Param('id', ParseUUIDPipe) id: string,
     @Body(zodBody(riskAlertActionSchema))
-    body: { action: 'START_REVIEW' | 'CONFIRM' | 'DISMISS' | 'CONTEST'; note: string },
+    body: { action: RiskAlertActionName; note: string },
     @Req() req: Request,
   ) {
     return this.admin.actOnRiskAlert(auth, id, body.action, body.note, req);

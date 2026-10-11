@@ -73,7 +73,7 @@ export default async function QuoteDetailPage({
         }
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <StatusBadge status={quote.status} />
+        <StatusBadge status={quote.status} entity="quote" />
         <Badge variant="outline">{t(`invoicing.role.${quote.myRole}`)}</Badge>
         {quote.invoice ? (
           <Link

@@ -74,7 +74,7 @@ export default async function InvoiceDetailPage({
         }
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <StatusBadge status={invoice.status} />
+        <StatusBadge status={invoice.status} entity="invoice" />
         <Badge variant="outline">{t(`invoicing.role.${invoice.myRole}`)}</Badge>
         {invoice.quote ? (
           <Link

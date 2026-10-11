@@ -22,6 +22,11 @@ describe('auth & sessions', () => {
     expect(res.status).toBe(200);
     expect(res.body.mode).toBe('sandbox');
     expect(res.headers['x-dfn-mode']).toBe('sandbox');
+    // Guard rejections (no interceptor runs) are tagged too.
+    const denied = await ctx.http().get('/v1/auth/me');
+    expect(denied.status).toBe(401);
+    expect(denied.headers['x-dfn-mode']).toBe('sandbox');
+    expect(denied.headers['x-dfn-disclaimer']).toBeTruthy();
   });
 
   it('registers a user with a personal organisation and a session cookie', async () => {
@@ -129,5 +134,32 @@ describe('auth & sessions', () => {
     await registerUser(ctx, 'audit@example.com');
     const logs = await ctx.prisma.auditLog.findMany({ where: { action: 'auth.register' } });
     expect(logs).toHaveLength(1);
+  });
+});
+
+describe('auth — MFA hardening (phase 6)', () => {
+  it('returns recovery codes once at enrolment and exposes the factors before the MFA step', async () => {
+    const { client } = await registerUser(ctx, 'mfa-factors@example.com');
+    const before = await client.get('/v1/auth/mfa/status');
+    expect(before.body).toMatchObject({ mfaEnabled: false, passkeyCount: 0, recoveryCodesRemaining: 0 });
+    const setup = await client.post('/v1/auth/mfa/setup');
+    const enabled = await client.post('/v1/auth/mfa/enable', {
+      code: authenticator.generate(setup.body.secret),
+    });
+    expect(enabled.status).toBe(201);
+    expect(enabled.body.recoveryCodes).toHaveLength(10);
+    // Shown once: the API never returns them again.
+    const summary = await client.get('/v1/auth/mfa/recovery-codes');
+    expect(summary.body.remaining).toBe(10);
+    expect(summary.body.recoveryCodes).toBeUndefined();
+
+    const c2 = new Client(ctx);
+    await c2.post('/v1/auth/login', { email: 'mfa-factors@example.com', password: PASSWORD });
+    const status = await c2.get('/v1/auth/mfa/status');
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({ mfaEnabled: true, methods: ['totp', 'recovery_code'] });
+    expect((await c2.get('/v1/auth/mfa/recovery-codes')).status).toBe(401);
+    const empty = await c2.post('/v1/auth/mfa/verify', {});
+    expect(empty.status).toBe(400);
   });
 });

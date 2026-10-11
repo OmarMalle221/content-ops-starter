@@ -1,10 +1,19 @@
 import type { OrgRole, Prisma } from '@dfn/database';
-import { Permission, orgRoleHas } from '@dfn/shared';
+import { CounterpartyLinkStatus, Permission, orgRoleHas } from '@dfn/shared';
 import { isStaff, membershipFor, type AuthContext, type AuthMembership } from '../../common/auth-context';
 import { moneyDto } from '../../common/serialize';
-import { BUSINESS_DISCLAIMER_FR, clampNonNegative, deriveTaxBps } from './business.utils';
+import { BUSINESS_DISCLAIMER_FR, clampNonNegative, storedTaxBps } from './business.utils';
 
 // ───────────────────────────── Prisma includes ──────────────────────────────
+
+/** linkStatus is loaded for access decisions only; it is never serialised as-is (see counterpartyDto). */
+const counterpartySelect = {
+  id: true,
+  name: true,
+  email: true,
+  linkedOrganizationId: true,
+  linkStatus: true,
+} as const;
 
 export const invoiceInclude = {
   lines: { orderBy: { position: 'asc' as const } },
@@ -12,7 +21,7 @@ export const invoiceInclude = {
     orderBy: { paidAt: 'asc' as const },
     include: { recordedBy: { select: { id: true, firstName: true, lastName: true } } },
   },
-  counterparty: { select: { id: true, name: true, email: true, linkedOrganizationId: true } },
+  counterparty: { select: counterpartySelect },
   organization: {
     select: { id: true, name: true, legalName: true, registrationNumber: true, country: true },
   },
@@ -23,7 +32,7 @@ export type InvoiceWithRelations = Prisma.InvoiceGetPayload<{ include: typeof in
 
 export const quoteInclude = {
   lines: { orderBy: { position: 'asc' as const } },
-  counterparty: { select: { id: true, name: true, email: true, linkedOrganizationId: true } },
+  counterparty: { select: counterpartySelect },
   organization: {
     select: { id: true, name: true, legalName: true, registrationNumber: true, country: true },
   },
@@ -41,25 +50,58 @@ export interface DocumentAccess {
   membership?: AuthMembership;
 }
 
+interface CounterpartyLink {
+  linkedOrganizationId: string | null;
+  linkStatus: CounterpartyLinkStatus | string;
+}
+
+/**
+ * The customer organisation of a document, only once the link was ACCEPTED by that organisation
+ * (consent): a pending / declined / revoked request never exposes documents, notifications or the
+ * wallet payment to the target.
+ */
+export function acceptedLinkedOrganizationId(
+  counterparty: CounterpartyLink | null | undefined,
+): string | null {
+  if (!counterparty || counterparty.linkStatus !== CounterpartyLinkStatus.ACCEPTED) return null;
+  return counterparty.linkedOrganizationId;
+}
+
 /** Resolves how the caller relates to a document; null means it must not even be revealed (404). */
 export function documentAccessFor(
   auth: AuthContext,
-  doc: { organizationId: string; counterparty?: { linkedOrganizationId: string | null } | null },
+  doc: { organizationId: string; counterparty?: CounterpartyLink | null },
 ): DocumentAccess | null {
   const issuer = membershipFor(auth, doc.organizationId);
   if (issuer) return { role: 'ISSUER', membership: issuer };
-  const linked = doc.counterparty?.linkedOrganizationId ?? null;
+  const linked = acceptedLinkedOrganizationId(doc.counterparty);
   const customer = linked ? membershipFor(auth, linked) : undefined;
   if (customer) return { role: 'CUSTOMER', membership: customer };
-  if (isStaff(auth)) return { role: 'STAFF' };
+  // Staff who are not members read documents; they never get write actions by default (support
+  // writes are an explicit, audited API path — see OrganizationsService.authorizeWrite).
+  if (isStaff(auth) && !auth.apiCredential) return { role: 'STAFF' };
   return null;
+}
+
+/** Counterparty as serialised in documents: the customer org id only once the link is accepted. */
+function counterpartyDto(cp: InvoiceWithRelations['counterparty']) {
+  if (!cp) return null;
+  const linkedOrganizationId = acceptedLinkedOrganizationId(cp);
+  return {
+    id: cp.id,
+    name: cp.name,
+    email: cp.email,
+    linkedOrganizationId,
+    linked: linkedOrganizationId !== null,
+  };
 }
 
 const OPEN_INVOICE_STATES = ['SENT', 'PARTIALLY_PAID', 'OVERDUE'] as const;
 export const OPEN_INVOICE_STATUSES: readonly string[] = OPEN_INVOICE_STATES;
 
 function canManage(access: DocumentAccess): boolean {
-  if (access.role === 'STAFF') return true;
+  // STAFF (non-member) are read-only by default.
+  if (access.role === 'STAFF') return false;
   return (
     access.role === 'ISSUER' && orgRoleHas(access.membership!.role as OrgRole, Permission.INVOICE_MANAGE)
   );
@@ -137,7 +179,7 @@ export function toInvoiceDto(inv: InvoiceWithRelations, access: DocumentAccess) 
     status: inv.status,
     customerName: inv.customerName,
     customerEmail: inv.customerEmail,
-    counterparty: inv.counterparty,
+    counterparty: counterpartyDto(inv.counterparty),
     issuer: issuerDto(inv.organization),
     transaction: inv.transaction,
     transactionId: inv.transactionId,
@@ -148,7 +190,7 @@ export function toInvoiceDto(inv: InvoiceWithRelations, access: DocumentAccess) 
     dueDate: inv.dueDate,
     subtotal: moneyDto(inv.subtotalMinor, ccy),
     tax: moneyDto(inv.taxMinor, ccy),
-    taxBps: deriveTaxBps(inv.subtotalMinor, inv.taxMinor),
+    taxBps: storedTaxBps(inv),
     total: moneyDto(inv.totalMinor, ccy),
     paid: moneyDto(inv.paidMinor, ccy),
     balanceDue: moneyDto(balanceDueMinor, ccy),
@@ -186,7 +228,7 @@ export function toQuoteDto(quote: QuoteWithRelations, access: DocumentAccess) {
     status: quote.status,
     customerName: quote.customerName,
     customerEmail: quote.customerEmail,
-    counterparty: quote.counterparty,
+    counterparty: counterpartyDto(quote.counterparty),
     issuer: issuerDto(quote.organization),
     invoice: quote.invoice,
     convertedTransactionId: quote.convertedTransactionId,
@@ -194,7 +236,7 @@ export function toQuoteDto(quote: QuoteWithRelations, access: DocumentAccess) {
     validUntil: quote.validUntil,
     subtotal: moneyDto(quote.subtotalMinor, ccy),
     tax: moneyDto(quote.taxMinor, ccy),
-    taxBps: deriveTaxBps(quote.subtotalMinor, quote.taxMinor),
+    taxBps: storedTaxBps(quote),
     total: moneyDto(quote.totalMinor, ccy),
     notes: quote.notes,
     lines: quote.lines.map((l) => lineDto(l, ccy)),

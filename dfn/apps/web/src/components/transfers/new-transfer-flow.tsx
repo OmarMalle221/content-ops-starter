@@ -392,7 +392,7 @@ export function NewTransferFlow({
               <CardTitle>
                 {t('xfer.stepOf')} 3 — {t('xfer.steps.authorize')}
               </CardTitle>
-              <StatusBadge status={transfer.status} />
+              <StatusBadge status={transfer.status} entity="transfer" />
             </div>
             <CardDescription>
               {transfer.reference} · {t('xfer.created')}

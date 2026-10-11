@@ -24,9 +24,9 @@ env:
 
 jobs:
   quality:
-    name: Typecheck, lint, unit, ledger & API integration tests
+    name: Typecheck, lint, unit, ledger & API integration tests, compiled build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -37,9 +37,18 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U dfn" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn_test?schema=public
       TEST_DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn_test?schema=public
+      # Redis-backed tests (BullMQ scheduler, distributed leases, rate limits) read TEST_REDIS_URL and
+      # use their own logical database; they skip cleanly when no Redis is configured.
+      REDIS_URL: redis://localhost:6379/0
+      TEST_REDIS_URL: redis://localhost:6379/5
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,14 +63,36 @@ jobs:
       - run: pnpm --filter @dfn/database migrate:deploy
       - run: pnpm format:check
       - run: pnpm typecheck
+      - name: Typecheck ops scripts (infra/ops)
+        run: pnpm --filter @dfn/api exec tsc --noEmit -p ../../infra/ops/tsconfig.json
+      - name: Lint ops shell scripts
+        run: shellcheck -x infra/ops/*.sh
       - run: pnpm --filter @dfn/api lint
       - run: pnpm --filter @dfn/web lint
+      - name: Build compiled API (tsup + SWC decorator metadata)
+        run: pnpm build:api
+      - name: Smoke boot of the compiled API (health, register, me, OpenAPI, graceful SIGTERM)
+        env:
+          NODE_ENV: production
+          API_PORT: '4100'
+          API_PUBLIC_URL: http://localhost:4100
+          STORAGE_DIR: /tmp/dfn-smoke-storage
+          LOG_LEVEL: info
+          SMOKE_LOG: ${{ github.workspace }}/dfn/api-smoke.log
+        run: bash infra/ops/smoke-api.sh --boot --base-url http://127.0.0.1:4100
       - run: pnpm test:unit
       - run: pnpm test:api
       - run: pnpm audit --audit-level=high || echo "::warning::pnpm audit reported issues — review before any non-sandbox deployment"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-quality-logs
+          path: dfn/api-smoke.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   e2e:
-    name: Build & Playwright end-to-end
+    name: Build & Playwright end-to-end (compiled API)
     runs-on: ubuntu-latest
     needs: quality
     timeout-minutes: 30
@@ -98,13 +129,15 @@ jobs:
       - run: pnpm db:generate
       - run: pnpm --filter @dfn/database migrate:deploy
       - run: pnpm --filter @dfn/web exec playwright install --with-deps chromium
+      - run: pnpm build:api
       - run: pnpm --filter @dfn/web build
-      - name: Start API and web
+      - name: Start compiled API and web
         run: |
-          (pnpm --filter @dfn/api start > api.log 2>&1 &)
+          (node --enable-source-maps apps/api/dist/main.js > api.log 2>&1 &)
           (pnpm --filter @dfn/web start > web.log 2>&1 &)
-          for i in $(seq 1 60); do curl -sf http://localhost:4000/v1/health && break; sleep 2; done
-          for i in $(seq 1 60); do curl -sf http://localhost:3000/ > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://localhost:4000/v1/health && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://localhost:3000/ > /dev/null && break; sleep 2; done
+          curl -sf http://localhost:4000/v1/health > /dev/null
       - run: pnpm --filter @dfn/web test:e2e
         env: { CI: 'true' }
       - uses: actions/upload-artifact@v4
@@ -116,3 +149,105 @@ jobs:
             dfn/api.log
             dfn/web.log
           retention-days: 7
+
+  backup-restore:
+    name: Backup / restore drill (pg_dump → scratch DB → migrate status, counts, ledger reconcile)
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dfn
+          POSTGRES_PASSWORD: dfn
+          POSTGRES_DB: dfn
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dfn" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn?schema=public
+      SEED_DEMO_PASSWORD: ci-drill-Sandbox-2026!seed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dfn/pnpm-lock.yaml
+      - name: PostgreSQL 16 client tools and age
+        run: |
+          sudo apt-get update -qq
+          if ! pg_dump --version | grep -Eq ' (1[6-9]|[2-9][0-9])\.'; then
+            sudo apt-get install -y -qq postgresql-client-16
+          fi
+          sudo apt-get install -y -qq age
+          pg_dump --version
+          age --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm --filter @dfn/database migrate:deploy
+      - name: Seed fictitious demo data (balanced ledger postings)
+        run: pnpm db:seed
+      - run: pnpm build:api
+      - name: Restore drill, encrypted with a throwaway age key
+        run: |
+          age-keygen -o "$RUNNER_TEMP/drill-age.key" 2>/dev/null
+          BACKUP_AGE_RECIPIENT="$(age-keygen -y "$RUNNER_TEMP/drill-age.key")"
+          export BACKUP_AGE_RECIPIENT
+          export BACKUP_AGE_IDENTITY_FILE="$RUNNER_TEMP/drill-age.key"
+          bash infra/ops/restore-test.sh
+      - name: Restore drill, compiled-free path (ts-node reconcile, plain archive)
+        env:
+          DFN_RECONCILE_RUNNER: source
+        run: bash infra/ops/restore-test.sh
+
+  containers:
+    name: Docker images & compose stack (read-only API, migrate one-shot, BullMQ + Redis)
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway .env for the stack (no secret is committed or defaulted)
+        run: |
+          grep -vE '^(SESSION_SECRET|DOCUMENT_ENCRYPTION_KEY)=' .env.example > .env
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "REDIS_PASSWORD=$(openssl rand -hex 16)"
+            echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "DOCUMENT_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+          } >> .env
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Build images and start the stack
+        run: docker compose up -d --build
+      - name: Wait for API and web
+        run: |
+          for _ in $(seq 1 90); do curl -sf http://127.0.0.1:4000/v1/health > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:3000/login && break; sleep 2; done
+          docker compose ps -a
+          test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = "0"
+      - name: Smoke test through the containers
+        run: |
+          bash infra/ops/smoke-api.sh --base-url http://127.0.0.1:4000
+          curl -sf http://127.0.0.1:3000/login | grep -q 'Aucun fonds réel'
+          curl -sf http://127.0.0.1:3000/api/v1/health | grep -q '"mode":"sandbox"'
+          test "$(docker compose exec -T api id -u)" = "10001"
+          docker compose exec -T api sh -c 'touch /app/probe 2>/dev/null && exit 1 || exit 0'
+      - name: Graceful stop
+        run: docker compose stop -t 30 api web
+      - name: Stack logs
+        if: always()
+        run: docker compose logs --no-color --timestamps > compose.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-compose-logs
+          path: dfn/compose.log
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans

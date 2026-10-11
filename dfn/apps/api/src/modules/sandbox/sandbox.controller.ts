@@ -3,6 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { LedgerService, providerSettlementCode } from '@dfn/financial-ledger';
 import {
+  globalRoleHas,
   Permission,
   parseDecimalToMinor,
   sandboxDepositSchema,
@@ -52,7 +53,13 @@ export class SandboxController {
     if (!funding) throw DomainError.notFound('Funding request');
     const tx = await this.access.load(funding.transactionId);
     const role = this.access.roleFor(auth, tx);
-    if (role !== 'BUYER' && !isStaff(auth)) throw DomainError.notFound('Funding request');
+    if (role !== 'BUYER') {
+      // Only the buyer, or staff holding the sandbox simulation permission (ADMIN), may trigger it.
+      if (!isStaff(auth)) throw DomainError.notFound('Funding request');
+      if (!globalRoleHas(auth.globalRole, Permission.SANDBOX_PARTNER_SIMULATE)) {
+        throw DomainError.forbidden('Simulating partner events requires the sandbox partner permission');
+      }
+    }
     const event = await this.payments.provider.simulateFundingEvent({
       fundingReference: body.fundingReference,
       outcome: body.outcome,
