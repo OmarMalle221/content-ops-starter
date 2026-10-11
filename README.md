@@ -2,6 +2,8 @@
 
 > **TrustCargo Pay** — this repository also hosts the TrustCargo Pay MVP (secure international vehicle transactions, simulation mode only) as a standalone Next.js app in [`trustcargo-pay/`](trustcargo-pay/README.md). The starter below is unchanged.
 
+> **Diaspora Financial Network (DFN / Diaspora Trust)** — the repository also hosts the DFN sandbox platform (Next.js web + NestJS API + PostgreSQL/Prisma, double-entry ledger, Diaspora Protect conditional-payment workflows) as an independent pnpm monorepo in [`dfn/`](dfn/README.md). Sandbox only: simulated data, no real funds.
+
 ![Content Ops Starter](https://assets.stackbit.com/docs/content-ops-starter-thumb.png)
 
 Netlify starter that's made for customization with a flexible content model, component library, [visual editing](https://docs.netlify.com/visual-editor/overview/) and [Git Content Source](https://docs.netlify.com/create/content-sources/git/).

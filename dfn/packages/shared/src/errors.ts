@@ -1,0 +1,29 @@
+/** Stable machine-readable error codes returned by the API. */
+export const ErrorCode = {
+  VALIDATION_FAILED: 'VALIDATION_FAILED',
+  UNAUTHENTICATED: 'UNAUTHENTICATED',
+  MFA_REQUIRED: 'MFA_REQUIRED',
+  FORBIDDEN: 'FORBIDDEN',
+  NOT_FOUND: 'NOT_FOUND',
+  CONFLICT: 'CONFLICT',
+  INVALID_TRANSITION: 'INVALID_TRANSITION',
+  RELEASE_FROZEN: 'RELEASE_FROZEN',
+  INSUFFICIENT_FUNDS: 'INSUFFICIENT_FUNDS',
+  LEDGER_UNBALANCED: 'LEDGER_UNBALANCED',
+  IDEMPOTENT_REPLAY: 'IDEMPOTENT_REPLAY',
+  RATE_LIMITED: 'RATE_LIMITED',
+  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
+  INVITATION_INVALID: 'INVITATION_INVALID',
+  VERIFICATION_REQUIRED: 'VERIFICATION_REQUIRED',
+  UNSUPPORTED_FILE: 'UNSUPPORTED_FILE',
+  SANDBOX_ONLY: 'SANDBOX_ONLY',
+} as const;
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
+
+export interface ApiErrorBody {
+  statusCode: number;
+  code: ErrorCode | string;
+  message: string;
+  details?: unknown;
+  requestId?: string;
+}

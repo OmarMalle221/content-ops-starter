@@ -1,0 +1,84 @@
+# Diaspora Financial Network — local sandbox stack.
+# docker compose up --build  →  web http://localhost:3000 · api http://localhost:4000/docs
+# Données fictives — Aucun fonds réel.
+name: dfn-sandbox
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dfn
+      POSTGRES_PASSWORD: dfn
+      POSTGRES_DB: dfn
+    ports: ['5432:5432']
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dfn -d dfn']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ['6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    env_file: [.env]
+    environment:
+      DFN_MODE: sandbox
+      NODE_ENV: production
+      DATABASE_URL: postgresql://dfn:dfn@postgres:5432/dfn?schema=public
+      REDIS_URL: redis://redis:6379
+      API_PORT: '4000'
+      API_PUBLIC_URL: http://localhost:4000
+      WEB_PUBLIC_URL: http://localhost:3000
+      CORS_ORIGINS: http://localhost:3000
+      STORAGE_DIR: /data/storage
+      LOG_LEVEL: info
+    volumes: ['storage:/data/storage']
+    ports: ['4000:4000']
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(''http://localhost:4000/v1/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args: { API_INTERNAL_URL: http://api:4000 }
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      API_INTERNAL_URL: http://api:4000
+      NEXT_PUBLIC_DFN_MODE: sandbox
+      SESSION_COOKIE_NAME: dfn_session
+    ports: ['3000:3000']
+
+  seed:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    profiles: ['seed']
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://dfn:dfn@postgres:5432/dfn?schema=public
+      SEED_DEMO_PASSWORD: ${SEED_DEMO_PASSWORD:-}
+    working_dir: /app
+    command: ['pnpm', '--filter', '@dfn/database', 'seed']
+
+volumes:
+  pgdata:
+  storage:
