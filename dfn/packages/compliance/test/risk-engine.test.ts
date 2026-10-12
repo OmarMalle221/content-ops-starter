@@ -436,5 +436,9 @@ describe('structuring thresholds per currency', () => {
     expect(isValidStructuringThresholdSpec('XOF:')).toBe(false);
     expect(isValidStructuringThresholdSpec('10000.00,,XOF:1')).toBe(false);
     expect(isValidStructuringThresholdSpec('')).toBe(false);
+    // A decimal comma would otherwise read as a default threshold of 50 for every other currency.
+    expect(isValidStructuringThresholdSpec('CAD:9000,50')).toBe(false);
+    expect(isValidStructuringThresholdSpec('XOF:4400000,10000.00')).toBe(false);
+    expect(isValidStructuringThresholdSpec('10000,00')).toBe(false);
   });
 });

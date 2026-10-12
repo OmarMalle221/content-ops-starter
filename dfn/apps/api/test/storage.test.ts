@@ -21,7 +21,15 @@ import {
 import type { Env } from '../src/config/env';
 import { DocumentStorageService } from '../src/modules/documents/storage.service';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
-import { Client, PDF_BYTES, registerUser, resetDatabase, type TestContext } from './helpers/app';
+import {
+  Client,
+  PASSWORD,
+  PDF_BYTES,
+  promote,
+  registerUser,
+  resetDatabase,
+  type TestContext,
+} from './helpers/app';
 
 const LEGACY_KEY = process.env.DOCUMENT_ENCRYPTION_KEY!;
 const D1 = 'a1'.repeat(32);
@@ -184,15 +192,25 @@ class FaultyStore implements BlobStore {
   /** How many puts on `failPutOn` fail (Infinity = the key is persistently unwritable). */
   failPutTimes = 0;
   corruptGetOn: string | null = null;
-  constructor(private readonly inner: LocalBlobStore) {}
+  failGetOn: string | null = null;
+  failGetTimes = 0;
+  /** Runs right after a successful put (simulates what happens concurrently). */
+  afterPut: ((key: string) => Promise<void>) | null = null;
+  constructor(readonly inner: LocalBlobStore) {}
   async put(key: string, bytes: Buffer) {
     if (key === this.failPutOn && this.failPutTimes > 0) {
       this.failPutTimes -= 1;
       throw new StorageError('put', 'IO_ERROR', 'local');
     }
-    return this.inner.put(key, bytes);
+    const meta = await this.inner.put(key, bytes);
+    if (this.afterPut) await this.afterPut(key);
+    return meta;
   }
   async get(key: string) {
+    if (key === this.failGetOn && this.failGetTimes > 0) {
+      this.failGetTimes -= 1;
+      throw new StorageError('get', 'IO_ERROR', 'local');
+    }
     const bytes = await this.inner.get(key);
     if (key !== this.corruptGetOn) return bytes;
     const copy = Buffer.from(bytes);
@@ -267,10 +285,36 @@ describe('documents on the encrypted blob store', () => {
     // Access control is unchanged: a stranger gets 404.
     const stranger = await registerUser(ctx, `stranger-${randomUUID().slice(0, 8)}@example.com`);
     expect((await stranger.client.get(`/v1/documents/${doc.id}/download`)).status).toBe(404);
+    // …and the same 404 as an unknown id when trying to delete it (no existence oracle).
+    const strangerDelete = await stranger.client.delete(`/v1/documents/${doc.id}`);
+    expect(strangerDelete.status).toBe(404);
+    expect((await stranger.client.delete(`/v1/documents/${randomUUID()}`)).status).toBe(404);
 
+    // Staff: COMPLIANCE never deletes; an ADMIN needs a support reason, audited before the deletion.
+    const staffDelete = async (role: 'ADMIN' | 'COMPLIANCE', reason?: string) => {
+      const email = `staff-del-${role.toLowerCase()}-${randomUUID().slice(0, 6)}@example.com`;
+      await registerUser(ctx, email);
+      await promote(ctx, email, role);
+      const login = await ctx.http().post('/v1/auth/login').send({ email, password: PASSWORD });
+      const cookie = (login.headers['set-cookie'] as unknown as string[])
+        .map((c) => c.split(';')[0])
+        .join('; ');
+      let r = ctx.http().delete(`/v1/documents/${doc.id}`).set('Cookie', cookie);
+      if (reason) r = r.set('X-Support-Reason', reason);
+      return r;
+    };
+    expect((await staffDelete('COMPLIANCE', 'Demande du client (ticket SUP-9)')).status).toBe(403);
+    const noReason = await staffDelete('ADMIN');
+    expect(noReason.status).toBe(400);
+    expect(noReason.body.details).toEqual({ header: 'x-support-reason' });
+    expect(statSync(join(dir, doc.storageKey)).isFile()).toBe(true);
+    const supported = await staffDelete('ADMIN', 'Demande du client (ticket SUP-9)');
+    expect(supported.status, JSON.stringify(supported.body)).toBe(200);
+    const supportAudit = await ctx.prisma.auditLog.findFirstOrThrow({ where: { action: 'support.write' } });
+    expect(supportAudit.metadata).toMatchObject({ permission: 'document:delete', support: true });
     // Soft delete removes the blob.
-    expect((await owner.delete(`/v1/documents/${doc.id}`)).status).toBe(200);
     expect(() => statSync(join(dir, doc.storageKey))).toThrow();
+    expect((await owner.delete(`/v1/documents/${doc.id}`)).status).toBe(404);
   });
 
   it('keeps serving documents written in the legacy layout (no key ring header)', async () => {
@@ -421,12 +465,12 @@ describe('documents on the encrypted blob store', () => {
         (await ctx.prisma.document.findUniqueOrThrow({ where: { id: doc.id } })).encryptionKeyId,
       ).toBeNull();
 
-      // 2b. The original key stays unwritable: the original is untouched and the verified copy is
-      //     kept under the temp key (never fewer than one good copy).
+      // 2b. The original key stays unwritable: the original is untouched (it is the good copy) and
+      //     the temp copy is dropped — the old blob is never written back over anything.
       faulty.failPutTimes = Infinity;
       expect(await storage.reseal(doc).catch((e: unknown) => e)).toBeInstanceOf(StorageError);
       expect(readFileSync(join(dir, storageKey)).equals(original)).toBe(true);
-      expect(readFileSync(tempPath).subarray(0, 5).toString('ascii')).toBe('DFNK2');
+      expect(() => statSync(tempPath)).toThrow();
       expect(
         (await ctx.prisma.document.findUniqueOrThrow({ where: { id: doc.id } })).encryptionKeyId,
       ).toBeNull();
@@ -441,6 +485,96 @@ describe('documents on the encrypted blob store', () => {
       expect(rotated.encryptionKeyId).toBe('d1');
       expect((await storage.read(rotated, null)).equals(PDF_BYTES)).toBe(true);
       expect(await storage.reseal(rotated)).toBe('current');
+    } finally {
+      registry.override('local', new LocalBlobStore(dir, maxSealedBytes(15)));
+    }
+  });
+
+  it('settles a failed swap from what storage holds (concurrent repair, rollback, deletion)', async () => {
+    const registry = ctx.app.get(BlobStoreRegistry);
+    const faulty = new FaultyStore(new LocalBlobStore(dir, maxSealedBytes(15)));
+    registry.override('local', faulty);
+    const storage = ctx.app.get(DocumentStorageService);
+    const legacyDoc = async (title: string) => {
+      const storageKey = `${orgId}/${randomUUID()}`;
+      mkdirSync(join(dir, orgId), { recursive: true });
+      const original = encryptBuffer(LEGACY_KEY, PDF_BYTES);
+      writeFileSync(join(dir, storageKey), original, { mode: 0o600 });
+      const doc = await ctx.prisma.document.create({
+        data: {
+          organizationId: orgId,
+          uploadedByUserId: ownerId,
+          title,
+          fileName: 'rotation.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: PDF_BYTES.length,
+          sha256: sha256Hex(PDF_BYTES),
+          storageKey,
+        },
+      });
+      return { doc, storageKey, original, tempPath: join(dir, rotationTempKey(doc.id)) };
+    };
+    const keyIdOf = async (id: string) =>
+      (await ctx.prisma.document.findUniqueOrThrow({ where: { id } })).encryptionKeyId;
+    try {
+      // A. A download repairs the row to the new key right after the swap, then the verification
+      //    read fails: storage holds the new blob, so the rotation completes (no blind rollback).
+      const a = await legacyDoc('A');
+      faulty.afterPut = async (key) => {
+        if (key !== a.storageKey) return;
+        faulty.afterPut = null;
+        const row = await ctx.prisma.document.findUniqueOrThrow({ where: { id: a.doc.id } });
+        expect((await storage.read(row, ownerId)).equals(PDF_BYTES)).toBe(true);
+        faulty.failGetOn = a.storageKey;
+        faulty.failGetTimes = 1;
+      };
+      expect(await storage.reseal(a.doc)).toBe('rotated');
+      expect(await keyIdOf(a.doc.id)).toBe('d1');
+      expect(readFileSync(join(dir, a.storageKey)).subarray(0, 5).toString('ascii')).toBe('DFNK2');
+      expect(() => statSync(a.tempPath)).toThrow();
+
+      // B. Another writer put the old blob back after a download had repaired the row: the old
+      //    blob stays, the row is moved back to the key that really sealed it, the temp copy goes.
+      const b = await legacyDoc('B');
+      faulty.afterPut = async (key) => {
+        if (key !== b.storageKey) return;
+        faulty.afterPut = null;
+        await ctx.prisma.document.update({ where: { id: b.doc.id }, data: { encryptionKeyId: 'd1' } });
+        await faulty.inner.put(b.storageKey, b.original);
+      };
+      const kept = await storage.reseal(b.doc).catch((e: unknown) => e as StorageError);
+      expect((kept as StorageError).details).toMatchObject({ reason: 'ROTATION_SWAP_FAILED' });
+      expect(await keyIdOf(b.doc.id)).toBeNull();
+      expect(readFileSync(join(dir, b.storageKey)).equals(b.original)).toBe(true);
+      expect(() => statSync(b.tempPath)).toThrow();
+      const bRow = await ctx.prisma.document.findUniqueOrThrow({ where: { id: b.doc.id } });
+      expect((await storage.read(bRow, ownerId)).equals(PDF_BYTES)).toBe(true);
+
+      // C. Deleted during the swap: nothing is resurrected, every copy is removed.
+      const c = await legacyDoc('C');
+      faulty.afterPut = async (key) => {
+        if (key !== c.storageKey) return;
+        faulty.afterPut = null;
+        await ctx.prisma.document.update({ where: { id: c.doc.id }, data: { deletedAt: new Date() } });
+        await faulty.inner.delete(c.storageKey);
+      };
+      expect(await storage.reseal(c.doc)).toBe('current');
+      expect(() => statSync(join(dir, c.storageKey))).toThrow();
+      expect(() => statSync(c.tempPath)).toThrow();
+
+      // D. A copy left behind by a crashed run is removed when the row is repaired, and by remove().
+      const d = await legacyDoc('D');
+      const sealedD1 = readFileSync(join(dir, a.storageKey));
+      writeFileSync(join(dir, d.storageKey), sealedD1, { mode: 0o600 });
+      await ctx.prisma.document.update({ where: { id: d.doc.id }, data: { sha256: a.doc.sha256 } });
+      mkdirSync(join(dir, 'rotation-tmp'), { recursive: true });
+      writeFileSync(d.tempPath, sealedD1, { mode: 0o600 });
+      expect(await storage.reseal({ ...d.doc, sha256: a.doc.sha256 })).toBe('repaired');
+      expect(() => statSync(d.tempPath)).toThrow();
+      writeFileSync(d.tempPath, sealedD1, { mode: 0o600 });
+      expect(await storage.remove(d.doc)).toBe(true);
+      expect(() => statSync(d.tempPath)).toThrow();
+      expect(() => statSync(join(dir, d.storageKey))).toThrow();
     } finally {
       registry.override('local', new LocalBlobStore(dir, maxSealedBytes(15)));
     }

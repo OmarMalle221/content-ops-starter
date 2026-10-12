@@ -12,7 +12,7 @@ import {
   Label,
   Select,
 } from '@dfn/ui';
-import { api, errorMessage } from '@/lib/api-client';
+import { ClientApiError, api, errorMessage } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
 import { LOCALE_COOKIE } from '@/lib/i18n';
 import { useI18n } from '@/lib/i18n-client';
@@ -174,6 +174,7 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
   const router = useRouter();
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [code, setCode] = useState('');
+  const [enrolPassword, setEnrolPassword] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [msg, setMsg] = useState<{ error?: string; success?: string }>({});
   const [loading, setLoading] = useState(false);
@@ -183,6 +184,7 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
     try {
       await fn();
       setCode('');
+      setEnrolPassword('');
       router.refresh();
     } catch (err) {
       setMsg({ error: errorMessage(err) });
@@ -212,33 +214,59 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
             <code className="block break-all rounded-md border bg-muted p-3 text-[10px] text-muted-foreground">
               {setup.otpauthUrl}
             </code>
-            <div className="flex gap-2">
-              <Input
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="123456"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                className="w-40"
-              />
-              <Button
-                loading={loading}
-                disabled={code.length !== 6}
-                onClick={() =>
-                  run(async () => {
-                    const res = await api<{ enabled: boolean; recoveryCodes: string[] }>(
-                      '/v1/auth/mfa/enable',
-                      { method: 'POST', json: { code } },
-                    );
-                    setSetup(null);
-                    // Shown once: the API never returns these codes again.
-                    setRecoveryCodes(res.recoveryCodes);
-                  })
-                }
-              >
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (code.length !== 6 || !enrolPassword) return;
+                void run(async () => {
+                  const res = await api<{ enabled: boolean; recoveryCodes: string[] }>(
+                    '/v1/auth/mfa/enable',
+                    {
+                      method: 'POST',
+                      json: { code, currentPassword: enrolPassword },
+                    },
+                  ).catch((err: unknown) => {
+                    // Wrong current password: say so in the interface language.
+                    if (err instanceof ClientApiError && err.body.code === 'STEP_UP_REQUIRED') {
+                      throw new Error(t('settings.mfaPasswordInvalid'));
+                    }
+                    throw err;
+                  });
+                  setSetup(null);
+                  // Shown once: the API never returns these codes again.
+                  setRecoveryCodes(res.recoveryCodes);
+                });
+              }}
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="mfa-enable-code">{t('settings.mfaCode')}</Label>
+                  <Input
+                    id="mfa-enable-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="123456"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mfa-enable-password">{t('settings.currentPassword')}</Label>
+                  <Input
+                    id="mfa-enable-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={enrolPassword}
+                    onChange={(e) => setEnrolPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+              <Button type="submit" loading={loading} disabled={code.length !== 6 || !enrolPassword}>
                 {t('common.confirm')}
               </Button>
-            </div>
+            </form>
           </div>
         ) : null}
         {recoveryCodes ? (

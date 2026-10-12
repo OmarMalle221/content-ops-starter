@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { isStaff as isStaffRole } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
 import { hmacHex, randomToken } from '../../common/crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -78,6 +79,10 @@ export class SessionService {
         .catch(() => undefined);
     }
     const meta = requestMeta(req);
+    // REQUIRE_STAFF_MFA: staff without a second factor keep only USER rights, on every path
+    // (admin routes, tenant reads and support writes alike).
+    const staffMfaRequired =
+      this.env.REQUIRE_STAFF_MFA && isStaffRole(session.user.globalRole) && !session.user.mfaEnabled;
     return {
       userId: session.user.id,
       sessionId: session.id,
@@ -85,7 +90,8 @@ export class SessionService {
       firstName: session.user.firstName,
       lastName: session.user.lastName,
       locale: session.user.locale,
-      globalRole: session.user.globalRole,
+      globalRole: staffMfaRequired ? 'USER' : session.user.globalRole,
+      ...(staffMfaRequired ? { staffMfaRequired: true } : {}),
       mfaEnabled: session.user.mfaEnabled,
       mfaVerified: session.mfaVerified,
       memberships: session.user.memberships.map((m) => ({

@@ -1,14 +1,14 @@
 import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { StorageDriver } from '@dfn/shared';
 import { ENV, type Env } from '../../config/env';
-import { StorageError, maxSealedBytes, type BlobStore } from './blob-store';
+import { MAX_UPLOAD_HARD_MB, StorageError, maxSealedBytes, type BlobStore } from './blob-store';
 import { LocalBlobStore } from './local-blob-store';
 import { S3BlobStore } from './s3-blob-store';
 
 /** Builds the blob store of one driver from the environment (no network call). */
 export function createBlobStore(env: Env, driver: string = env.STORAGE_DRIVER): BlobStore {
   if (driver === StorageDriver.LOCAL)
-    return new LocalBlobStore(env.STORAGE_DIR, maxSealedBytes(env.MAX_UPLOAD_MB));
+    return new LocalBlobStore(env.STORAGE_DIR, maxSealedBytes(MAX_UPLOAD_HARD_MB));
   if (driver === StorageDriver.S3) return S3BlobStore.fromEnv(env);
   throw new StorageError('resolve', 'MISCONFIGURED');
 }

@@ -12,6 +12,7 @@ import type { Env } from '../../config/env';
 import {
   StorageError,
   assertValidStorageKey,
+  MAX_UPLOAD_HARD_MB,
   maxSealedBytes,
   type BlobMeta,
   type BlobStore,
@@ -165,7 +166,7 @@ export class S3BlobStore implements BlobStore {
     }
     return new S3BlobStore(client, {
       bucket: env.S3_BUCKET,
-      maxBytes: maxSealedBytes(env.MAX_UPLOAD_MB),
+      maxBytes: maxSealedBytes(MAX_UPLOAD_HARD_MB),
       endpointLabel,
     });
   }

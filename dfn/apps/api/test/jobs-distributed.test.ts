@@ -14,7 +14,10 @@ import { RedisThrottlerStorage } from '../src/common/throttler';
 import { ENV, type Env } from '../src/config/env';
 import { ApiAuthService } from '../src/modules/api-platform/api-auth.service';
 import { RedisRateLimitStore } from '../src/modules/api-platform/rate-limiter';
-import { STALE_PENDING_AFTER_MS } from '../src/modules/api-platform/webhook-dispatcher.service';
+import {
+  STALE_PENDING_AFTER_MS,
+  WebhookDispatcherService,
+} from '../src/modules/api-platform/webhook-dispatcher.service';
 import { JobLeaseStore } from '../src/modules/jobs/job-lease';
 import { JobRegistry } from '../src/modules/jobs/job-registry';
 import {
@@ -278,6 +281,33 @@ describe('job leases (several runners)', () => {
     expect(lease).toMatchObject({ ownerId: 'replica-thief', runId: thiefRun });
   });
 
+  it('aborts before the lease can expire when renewals hang (local deadline)', async () => {
+    const registry = new JobRegistry();
+    const observed = deferred<unknown>();
+    registry.register(
+      'EXPIRE_STALE',
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal!.addEventListener('abort', () => {
+            observed.resolve(signal!.reason);
+            reject(signal!.reason as Error);
+          });
+        }),
+    );
+    const a = runner('replica-hang', registry, 2);
+    // Every renewal hangs forever (pool exhausted, network partition): nothing settles.
+    (a as unknown as { heartbeat: () => Promise<boolean> }).heartbeat = () => new Promise(() => undefined);
+    const t0 = Date.now();
+    const run = await a.run('EXPIRE_STALE', 'test');
+    const elapsed = Date.now() - t0;
+    expect(await observed.promise).toBeInstanceOf(LeaseLostError);
+    expect(run.status).toBe('FAILED');
+    expect(run.error).toContain(LEASE_LOST);
+    // Lease 2 s: the replica gives up before the database lease could be taken over.
+    expect(elapsed).toBeLessThan(2_000);
+    expect(elapsed).toBeGreaterThanOrEqual(1_000);
+  });
+
   it('closes the run as soon as the lease is lost even when the handler ignores the signal', async () => {
     const registry = new JobRegistry();
     const finished = deferred();
@@ -449,6 +479,67 @@ describe('WEBHOOK_RETRY sweep of stale PENDING deliveries', () => {
     const again = await ctx.app.get(MaintenanceService).run('WEBHOOK_RETRY', 'test');
     expect(again.summary).toMatchObject({ stalePending: 0, attempted: 0 });
     expect(received).toHaveLength(1);
+  });
+
+  it('claims a delivery before sending it: concurrent attempts send it once, expired claims are retried', async () => {
+    const { client: owner } = await registerUser(ctx, 'dev-claim@example.com');
+    const created = await owner.post('/v1/webhooks', {
+      url: `http://127.0.0.1:${port}/hook`,
+      events: ['transaction.created'],
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const subscriptionId = created.body.webhook.id as string;
+    received.length = 0;
+    const delivery = (createdAt: Date, nextAttemptAt: Date | null = null) => {
+      const eventId = randomUUID();
+      return ctx.prisma.webhookDelivery.create({
+        data: {
+          subscriptionId,
+          eventType: 'transaction.created',
+          eventId,
+          payload: {
+            id: eventId,
+            type: 'transaction.created',
+            createdAt: createdAt.toISOString(),
+            sandbox: true,
+            data: {},
+          },
+          signature: '',
+          status: 'PENDING',
+          createdAt,
+          nextAttemptAt,
+        },
+      });
+    };
+    const dispatcher = ctx.app.get(WebhookDispatcherService);
+
+    // Three workers race on the same row: exactly one POST, one attempt recorded.
+    const raced = await delivery(new Date(Date.now() - STALE_PENDING_AFTER_MS - 60_000));
+    await Promise.all([
+      dispatcher.deliver(raced.id, 'retry'),
+      dispatcher.deliver(raced.id, 'manual'),
+      dispatcher.deliver(raced.id, 'retry'),
+    ]);
+    expect(received.filter((r) => r.headers['x-dfn-delivery'] === raced.id)).toHaveLength(1);
+    expect(await ctx.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: raced.id } })).toMatchObject({
+      status: 'DELIVERED',
+      attempts: 1,
+    });
+
+    // A claim that expired (the attempt died in flight) is retried; a live claim is left alone.
+    received.length = 0;
+    const died = await delivery(new Date(Date.now() - 60_000), new Date(Date.now() - 1_000));
+    const inFlight = await delivery(
+      new Date(Date.now() - STALE_PENDING_AFTER_MS - 60_000),
+      new Date(Date.now() + 60_000),
+    );
+    const run = await ctx.app.get(MaintenanceService).run('WEBHOOK_RETRY', 'test');
+    expect(run.summary).toMatchObject({ stalePending: 1, attempted: 1, delivered: 1 });
+    expect(received.map((r) => r.headers['x-dfn-delivery'])).toEqual([died.id]);
+    expect(await ctx.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: inFlight.id } })).toMatchObject({
+      status: 'PENDING',
+      attempts: 0,
+    });
   });
 });
 

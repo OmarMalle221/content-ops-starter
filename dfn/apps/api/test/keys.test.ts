@@ -13,9 +13,11 @@ import { ENV, type Env } from '../src/config/env';
 import { MaintenanceService } from '../src/modules/jobs/maintenance.service';
 import {
   ROTATION_BATCH,
+  WrappingCursor,
   purposeFromTrigger,
   rotationTrigger,
 } from '../src/modules/keys/key-rotation.service';
+import { ZERO_UUID } from '../src/modules/keys/sealed-columns';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import {
   Client,
@@ -213,6 +215,14 @@ describe('key rotation (ENCRYPTION_KEY_ROTATION, /v1/admin/keys)', () => {
     expect((await ownerClient.get('/v1/admin/keys')).status).toBe(403);
     expect((await ownerClient.post('/v1/admin/keys/rotate', {})).status).toBe(403);
     expect((await new Client(ctx).get('/v1/admin/keys')).status).toBe(401);
+    // …nor through the generic jobs console (COMPLIANCE holds ADMIN_JOBS, not ADMIN_KEYS).
+    expect((await compliance.post('/v1/admin/jobs/ENCRYPTION_KEY_ROTATION/run', {})).status).toBe(403);
+    expect((await compliance.get('/v1/admin/jobs/runs?jobName=ENCRYPTION_KEY_ROTATION')).status).toBe(403);
+    const complianceJobs = await compliance.get('/v1/admin/jobs');
+    expect(complianceJobs.status).toBe(200);
+    expect(complianceJobs.body.jobs.map((j: { name: string }) => j.name)).not.toContain(
+      'ENCRYPTION_KEY_ROTATION',
+    );
     expect(await ctx.prisma.maintenanceRun.count()).toBe(0);
     expect((await adminClient.post('/v1/admin/keys/rotate', { purpose: 'secrets' })).status).toBe(400);
 
@@ -222,6 +232,12 @@ describe('key rotation (ENCRYPTION_KEY_ROTATION, /v1/admin/keys)', () => {
     const run = await adminClient.post('/v1/admin/keys/rotate', {});
     expect(run.status, JSON.stringify(run.body)).toBe(200);
     expect(run.body.jobName).toBe('ENCRYPTION_KEY_ROTATION');
+    const runNames = async (client: Client) =>
+      ((await client.get('/v1/admin/jobs/runs')).body.items as Array<{ jobName: string }>).map(
+        (r) => r.jobName,
+      );
+    expect(await runNames(adminClient)).toContain('ENCRYPTION_KEY_ROTATION');
+    expect(await runNames(compliance)).not.toContain('ENCRYPTION_KEY_ROTATION');
     expect(run.body.status).toBe('COMPLETED');
     expect(run.body.triggeredBy).toBe(`manual:${admin.user.id}`);
     expect(run.body.summary).toMatchObject({
@@ -418,5 +434,21 @@ describe('key rotation (ENCRYPTION_KEY_ROTATION, /v1/admin/keys)', () => {
     const audits = await ctx.prisma.auditLog.findMany({ where: { action: 'keys.rotation_run' } });
     expect(audits).toHaveLength(3);
     expect(audits.every((a) => a.actorUserId === null)).toBe(true);
+  });
+});
+
+describe('rotation scan cursor', () => {
+  it('starts at a random point, runs to the end, then wraps once up to its start', () => {
+    const start = '80000000-0000-4000-8000-000000000000';
+    const cursor = new WrappingCursor(start);
+    expect(cursor.after).toBe(start);
+    expect(cursor.until).toBeUndefined();
+    expect(cursor.wrap()).toBe(true);
+    expect(cursor.after).toBe(ZERO_UUID);
+    expect(cursor.until).toBe(start);
+    expect(cursor.wrap()).toBe(false);
+    // Rows that keep failing cannot pin every run to the same window.
+    const starts = new Set(Array.from({ length: 5 }, () => new WrappingCursor().after));
+    expect(starts.size).toBe(5);
   });
 });

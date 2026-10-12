@@ -300,6 +300,27 @@ export class RegulatoryGatesService {
           { code, firstApproverId: gate.firstApproverId },
         );
       }
+      // An account whose role was changed by the first approver is not an independent second
+      // person: one ADMIN could otherwise promote an account they control and approve twice.
+      const promotedByFirst = await this.prisma.auditLog.findFirst({
+        where: {
+          action: 'admin.user_role_changed',
+          entityType: 'User',
+          entityId: auth.userId,
+          actorUserId: gate.firstApproverId,
+        },
+        select: { id: true },
+      });
+      if (promotedByFirst) {
+        throw new DomainError(
+          ErrorCode.GATE_SAME_APPROVER,
+          'Your role was granted by the first approver: the second approval needs an independent administrator',
+          HttpStatus.CONFLICT,
+          { code, firstApproverId: gate.firstApproverId },
+        );
+      }
+      // The gate keeps the evidence and note the first approver signed off; the second approver's
+      // own review note and reference are recorded in the event and the audit only.
       return this.transition(auth, req, gate, {
         action: GateEventAction.SECOND_APPROVAL,
         to: 'SATISFIED',
@@ -307,8 +328,6 @@ export class RegulatoryGatesService {
         evidenceRef: input.evidenceRef,
         data: {
           status: 'SATISFIED',
-          notes: input.note,
-          evidenceRef: input.evidenceRef,
           secondApproverId: auth.userId,
           secondApprovedAt: now,
         },

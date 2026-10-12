@@ -44,7 +44,7 @@ OPEN ──START_REVIEW──▶ REVIEWING ──CONFIRM──▶ CONFIRMED ─�
 - Machine à états `riskAlertMachine` (`review-sla.ts`) ; une transition invalide renvoie `409 INVALID_TRANSITION`. Les mises à jour sont conditionnées au statut lu (`updateMany … where status = <lu>`) : deux décisions concurrentes ne peuvent pas aboutir toutes les deux.
 - Toute action exige une note de 3 caractères minimum (`riskAlertActionSchema`).
 - `START_REVIEW` sur une alerte non assignée l'assigne à l'analyste.
-- `CONTEST` rouvre l'alerte avec un **nouveau cycle SLA** (`dueAt = maintenant + SLA`, `slaBreachedAt = null`) ; la décision contestée reste visible dans `resolvedBy*` et l'historique.
+- `CONTEST` rouvre l'alerte avec un **nouveau cycle SLA** (`dueAt = maintenant + SLA`, `slaBreachedAt = null`) et efface la résolution (`resolvedBy*`, `resolvedAt`, `resolutionNote`) : la décision contestée reste dans l'historique des actions. Si une nouvelle détection de structuration aggrave ensuite la sévérité, l'échéance plus courte se calcule depuis la contestation, pas depuis la création.
 - `nextActions` (DTO) : actions permises par la machine à états, plus `ASSIGN`, `ASSIGN_TO_ME` et `UNASSIGN` pour les alertes ouvertes. L'interface n'affiche que ces actions.
 - Notification de la personne concernée après `CONFIRM`, `DISMISS` ou `CONTEST`, **sauf** pour `STRUCTURING` et `SANCTIONS_POTENTIAL_MATCH` (interdiction de tipping-off).
 

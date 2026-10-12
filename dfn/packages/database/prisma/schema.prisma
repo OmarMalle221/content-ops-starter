@@ -45,6 +45,10 @@ model User {
   mfaLastUsedStep     BigInt?
   failedLoginCount    Int        @default(0)
   lockedUntil         DateTime?
+  /// Wrong second-factor codes (TOTP or recovery) since the last success; locks at 5.
+  mfaFailedCount      Int        @default(0)
+  /// Second-factor attempts refused until this instant (per account, independent of the IP).
+  mfaLockedUntil      DateTime?
   lastLoginAt         DateTime?
   securityPreferences Json?
   deletionRequestedAt DateTime?

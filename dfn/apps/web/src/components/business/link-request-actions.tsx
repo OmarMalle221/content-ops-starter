@@ -1,13 +1,16 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, X } from 'lucide-react';
+import { Check, Unlink, X } from 'lucide-react';
 import { Button, Label, Textarea } from '@dfn/ui';
 import { api } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 import { ActionDialog } from '@/components/transactions/action-dialog';
 
-/** Target-side decision on a counterparty link request (server `nextActions`: ACCEPT / DECLINE). */
+/**
+ * Target-side decision on a counterparty link (server `nextActions`): ACCEPT / DECLINE a pending
+ * request, REVOKE an accepted link (consent withdrawn).
+ */
 export function LinkRequestActions({
   organizationId,
   counterpartyId,
@@ -23,7 +26,7 @@ export function LinkRequestActions({
   const router = useRouter();
   const [note, setNote] = useState('');
   const base = `/v1/organizations/${organizationId}/link-requests/${counterpartyId}`;
-  const decide = (decision: 'accept' | 'decline') => async () => {
+  const decide = (decision: 'accept' | 'decline' | 'revoke') => async () => {
     await api(`${base}/${decision}`, { method: 'POST', json: { note: note.trim() || undefined } });
     setNote('');
     router.refresh();
@@ -71,6 +74,22 @@ export function LinkRequestActions({
           variant="destructive"
           confirmLabel={t('counterpartyLinks.decline')}
           onConfirm={decide('decline')}
+        >
+          {noteField}
+        </ActionDialog>
+      ) : null}
+      {nextActions.includes('REVOKE') ? (
+        <ActionDialog
+          trigger={
+            <Button size="sm" variant="outline">
+              <Unlink /> {t('counterpartyLinks.endLink')}
+            </Button>
+          }
+          title={`${t('counterpartyLinks.endLink')} — ${requesterName}`}
+          description={t('counterpartyLinks.endLinkHint')}
+          variant="destructive"
+          confirmLabel={t('counterpartyLinks.endLink')}
+          onConfirm={decide('revoke')}
         >
           {noteField}
         </ActionDialog>

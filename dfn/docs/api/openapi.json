@@ -175,6 +175,42 @@
         "tags": ["auth"]
       }
     },
+    "/v1/auth/mfa/status": {
+      "get": {
+        "operationId": "AuthController_mfaStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/mfa/recovery-codes": {
+      "get": {
+        "operationId": "AuthController_recoveryCodes",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/mfa/recovery-codes/regenerate": {
+      "post": {
+        "operationId": "AuthController_regenerateRecoveryCodes",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
     "/v1/auth/password": {
       "post": {
         "operationId": "AuthController_changePassword",
@@ -203,6 +239,118 @@
       "post": {
         "operationId": "AuthController_revokeOthers",
         "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys": {
+      "get": {
+        "operationId": "PasskeysController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys/registration/options": {
+      "post": {
+        "operationId": "PasskeysController_registrationOptions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys/registration/verify": {
+      "post": {
+        "operationId": "PasskeysController_registrationVerify",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys/authentication/options": {
+      "post": {
+        "operationId": "PasskeysController_authenticationOptions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys/authentication/verify": {
+      "post": {
+        "operationId": "PasskeysController_authenticationVerify",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys/step-up/options": {
+      "post": {
+        "operationId": "PasskeysController_stepUpOptions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/v1/auth/passkeys/{id}": {
+      "patch": {
+        "operationId": "PasskeysController_rename",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["auth"]
+      },
+      "delete": {
+        "operationId": "PasskeysController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -388,7 +536,7 @@
     },
     "/v1/organizations/{id}/counterparties": {
       "get": {
-        "operationId": "OrganizationsController_counterparties",
+        "operationId": "CounterpartiesController_list",
         "parameters": [
           {
             "name": "id",
@@ -407,7 +555,7 @@
         "tags": ["organizations"]
       },
       "post": {
-        "operationId": "OrganizationsController_createCounterparty",
+        "operationId": "CounterpartiesController_create",
         "parameters": [
           {
             "name": "id",
@@ -420,6 +568,172 @@
         ],
         "responses": {
           "201": {
+            "description": ""
+          }
+        },
+        "tags": ["organizations"]
+      }
+    },
+    "/v1/organizations/{id}/counterparties/{counterpartyId}/link/request": {
+      "post": {
+        "operationId": "CounterpartiesController_requestLink",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "counterpartyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["organizations"]
+      }
+    },
+    "/v1/organizations/{id}/counterparties/{counterpartyId}/link/revoke": {
+      "post": {
+        "operationId": "CounterpartiesController_revokeLink",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "counterpartyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["organizations"]
+      }
+    },
+    "/v1/organizations/{id}/link-requests": {
+      "get": {
+        "operationId": "CounterpartiesController_linkRequests",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["organizations"]
+      }
+    },
+    "/v1/organizations/{id}/link-requests/{counterpartyId}/accept": {
+      "post": {
+        "operationId": "CounterpartiesController_accept",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "counterpartyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["organizations"]
+      }
+    },
+    "/v1/organizations/{id}/link-requests/{counterpartyId}/decline": {
+      "post": {
+        "operationId": "CounterpartiesController_decline",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "counterpartyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["organizations"]
+      }
+    },
+    "/v1/organizations/{id}/link-requests/{counterpartyId}/revoke": {
+      "post": {
+        "operationId": "CounterpartiesController_revokeAsTarget",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "counterpartyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": ""
           }
         },
@@ -1352,6 +1666,84 @@
       "get": {
         "operationId": "AdminController_riskAlerts",
         "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/risk-alerts.csv": {
+      "get": {
+        "operationId": "AdminController_riskAlertsCsv",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/risk-alerts/stats": {
+      "get": {
+        "operationId": "AdminController_riskAlertStats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/risk-alerts/assignees": {
+      "get": {
+        "operationId": "AdminController_riskAlertAssignees",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/risk-alerts/{id}": {
+      "get": {
+        "operationId": "AdminController_riskAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/risk-alerts/{id}/assign": {
+      "post": {
+        "operationId": "AdminController_assignRiskAlert",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -2579,6 +2971,138 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/gates": {
+      "get": {
+        "operationId": "GatesController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/gates/providers": {
+      "get": {
+        "operationId": "GatesController_providers",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/gates/{code}": {
+      "get": {
+        "operationId": "GatesController_get",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/gates/{code}/progress": {
+      "post": {
+        "operationId": "GatesController_progress",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/gates/{code}/approve": {
+      "post": {
+        "operationId": "GatesController_approve",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/gates/{code}/revoke": {
+      "post": {
+        "operationId": "GatesController_revoke",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/keys": {
+      "get": {
+        "operationId": "KeysController_status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/keys/rotate": {
+      "post": {
+        "operationId": "KeysController_rotate",
+        "parameters": [],
         "responses": {
           "200": {
             "description": ""

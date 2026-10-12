@@ -248,14 +248,16 @@ pour obtenir son état complet (ne considérez jamais le contenu d’un webhook 
 
 ### En-têtes et signature
 
-| En-tête           | Contenu                                            |
-| ----------------- | -------------------------------------------------- |
-| `Content-Type`    | `application/json`                                 |
-| `X-DFN-Event`     | Type de l’événement                                |
-| `X-DFN-Delivery`  | Identifiant de la livraison (unique par tentative) |
-| `X-DFN-Signature` | `t=<secondes Unix>,v1=<HMAC-SHA256 hexadécimal>`   |
-| `X-DFN-Mode`      | `sandbox`                                          |
-| `User-Agent`      | `DFN-Webhooks/1.0 (sandbox)`                       |
+| En-tête           | Contenu                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `Content-Type`    | `application/json`                                                                  |
+| `X-DFN-Event`     | Type de l’événement                                                                 |
+| `X-DFN-Delivery`  | Identifiant de la livraison, identique pour chaque tentative : clé de déduplication |
+| `X-DFN-Signature` | `t=<secondes Unix>,v1=<HMAC-SHA256 hexadécimal>`                                    |
+| `X-DFN-Mode`      | `sandbox`                                                                           |
+| `User-Agent`      | `DFN-Webhooks/1.0 (sandbox)`                                                        |
+
+**Livraison « au moins une fois »** : une même livraison peut arriver plus d'une fois (relance après un délai dépassé, ou reprise après l'arrêt de la plateforme pendant un envoi). Traitez les événements de façon idempotente en mémorisant `X-DFN-Delivery`. Deux envois **simultanés** d'une même livraison n'ont jamais lieu : chaque tentative réserve la livraison avant l'envoi.
 
 `v1 = HMAC_SHA256(secret, "<t>.<corps brut>")`. Vérifiez la signature **sur le corps brut** (avant tout parsing),
 en comparaison à temps constant, et rejetez les horodatages trop anciens (5 minutes est une tolérance raisonnable).

@@ -1,6 +1,6 @@
 # Modèle de données — DFN (PostgreSQL 16, Prisma 6)
 
-> Source de vérité : `packages/database/prisma/schema.prisma` (51 tables, migrations `20261011024233_init`, `20261011050000_phase3_5_wallet_transfer_business_api_dda` et `20261011150000_ledger_entry_seq`). Conventions : clés UUID, horodatages UTC (`timestamptz`), états explicites (enums), montants `BigInt` en unités mineures + code ISO 4217 (ou `DDA` pour l'unité fictive), suppression logique (`deletedAt`) pour les utilisateurs, organisations, documents et bénéficiaires.
+> Source de vérité : `packages/database/prisma/schema.prisma` (57 tables, migrations `20261011024233_init`, `20261011050000_phase3_5_wallet_transfer_business_api_dda`, `20261011150000_ledger_entry_seq`, `20261012010000_phase6_passkeys_storage_queues_gates`, `20261012020000_transaction_list_indexes`, `20261012030000_mfa_attempt_lockout` et `20261012040000_legacy_links_need_consent`). Conventions : clés UUID, horodatages UTC (`timestamptz`), états explicites (enums), montants `BigInt` en unités mineures + code ISO 4217 (ou `DDA` pour l'unité fictive), suppression logique (`deletedAt`) pour les utilisateurs, organisations, documents et bénéficiaires.
 
 ## Domaines
 
@@ -92,6 +92,18 @@
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DigitalAssetSimulation` | opération simulée (MINT / TRANSFER / REDEEM / RESERVE_ADJUSTMENT / STRESS_TEST) : référence, organisations, montant en unités `DDA`, écriture ledger liée, réserve déclarative, métadonnées `simulated: true` + hypothèse |
 
+### Phase 6 — authentification renforcée, exploitation et gouvernance
+
+| Modèle                                   | Rôle                                                                                                                           | Contraintes / notes                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `WebAuthnCredential`                     | passkey d'un utilisateur : identifiant base64url, clé publique COSE, compteur de signatures, transports, appareil, `revokedAt` | `credentialId` unique ; supprimée à l'anonymisation                       |
+| `AuthChallenge`                          | défi WebAuthn à usage unique (enrôlement, connexion, step-up) lié à l'utilisateur, à la session et à l'usage, expiration 5 min | `challenge` unique ; purgé par `AUTH_CLEANUP`                             |
+| `MfaRecoveryCode`                        | code de secours haché (HMAC), `usedAt` à l'usage                                                                               | 10 par génération ; supprimés à la désactivation MFA et à l'anonymisation |
+| `JobLease`                               | bail d'une tâche planifiée : propriétaire (`INSTANCE_ID`), exécution, battement de cœur, expiration                            | clé primaire `jobName`                                                    |
+| `RegulatoryGate` / `RegulatoryGateEvent` | portes R1–R10 (suivi uniquement), premier et second approbateur, preuves, historique                                           | aucun statut ne fait sortir du mode sandbox                               |
+
+Champs ajoutés : `User.mfaLastUsedStep` (anti-rejeu TOTP), `User.{mfaFailedCount, mfaLockedUntil}` (verrou des codes par compte), `RiskAlert.{assignedToUserId, assignedAt, dueAt, firstActionAt, slaBreachedAt}` (file de revue), `Document.{storageDriver, encryptionKeyId}`, `Counterparty.{linkStatus, linkRequestedOrganizationId, linkRequestedAt, linkDecidedAt, linkDecidedByUserId}` (`linkedOrganizationId` n'est renseigné que pendant `ACCEPTED` ; les liaisons antérieures au consentement sont remises en `PENDING`), `Invoice.taxBps` / `Quote.taxBps`, `MaintenanceRun.{instanceId, heartbeatAt}`, index `Transaction (buyerOrganizationId|sellerOrganizationId, updatedAt)` et `Transaction (updatedAt)` pour les listes.
+
 ## Invariants appliqués par le code
 
 1. Somme des jalons = montant de la transaction (validation à la création) ; somme des lignes = sous-total d'une facture ou d'un devis.
@@ -109,6 +121,7 @@
 - Sessions : purgées après expiration ; journal d'audit conservé 5 ans minimum.
 - Utilisateur supprimé : la demande (`deletionRequestedAt`) est refusée tant que des transactions, organisations ou soldes sont ouverts ; après `ANONYMIZE_AFTER_DAYS`, la tâche `ANONYMIZE_DELETED` remplace e-mail (`deleted-<id>@anonymized.invalid`), nom, téléphone, MFA, mot de passe (aléatoire), préférences et données déclarées KYC, pose `deletedAt` / `anonymizedAt` et révoque les sessions ; **les écritures ledger, événements et journaux d'audit restent immuables** et liés à l'identifiant technique.
 - Clés API révoquées et livraisons webhook : conservées pour la traçabilité, secrets chiffrés jamais réaffichés.
+- Anonymisation (phase 6) : passkeys, codes de secours et défis supprimés ; demandes de lien en attente vers l'espace personnel révoquées.
 
 ## Migrations
 

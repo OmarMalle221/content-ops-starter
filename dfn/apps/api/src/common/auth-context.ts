@@ -29,6 +29,11 @@ export interface AuthContext {
   userAgent?: string;
   /** Set only for API-key authenticated requests; absent for cookie / bearer-session requests. */
   apiCredential?: AuthApiCredential;
+  /**
+   * REQUIRE_STAFF_MFA: a staff account without two-factor authentication acts with USER rights
+   * (`globalRole` is downgraded) until it enables MFA — no staff read or write anywhere.
+   */
+  staffMfaRequired?: boolean;
 }
 
 export function isStaff(auth: AuthContext): boolean {

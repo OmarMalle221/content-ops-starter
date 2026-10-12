@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Counterparty, PrismaTransactionClient } from '@dfn/database';
 import {
@@ -130,7 +130,13 @@ function toLinkRequestDto(row: LinkRequestRow, canDecide: boolean) {
     counterpartyEmail: row.email,
     requestedAt: row.linkRequestedAt,
     decidedAt: row.linkDecidedAt,
-    nextActions: canDecide && row.linkStatus === CounterpartyLinkStatus.PENDING ? ['ACCEPT', 'DECLINE'] : [],
+    nextActions: !canDecide
+      ? []
+      : row.linkStatus === CounterpartyLinkStatus.PENDING
+        ? ['ACCEPT', 'DECLINE']
+        : row.linkStatus === CounterpartyLinkStatus.ACCEPTED
+          ? ['REVOKE']
+          : [],
     sandbox: true as const,
   };
 }
@@ -144,17 +150,48 @@ function toLinkRequestDto(row: LinkRequestRow, canDecide: boolean) {
  * accepts. The response is identical whether or not an account matched. A can revoke a request or a
  * link, and re-request after a decline / revocation once the cooldown has elapsed.
  *
- * Target side (organisation B): OWNER / ADMIN (ORG_LINK_DECIDE) list pending requests and accept or
- * decline them. Support staff can read but never decide on behalf of a tenant.
+ * Target side (organisation B): OWNER / ADMIN (ORG_LINK_DECIDE) list pending requests, accept or
+ * decline them, and can end an accepted link at any time. Support staff can read but never decide
+ * on behalf of a tenant.
  */
 @Injectable()
-export class CounterpartiesService {
+export class CounterpartiesService implements OnModuleDestroy {
+  private readonly logger = new Logger(CounterpartiesService.name);
+  /** Target notifications sent after the response (see `notifyAfterResponse`). */
+  private readonly inFlight = new Set<Promise<void>>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly orgs: OrganizationsService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  async onModuleDestroy() {
+    await this.whenIdle();
+  }
+
+  /** Resolves once every pending target notification has settled (tests, shutdown). */
+  async whenIdle(): Promise<void> {
+    await Promise.allSettled([...this.inFlight]);
+  }
+
+  /**
+   * The target of a link request is notified AFTER the response, never inside it: a matching
+   * account would otherwise cost measurably more (organisation lookup, decision makers, one
+   * notification per recipient) and a notification failure would surface as a 500 on matches only.
+   */
+  private notifyAfterResponse(target: string, requesterOrganizationId: string, counterpartyId: string) {
+    const pending: Promise<void> = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => this.notifyTargetOfRequest(target, requesterOrganizationId, counterpartyId))
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `link request notification failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      })
+      .finally(() => this.inFlight.delete(pending));
+    this.inFlight.add(pending);
+  }
 
   // ───────────────────────────── Requester side ─────────────────────────────
 
@@ -241,6 +278,24 @@ export class CounterpartiesService {
   }
 
   /**
+   * True when the target declined or ended a link with this requester organisation less than the
+   * cooldown ago, on ANY of its client records: a new record must not reopen a decision. Callers
+   * then send nothing, silently — the response stays identical, so it reveals no account.
+   */
+  private async targetCoolingDown(organizationId: string, target: string, now: Date): Promise<boolean> {
+    const recent = await this.prisma.counterparty.findFirst({
+      where: {
+        organizationId,
+        linkRequestedOrganizationId: target,
+        linkStatus: { in: [CounterpartyLinkStatus.DECLINED, CounterpartyLinkStatus.REVOKED] },
+        linkDecidedAt: { gt: new Date(now.getTime() - COUNTERPARTY_LINK_COOLDOWN_HOURS * HOUR_MS) },
+      },
+      select: { id: true },
+    });
+    return recent !== null;
+  }
+
+  /**
    * Per-organisation quota of link requests over a rolling 24 h window. Every ATTEMPT counts (with or
    * without a matching account), so the limit itself cannot be used to enumerate accounts. Serialised
    * per organisation with a transaction-scoped advisory lock.
@@ -308,6 +363,7 @@ export class CounterpartiesService {
       target = await this.eligibleTargetForEmail(input.email, organizationId);
     }
     const now = new Date();
+    if (target && (await this.targetCoolingDown(organizationId, target, now))) target = null;
     const meta = requestMeta(req);
     const outcome = wantsLink
       ? CounterpartyLinkRequestOutcome.SENT_IF_ELIGIBLE
@@ -360,7 +416,7 @@ export class CounterpartiesService {
       }
       return created;
     });
-    if (target) await this.notifyTargetOfRequest(target, organizationId, cp.id);
+    if (target) this.notifyAfterResponse(target, organizationId, cp.id);
     return { ...(await this.dto(cp, access)), linkRequest: outcome };
   }
 
@@ -396,9 +452,10 @@ export class CounterpartiesService {
     if (!cp.email && !input.linkedOrganizationId) {
       throw DomainError.validation('An e-mail address or an organisation is required to request a link');
     }
-    const target = input.linkedOrganizationId
+    let target = input.linkedOrganizationId
       ? await this.explicitTarget(auth, organizationId, input.linkedOrganizationId)
       : await this.eligibleTargetForEmail(cp.email!, organizationId);
+    if (target && (await this.targetCoolingDown(organizationId, target, now))) target = null;
     const meta = requestMeta(req);
     const updated = await this.prisma.$transaction(async (db) => {
       await this.assertRequestQuota(db, organizationId, now);
@@ -450,7 +507,7 @@ export class CounterpartiesService {
       }
       return db.counterparty.findUniqueOrThrow({ where: { id: cp.id } });
     });
-    if (target) await this.notifyTargetOfRequest(target, organizationId, cp.id);
+    if (target) this.notifyAfterResponse(target, organizationId, cp.id);
     return {
       ...(await this.dto(updated, access)),
       linkRequest: CounterpartyLinkRequestOutcome.SENT_IF_ELIGIBLE,
@@ -675,6 +732,84 @@ export class CounterpartiesService {
         data: { organizationId: cp.organizationId, counterpartyId: cp.id },
       });
     }
+    const row = await this.prisma.counterparty.findUniqueOrThrow({
+      where: { id: cp.id },
+      include: { organization: { select: { id: true, name: true, type: true, country: true } } },
+    });
+    return toLinkRequestDto(row, true);
+  }
+
+  /**
+   * Target side: ends an accepted link — consent can be withdrawn by the organisation that gave it.
+   * The requester then sees REVOKED and the re-request cooldown applies.
+   */
+  async revokeAsTarget(
+    auth: AuthContext,
+    organizationId: string,
+    counterpartyId: string,
+    input: DecideCounterpartyLinkInput,
+    req: Request,
+  ) {
+    this.orgs.assertMember(auth, organizationId, Permission.ORG_LINK_DECIDE, 'write');
+    const cp = await this.prisma.counterparty.findFirst({
+      where: {
+        id: counterpartyId,
+        linkedOrganizationId: organizationId,
+        linkStatus: CounterpartyLinkStatus.ACCEPTED,
+      },
+    });
+    if (!cp) throw DomainError.notFound('Link');
+    const now = new Date();
+    const meta = requestMeta(req);
+    await this.prisma.$transaction(async (db) => {
+      const res = await db.counterparty.updateMany({
+        where: {
+          id: cp.id,
+          linkStatus: CounterpartyLinkStatus.ACCEPTED,
+          linkedOrganizationId: organizationId,
+        },
+        data: {
+          linkStatus: CounterpartyLinkStatus.REVOKED,
+          linkedOrganizationId: null,
+          linkRequestedOrganizationId: organizationId,
+          linkDecidedAt: now,
+          linkDecidedByUserId: auth.userId,
+        },
+      });
+      if (res.count === 0) {
+        throw new DomainError(ErrorCode.LINK_NOT_PENDING, 'The link changed meanwhile', HttpStatus.CONFLICT);
+      }
+      for (const [org, metadata] of [
+        [
+          organizationId,
+          { requesterOrganizationId: cp.organizationId, by: 'TARGET', note: input.note ?? null },
+        ],
+        [cp.organizationId, { targetOrganizationId: organizationId, by: 'TARGET' }],
+      ] as const) {
+        await this.audit.log(
+          {
+            actorUserId: auth.userId,
+            organizationId: org,
+            action: 'counterparty.link_revoked',
+            entityType: 'Counterparty',
+            entityId: cp.id,
+            metadata,
+            ...meta,
+          },
+          db,
+        );
+      }
+    });
+    const target = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { name: true },
+    });
+    await this.notifications.notifyMany(await this.decisionMakers(cp.organizationId), {
+      type: 'counterparty.link_revoked',
+      title: `${target?.name ?? 'Votre client'} a mis fin à la liaison`,
+      body: `${target?.name ?? 'Votre client'} a mis fin à la liaison avec la fiche client « ${cp.name} » : vos factures et devis ne lui sont plus visibles ni payables. ${SANDBOX_NOTE}`,
+      data: { organizationId: cp.organizationId, counterpartyId: cp.id },
+    });
     const row = await this.prisma.counterparty.findUniqueOrThrow({
       where: { id: cp.id },
       include: { organization: { select: { id: true, name: true, type: true, country: true } } },

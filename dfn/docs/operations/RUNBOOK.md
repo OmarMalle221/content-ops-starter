@@ -21,26 +21,28 @@ Ordre de démarrage imposé par `docker-compose.yml` : `postgres` et `redis` sai
 
 `docker-compose.yml` ne contient **aucun secret par défaut** : `docker compose` refuse de démarrer tant que les variables obligatoires ne sont pas définies dans `.env` (copie de `.env.example`, jamais versionnée).
 
-| Variable                                 | Obligatoire      | Règle                                                                                                        |
-| ---------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| `POSTGRES_PASSWORD`                      | oui              | `openssl rand -hex 24` (hexadécimal : il est inséré tel quel dans l'URL de connexion)                        |
-| `REDIS_PASSWORD`                         | oui              | `openssl rand -hex 24` (même raison)                                                                         |
-| `SESSION_SECRET`                         | oui              | `openssl rand -hex 32`, unique par environnement ; le changer invalide sessions et codes de récupération MFA |
-| `DOCUMENT_ENCRYPTION_KEY`                | oui              | `openssl rand -hex 32` ; à sauvegarder **hors** des sauvegardes de la base                                   |
-| `ENCRYPTION_KEYRING`                     | recommandé       | trousseau versionné par usage, voir [`KEY_ROTATION.md`](KEY_ROTATION.md)                                     |
-| `DFN_MODE`                               | imposé           | `sandbox` (forcé par la composition ; toute autre valeur empêche le démarrage)                               |
-| `API_PUBLIC_URL`, `WEB_PUBLIC_URL`       | hors poste local | URL publiques réelles de la recette                                                                          |
-| `CORS_ORIGINS`, `WEBAUTHN_ORIGINS`       | hors poste local | origine(s) exacte(s) du web ; la garde CSRF rejette toute autre origine                                      |
-| `WEBAUTHN_RP_ID`                         | hors poste local | domaine du web (sans schéma ni port)                                                                         |
-| `COOKIE_SECURE`                          | hors poste local | `true` derrière TLS                                                                                          |
-| `STORAGE_DRIVER`                         | non (`local`)    | `s3` pour plusieurs hôtes ; alors `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`     |
-| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | profil `s3`      | vérifiés au démarrage du conteneur (MinIO aurait sinon des identifiants par défaut connus)                   |
-| `LOG_LEVEL`                              | non (`info`)     | `debug` interdit en recette partagée                                                                         |
-| `SEED_DEMO_PASSWORD`                     | profil `seed`    | mot de passe des comptes de démonstration ; à changer avant toute recette partagée                           |
+| Variable                                 | Obligatoire      | Règle                                                                                                                                                                                            |
+| ---------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POSTGRES_PASSWORD`                      | oui              | `openssl rand -hex 24` (hexadécimal : il est inséré tel quel dans l'URL de connexion)                                                                                                            |
+| `REDIS_PASSWORD`                         | oui              | `openssl rand -hex 24` (même raison)                                                                                                                                                             |
+| `SESSION_SECRET`                         | oui              | `openssl rand -hex 32`, unique par environnement ; le changer invalide sessions et codes de récupération MFA                                                                                     |
+| `DOCUMENT_ENCRYPTION_KEY`                | oui              | `openssl rand -hex 32` ; à sauvegarder **hors** des sauvegardes de la base                                                                                                                       |
+| `ENCRYPTION_KEYRING`                     | recommandé       | trousseau versionné par usage, voir [`KEY_ROTATION.md`](KEY_ROTATION.md)                                                                                                                         |
+| `DFN_MODE`                               | imposé           | `sandbox` (forcé par la composition ; toute autre valeur empêche le démarrage)                                                                                                                   |
+| `API_PUBLIC_URL`, `WEB_PUBLIC_URL`       | hors poste local | URL publiques réelles de la recette                                                                                                                                                              |
+| `CORS_ORIGINS`, `WEBAUTHN_ORIGINS`       | hors poste local | origine(s) exacte(s) du web ; la garde CSRF rejette toute autre origine                                                                                                                          |
+| `WEBAUTHN_RP_ID`                         | hors poste local | domaine du web (sans schéma ni port)                                                                                                                                                             |
+| `COOKIE_SECURE`                          | hors poste local | `true` derrière TLS                                                                                                                                                                              |
+| `TRUST_PROXY`                            | non              | pairs autorisés à fixer `X-Forwarded-For` (défaut : boucle locale et réseaux privés, c'est-à-dire le proxy `/api` du web). Derrière un proxy public, n'y mettre **que** ce proxy ; jamais `true` |
+| `REQUIRE_STAFF_MFA`                      | avant pilote     | `true` : ADMIN et COMPLIANCE doivent activer la MFA pour utiliser leurs permissions (`403 STAFF_MFA_REQUIRED`) ; laisser `false` uniquement pour les comptes de démonstration                    |
+| `STORAGE_DRIVER`                         | non (`local`)    | `s3` pour plusieurs hôtes ; alors `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`                                                                                         |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | profil `s3`      | vérifiés au démarrage du conteneur (MinIO aurait sinon des identifiants par défaut connus)                                                                                                       |
+| `LOG_LEVEL`                              | non (`info`)     | `debug` interdit en recette partagée                                                                                                                                                             |
+| `SEED_DEMO_PASSWORD`                     | profil `seed`    | mot de passe des comptes de démonstration ; à changer avant toute recette partagée                                                                                                               |
 
 Les valeurs propres aux conteneurs sont fixées par la composition et l'emportent sur `.env` : `NODE_ENV=production`, `DATABASE_URL`, `REDIS_URL`, `JOBS_DRIVER=bullmq`, `RATE_LIMIT_STORE=redis`, `STORAGE_DIR=/data/storage`, `API_PORT=4000`.
 
-Avant toute recette partagée : secrets uniques et stockés dans un coffre, TLS en frontal, `COOKIE_SECURE=true`, origines exactes, comptes de démonstration supprimés ou mots de passe changés, sauvegardes planifiées **et** un exercice de restauration réussi (§6).
+Avant toute recette partagée : secrets uniques et stockés dans un coffre, TLS en frontal, `COOKIE_SECURE=true`, `REQUIRE_STAFF_MFA=true`, `TRUST_PROXY` limité au proxy frontal, origines exactes, comptes de démonstration supprimés ou mots de passe changés, sauvegardes planifiées **et** un exercice de restauration réussi (§6).
 
 ## 3. Déployer la sandbox
 
@@ -54,7 +56,7 @@ bash infra/ops/smoke-api.sh --base-url http://127.0.0.1:4000   # santé, inscrip
 ```
 
 - Web : `http://localhost:3000` (bandeau « Données fictives — Aucun fonds réel » sur chaque page) ; API : `http://localhost:4000/docs`.
-- PostgreSQL et Redis ne sont publiés que sur `127.0.0.1`.
+- PostgreSQL, Redis **et l'API** ne sont publiés que sur `127.0.0.1` : les navigateurs passent par le web (`/api/*`). Pour exposer l'API à des partenaires, placer un proxy TLS devant et le déclarer dans `TRUST_PROXY`.
 - Données de démonstration : `docker compose --profile seed run --rm seed`.
 - Stockage objet : `docker compose --profile s3 up -d --build` avec `STORAGE_DRIVER=s3` et les variables `S3_*` / `MINIO_ROOT_*` dans `.env`. Le volume `storage` reste monté : les documents déjà écrits sur disque restent servis depuis leur pilote d'origine (`Document.storageDriver`).
 - `API_INTERNAL_URL` du web est fixé **à la construction** de l'image (les réécritures `/api/*` de Next sont résolues au build) : reconstruire l'image `web` si l'adresse interne de l'API change.

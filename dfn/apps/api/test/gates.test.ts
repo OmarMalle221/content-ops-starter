@@ -1,5 +1,4 @@
 import { NestFactory } from '@nestjs/core';
-import { authenticator } from 'otplib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { GATES_TRACKING_DISCLAIMER, REGULATORY_GATES } from '@dfn/shared';
 import { buildAppModule } from '../src/app.module';
@@ -17,6 +16,7 @@ import {
   type Client,
   type TestContext,
 } from './helpers/app';
+import { enableMfa } from './helpers/webauthn';
 
 let ctx: TestContext;
 beforeAll(async () => {
@@ -230,6 +230,8 @@ describe('regulatory gates register', () => {
       nextActions: ['REVOKE'],
       trackingOnly: true,
     });
+    // The gate keeps the evidence both approvers saw; the review reference stays in the event.
+    expect(second.body.evidenceRef).toBe(APPROVE_1.evidenceRef);
     expect(second.body.firstApprovedAt).toBeTruthy();
     expect(second.body.secondApprovedAt).toBeTruthy();
     const again = await admin2.post('/v1/admin/gates/R2/approve', APPROVE_2);
@@ -335,14 +337,28 @@ describe('regulatory gates register', () => {
     expect(await ctx.prisma.auditLog.count({ where: { action: 'gate.revoke', entityId: 'R7' } })).toBe(1);
   });
 
+  it('refuses a second approval from an account the first approver promoted', async () => {
+    const { admin1, admin2, ids } = await actors();
+    const puppet = await registerUser(ctx, 'gate-puppet@example.com');
+    const promoted = await admin1.post(`/v1/admin/users/${puppet.user.id}/role`, { globalRole: 'ADMIN' });
+    expect(promoted.status, JSON.stringify(promoted.body)).toBe(201);
+    expect((await admin1.post('/v1/admin/gates/R5/progress', PROGRESS)).status).toBe(200);
+    expect((await admin1.post('/v1/admin/gates/R5/approve', APPROVE_1)).status).toBe(200);
+    const refused = await puppet.client.post('/v1/admin/gates/R5/approve', APPROVE_2);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('GATE_SAME_APPROVER');
+    expect((await ctx.prisma.regulatoryGate.findUniqueOrThrow({ where: { code: 'R5' } })).status).toBe(
+      'PENDING_SECOND_APPROVAL',
+    );
+    // An independent administrator can still give it.
+    const independent = await admin2.post('/v1/admin/gates/R5/approve', APPROVE_2);
+    expect(independent.status).toBe(200);
+    expect(independent.body.secondApprover.id).toBe(ids.admin2);
+  });
+
   it('requires a fresh second factor from an ADMIN who has one (approve and revoke)', async () => {
     const { admin1, admin2 } = await actors();
-    const setup = await admin1.post('/v1/auth/mfa/setup');
-    expect(setup.status, JSON.stringify(setup.body)).toBe(201);
-    const enabled = await admin1.post('/v1/auth/mfa/enable', {
-      code: authenticator.generate(setup.body.secret),
-    });
-    expect(enabled.status, JSON.stringify(enabled.body)).toBe(201);
+    const enabled = { body: await enableMfa(admin1) };
     expect((await admin1.post('/v1/admin/gates/R7/progress', PROGRESS)).status).toBe(200);
 
     const bare = await admin1.post('/v1/admin/gates/R7/approve', APPROVE_1);

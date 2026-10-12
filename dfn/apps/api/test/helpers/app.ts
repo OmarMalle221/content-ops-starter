@@ -79,8 +79,8 @@ export async function resetDatabase(prisma: PrismaService) {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${TABLES.map((t) => `"${t}"`).join(',')} CASCADE`);
 }
 
-export async function bootTestApp(): Promise<TestContext> {
-  const { app } = await createApp();
+export async function bootTestApp(envOverrides: Parameters<typeof createApp>[0] = {}): Promise<TestContext> {
+  const { app } = await createApp(envOverrides);
   await app.init();
   const prisma = app.get(PrismaService);
   return {

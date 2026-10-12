@@ -1264,7 +1264,12 @@ export class TransfersService {
       this.prisma.transfer.count({ where }),
     ]);
     return {
-      ...paginate(items.map(toTransferSummary), total, query.page, query.pageSize),
+      ...paginate(
+        items.map((t) => toTransferSummary(t, { isStaff: isStaff(auth) })),
+        total,
+        query.page,
+        query.pageSize,
+      ),
       simulated: true,
       disclaimer: TRANSFER_DISCLAIMER_FR,
     };
@@ -1313,7 +1318,7 @@ export class TransfersService {
     return {
       ...paginate(
         items.map((t) => ({
-          ...toTransferSummary(t),
+          ...toTransferSummary(t, { isStaff: true }),
           createdBy: t.createdBy
             ? {
                 id: t.createdBy.id,

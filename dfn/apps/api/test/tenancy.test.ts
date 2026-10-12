@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ENV, type Env } from '../src/config/env';
 import {
@@ -5,6 +7,7 @@ import {
   isHostAllowed,
   unsafeDestinationReason,
 } from '../src/modules/api-platform/ssrf';
+import { CounterpartiesService } from '../src/modules/organizations/counterparties.service';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import {
   Client,
@@ -15,6 +18,7 @@ import {
   resetDatabase,
   type TestContext,
 } from './helpers/app';
+import { VEHICLE_TX } from './helpers/protect';
 import { createWalletActors, selfDeposit, type WalletActors } from './helpers/wallet';
 
 /**
@@ -145,6 +149,20 @@ describe('Tenancy — staff are read-only by default', () => {
       const res = await write();
       expect(res.status, `${res.req.method} ${res.req.path} → ${JSON.stringify(res.body)}`).toBe(403);
     }
+    // Protect transactions: staff never cancel on behalf of a party (read-only, no support write).
+    const protect = await a.owner.post('/v1/transactions', VEHICLE_TX);
+    expect(protect.status, JSON.stringify(protect.body)).toBe(201);
+    const admin = await staffClient('admin-cancel-ten@example.com', 'ADMIN');
+    for (const staff of [compliance, admin]) {
+      const cancel = await raw(staff, 'post', `/v1/transactions/${protect.body.id}/cancel`, {
+        reason: 'Annulation par le support',
+      });
+      expect(cancel.status, JSON.stringify(cancel.body)).toBe(403);
+    }
+    expect(
+      (await ctx.prisma.transaction.findUniqueOrThrow({ where: { id: protect.body.id } })).status,
+    ).not.toBe('CANCELLED');
+
     // Nothing changed, no support access was recorded
     const row = await ctx.prisma.invoice.findUniqueOrThrow({ where: { id: inv.body.id } });
     expect(row.status).toBe('SENT');
@@ -244,6 +262,34 @@ describe('Tenancy — staff are read-only by default', () => {
         })
       ).status,
     ).toBe(404);
+
+    // Support never turns staff into a tenant member, nor grants OWNER / ADMIN, nor touches owners.
+    const invite = (email: string, role: string) =>
+      raw(admin, 'post', `/v1/organizations/${biz}/members/invite`, { email, role });
+    expect((await invite('admin-ten@example.com', 'VIEWER')).status).toBe(403);
+    expect((await invite('ADMIN-TEN@example.com', 'MEMBER')).status).toBe(403);
+    await staffClient('compliance-peer-ten@example.com', 'COMPLIANCE');
+    expect((await invite('compliance-peer-ten@example.com', 'VIEWER')).status).toBe(403);
+    expect((await invite('new-colleague-ten@example.com', 'ADMIN')).status).toBe(403);
+    const supportInvite = await invite('new-colleague-ten@example.com', 'MEMBER');
+    expect(supportInvite.status, JSON.stringify(supportInvite.body)).toBe(201);
+    expect(supportInvite.body).toMatchObject({ token: null, acceptUrl: null });
+    const members = (await a.owner.get(`/v1/organizations/${biz}`)).body.members as Array<{
+      id: string;
+      role: string;
+    }>;
+    const owner = members.find((m) => m.role === 'OWNER')!;
+    const other = members.find((m) => m.role !== 'OWNER')!;
+    expect(
+      (await raw(admin, 'patch', `/v1/organizations/${biz}/members/${other.id}`, { role: 'ADMIN' })).status,
+    ).toBe(403);
+    expect(
+      (await raw(admin, 'patch', `/v1/organizations/${biz}/members/${owner.id}`, { role: 'VIEWER' })).status,
+    ).toBe(403);
+    expect((await raw(admin, 'delete', `/v1/organizations/${biz}/members/${owner.id}`)).status).toBe(403);
+    expect(await ctx.prisma.organizationMember.count({ where: { organizationId: biz, role: 'OWNER' } })).toBe(
+      1,
+    );
   });
 
   it('keeps the organisation role of staff users who are real members', async () => {
@@ -326,7 +372,8 @@ describe('Tenancy — counterparty link consent', () => {
     expect(plain.body.link.status).toBe('NONE');
     expect(plain.body.link.nextActions).toEqual([]);
 
-    // Only the target organisation (its OWNER) is notified
+    // Only the target organisation (its OWNER) is notified — after the response
+    await ctx.app.get(CounterpartiesService).whenIdle();
     const notifs = await ctx.prisma.notification.findMany({ where: { type: 'counterparty.link_requested' } });
     expect(notifs.map((n) => n.userId)).toEqual([a.outsiderUser.id]);
     expect(notifs[0]!.title).toBe('Teranga Import-lnk souhaite vous relier comme client');
@@ -469,6 +516,7 @@ describe('Tenancy — counterparty link consent', () => {
       (await a.owner.post(`/v1/organizations/${a.businessOrgId}/counterparties/${cp.body.id}/link/request`))
         .status,
     ).toBe(409);
+    await ctx.app.get(CounterpartiesService).whenIdle();
     expect(
       await ctx.prisma.notification.count({
         where: { userId: a.outsiderUser.id, type: 'counterparty.link_requested' },
@@ -596,6 +644,7 @@ describe('Tenancy — counterparty link consent', () => {
       expect(res.body.code).toBe('RATE_LIMITED');
       expect(res.body.details.limit).toBe(20);
     }
+    await ctx.app.get(CounterpartiesService).whenIdle();
     expect(await ctx.prisma.notification.count({ where: { type: 'counterparty.link_requested' } })).toBe(0);
     // Client records without a link request are not limited; other organisations are not affected
     expect((await a.owner.post(base, { name: 'Comptoir' })).status).toBe(201);
@@ -607,6 +656,87 @@ describe('Tenancy — counterparty link consent', () => {
         })
       ).status,
     ).toBe(201);
+  });
+
+  it('lets the target end a link, keeps a refusal across new client records, and asks consent for legacy links', async () => {
+    const base = `/v1/organizations/${a.businessOrgId}/counterparties`;
+    const target = `/v1/organizations/${a.outsiderOrgId}/link-requests`;
+    const cp = await a.owner.post(base, { name: 'Jean', email: 'wallet-outsider-lnk@example.com' });
+    expect((await a.outsider.post(`${target}/${cp.body.id}/accept`)).status).toBe(200);
+
+    // The target withdraws its consent (server action REVOKE on accepted links).
+    const accepted = await a.outsider.get(`${target}?status=ACCEPTED`);
+    expect(accepted.body.items[0].nextActions).toEqual(['REVOKE']);
+    const ended = await a.outsider.post(`${target}/${cp.body.id}/revoke`, { note: 'Plus client' });
+    expect(ended.status, JSON.stringify(ended.body)).toBe(200);
+    expect(ended.body).toMatchObject({ status: 'REVOKED', nextActions: [] });
+    const row = await ctx.prisma.counterparty.findUniqueOrThrow({ where: { id: cp.body.id } });
+    expect(row).toMatchObject({ linkStatus: 'REVOKED', linkedOrganizationId: null });
+    expect((await a.outsider.post(`${target}/${cp.body.id}/revoke`)).status).toBe(404);
+    expect((await a.viewer.post(`${target}/${cp.body.id}/revoke`)).status).toBe(404);
+    expect(
+      await ctx.prisma.notification.count({
+        where: { userId: a.ownerUser.id, type: 'counterparty.link_revoked' },
+      }),
+    ).toBe(1);
+
+    // A new client record with the same e-mail cannot reopen the decision during the cooldown:
+    // same answer as for any e-mail, nothing sent to the target.
+    const again = await a.owner.post(base, { name: 'Jean bis', email: 'wallet-outsider-lnk@example.com' });
+    expect(again.status).toBe(201);
+    expect(again.body.linkRequest).toBe('SENT_IF_ELIGIBLE');
+    expect(await ctx.prisma.counterparty.findUniqueOrThrow({ where: { id: again.body.id } })).toMatchObject({
+      linkStatus: 'NONE',
+      linkRequestedOrganizationId: null,
+    });
+    await ctx.app.get(CounterpartiesService).whenIdle();
+    expect(
+      await ctx.prisma.notification.count({
+        where: { userId: a.outsiderUser.id, type: 'counterparty.link_requested' },
+      }),
+    ).toBe(1);
+
+    // Links made by e-mail matching before the consent workflow become requests to accept.
+    const legacy = await ctx.prisma.counterparty.create({
+      data: {
+        organizationId: a.businessOrgId,
+        name: 'Ancien client',
+        email: 'wallet-outsider-lnk@example.com',
+        linkStatus: 'ACCEPTED',
+        linkedOrganizationId: a.outsiderOrgId,
+        linkDecidedAt: new Date(),
+      },
+    });
+    const consented = await ctx.prisma.counterparty.create({
+      data: {
+        organizationId: a.businessOrgId,
+        name: 'Client consentant',
+        linkStatus: 'ACCEPTED',
+        linkedOrganizationId: a.outsiderOrgId,
+        linkRequestedOrganizationId: a.outsiderOrgId,
+        linkDecidedAt: new Date(),
+        linkDecidedByUserId: a.outsiderUser.id,
+      },
+    });
+    const sql = readFileSync(
+      join(
+        __dirname,
+        '../../../packages/database/prisma/migrations/20261012040000_legacy_links_need_consent/migration.sql',
+      ),
+      'utf8',
+    );
+    await ctx.prisma.$executeRawUnsafe(sql);
+    expect(await ctx.prisma.counterparty.findUniqueOrThrow({ where: { id: legacy.id } })).toMatchObject({
+      linkStatus: 'PENDING',
+      linkedOrganizationId: null,
+      linkRequestedOrganizationId: a.outsiderOrgId,
+      linkDecidedAt: null,
+    });
+    expect(
+      (await ctx.prisma.counterparty.findUniqueOrThrow({ where: { id: consented.id } })).linkStatus,
+    ).toBe('ACCEPTED');
+    const pending = await a.outsider.get(`${target}?status=PENDING`);
+    expect(pending.body.items.map((i: { counterpartyId: string }) => i.counterpartyId)).toContain(legacy.id);
   });
 });
 

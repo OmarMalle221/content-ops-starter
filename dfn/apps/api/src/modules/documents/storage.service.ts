@@ -75,10 +75,15 @@ export class DocumentStorageService {
     return { storageDriver: store.driver, encryptionKeyId: recordedKeyId(keyId) };
   }
 
-  /** Best-effort removal of a blob (soft delete, failed upload): failures are logged, not thrown. */
-  async remove(ref: { storageKey: string; storageDriver: string }): Promise<boolean> {
+  /**
+   * Best-effort removal of a blob (soft delete, failed upload): failures are logged, not thrown.
+   * With the document id, a leftover key-rotation copy (`rotation-tmp/<id>`) is removed too.
+   */
+  async remove(ref: { id?: string; storageKey: string; storageDriver: string }): Promise<boolean> {
     try {
-      await this.stores.forDriver(ref.storageDriver).delete(ref.storageKey);
+      const store = this.stores.forDriver(ref.storageDriver);
+      await store.delete(ref.storageKey);
+      if (ref.id) await store.delete(rotationTempKey(ref.id)).catch(() => undefined);
       return true;
     } catch (err) {
       this.logger.warn(
@@ -133,7 +138,7 @@ export class DocumentStorageService {
       return { plaintext, keyId, sealed };
     }
     if (missingKey && !decryptFailed) {
-      await this.audit.log({
+      await this.auditFailure({
         actorUserId,
         organizationId: doc.organizationId,
         action: 'document.key_unavailable',
@@ -159,7 +164,7 @@ export class DocumentStorageService {
     keyId: string,
   ): Promise<DomainError> {
     this.logger.error(`document ${doc.id} failed its integrity check (${reason}, key ${keyId})`);
-    await this.audit.log({
+    await this.auditFailure({
       actorUserId,
       organizationId: doc.organizationId,
       action: 'document.integrity_failed',
@@ -173,6 +178,26 @@ export class DocumentStorageService {
       HttpStatus.CONFLICT,
       { documentId: doc.id, reason },
     );
+  }
+
+  /**
+   * Audits a read failure. Failures met by the key-rotation job (no actor) are audited once a day
+   * per document and action — the job retries every interval and its run summary counts them.
+   */
+  private async auditFailure(entry: Parameters<AuditService['log']>[0] & { entityId: string }) {
+    if (!entry.actorUserId) {
+      const recent = await this.prisma.auditLog.findFirst({
+        where: {
+          action: entry.action,
+          entityType: 'Document',
+          entityId: entry.entityId,
+          createdAt: { gt: new Date(Date.now() - 24 * 3600_000) },
+        },
+        select: { id: true },
+      });
+      if (recent) return;
+    }
+    await this.audit.log(entry);
   }
 
   /** Aligns Document.encryptionKeyId with the key that actually sealed the blob (compare-and-set). */
@@ -198,9 +223,10 @@ export class DocumentStorageService {
    *  1. open and verify the current blob (recorded key, then header key);
    *  2. seal the plaintext with the active key, write it under a temporary key and read it back —
    *     it must be byte-identical, decrypt, and hash to Document.sha256;
-   *  3. swap: overwrite the original key (atomic per object on every driver) and verify it;
-   *     on failure the original bytes are written back (the verified temp copy is kept if even
-   *     that fails, so a good copy always exists);
+   *  3. swap: overwrite the original key (atomic per object on every driver) and verify it. On a
+   *     failure the outcome is settled from what storage actually holds (`settleFailedSwap`) —
+   *     the old-key blob is never written back blindly: a concurrent download may already have
+   *     moved the row to the new key id, and a concurrent deletion must not be undone;
    *  4. delete the temporary copy, then record the new key id (compare-and-set on the old one).
    * A crash between 3 and 4 leaves a new blob with the old key id: reads and the next rotation
    * recognise the blob header and only fix the row ("repaired"). Never deletes the only copy.
@@ -208,14 +234,16 @@ export class DocumentStorageService {
   async reseal(doc: StoredDocumentRef): Promise<ResealOutcome> {
     const active = this.ring.activeKeyId(KeyPurpose.DOCUMENTS);
     const store = this.stores.forDriver(doc.storageDriver);
+    const tempKey = rotationTempKey(doc.id);
     const { plaintext, keyId: currentKeyId, sealed: original } = await this.openVerified(doc, null);
     if (currentKeyId === active) {
+      // A copy left by a run that crashed after its swap is no longer needed.
+      await store.delete(tempKey).catch(() => undefined);
       if (recordedKeyId(currentKeyId) === doc.encryptionKeyId) return 'current';
       return (await this.repairKeyId(doc, currentKeyId, null)) ? 'repaired' : 'current';
     }
 
     const { sealed, keyId } = this.ring.sealBuffer(KeyPurpose.DOCUMENTS, plaintext);
-    const tempKey = rotationTempKey(doc.id);
     await store.put(tempKey, sealed, { contentType: 'application/octet-stream' });
     const copy = await store.get(tempKey);
     let verified = copy.equals(sealed);
@@ -231,18 +259,21 @@ export class DocumentStorageService {
       throw await this.integrityFailure(doc, 'ROTATION_VERIFY_FAILED', null, keyId);
     }
 
+    let swapError: unknown = null;
     try {
       await store.put(doc.storageKey, sealed, { contentType: 'application/octet-stream' });
-      if (!(await store.get(doc.storageKey)).equals(sealed)) throw new Error('swap verification failed');
+      if (!(await store.get(doc.storageKey)).equals(sealed))
+        swapError = new Error('swap verification failed');
     } catch (err) {
-      try {
-        await store.put(doc.storageKey, original, { contentType: 'application/octet-stream' });
-        await store.delete(tempKey);
-      } catch {
-        this.logger.error(`document ${doc.id}: rotation swap failed; verified copy kept at ${tempKey}`);
+      swapError = err;
+    }
+    if (swapError) {
+      const settled = await this.settleFailedSwap(doc, tempKey, sealed, original, currentKeyId, keyId);
+      if (settled === 'deleted') return 'current';
+      if (settled !== 'swapped') {
+        if (swapError instanceof DomainError) throw swapError;
+        throw await this.integrityFailure(doc, 'ROTATION_SWAP_FAILED', null, keyId);
       }
-      if (err instanceof DomainError) throw err;
-      throw await this.integrityFailure(doc, 'ROTATION_SWAP_FAILED', null, keyId);
     }
     await store.delete(tempKey).catch(() => undefined);
 
@@ -259,5 +290,51 @@ export class DocumentStorageService {
       if (!row || row.deletedAt) await this.remove(doc);
     }
     return 'rotated';
+  }
+
+  /**
+   * Decides what a failed swap left behind, from storage itself:
+   * - the document was deleted meanwhile → every copy is removed ('deleted');
+   * - the main object holds the new blob (the verification read failed) → 'swapped';
+   * - it still holds the old blob → the temp copy is dropped and the row is moved back to the
+   *   old key id if a concurrent download had already repaired it to the new one ('kept');
+   * - it is missing or unknown → the VERIFIED new blob is written back (never the old one) and
+   *   checked; if even that fails, the temp copy is kept so a good copy exists ('unresolved').
+   */
+  private async settleFailedSwap(
+    doc: StoredDocumentRef,
+    tempKey: string,
+    sealed: Buffer,
+    original: Buffer,
+    oldKeyId: string,
+    newKeyId: string,
+  ): Promise<'deleted' | 'swapped' | 'kept' | 'unresolved'> {
+    const store = this.stores.forDriver(doc.storageDriver);
+    const row = await this.prisma.document.findUnique({
+      where: { id: doc.id },
+      select: { deletedAt: true },
+    });
+    if (!row || row.deletedAt) {
+      await this.remove(doc);
+      return 'deleted';
+    }
+    const current = await store.get(doc.storageKey).catch(() => null);
+    if (current?.equals(sealed)) return 'swapped';
+    if (current?.equals(original)) {
+      await store.delete(tempKey).catch(() => undefined);
+      await this.prisma.document.updateMany({
+        where: { id: doc.id, encryptionKeyId: recordedKeyId(newKeyId) },
+        data: { encryptionKeyId: recordedKeyId(oldKeyId) },
+      });
+      return 'kept';
+    }
+    try {
+      await store.put(doc.storageKey, sealed, { contentType: 'application/octet-stream' });
+      if ((await store.get(doc.storageKey)).equals(sealed)) return 'swapped';
+    } catch {
+      // fall through: the verified copy stays at tempKey
+    }
+    this.logger.error(`document ${doc.id}: rotation swap failed; verified copy kept at ${tempKey}`);
+    return 'unresolved';
   }
 }

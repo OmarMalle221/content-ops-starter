@@ -46,6 +46,9 @@ export const counterpartyLinksPart = definePart(
       declineHint:
         'L’organisation verra que la demande a été refusée et ne pourra la renouveler qu’après 24 h.',
       note: 'Note (facultative)',
+      endLink: 'Mettre fin à la liaison',
+      endLinkHint:
+        'Les factures et devis de cette organisation ne vous seront plus visibles ni payables. Elle pourra vous adresser une nouvelle demande après 24 h.',
       active: 'Liaisons actives',
       activeHint:
         'Organisations dont vous avez accepté la liaison : leurs factures apparaissent dans « Reçues ».',
@@ -101,6 +104,9 @@ export const counterpartyLinksPart = definePart(
       declineHint:
         'The organisation will see that the request was declined and can only renew it after 24 h.',
       note: 'Note (optional)',
+      endLink: 'End the link',
+      endLinkHint:
+        'Invoices and quotes from this organisation will no longer be visible or payable. It can send you a new request after 24 h.',
       active: 'Active links',
       activeHint: 'Organisations whose link you accepted: their invoices appear under “Received”.',
       noActive: 'No active link.',

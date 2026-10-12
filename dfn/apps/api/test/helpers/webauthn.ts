@@ -200,21 +200,42 @@ export function deleteWithBody(ctx: TestContext, client: Client, url: string, bo
   return r.send(body ?? {});
 }
 
-/** Enables TOTP MFA for a signed-in client; returns the secret and the one-time recovery codes. */
-export async function enableMfa(client: Client) {
+/** TOTP time step burnt by the most recent enrolment (the confirmation code is single-use). */
+let lastEnrolmentStep = -1;
+const currentTotpStep = () => Math.floor(Date.now() / 30_000);
+
+/**
+ * Enables TOTP MFA for a signed-in client (code + current password); returns the secret and the
+ * one-time recovery codes. The confirmation code is burnt: `waitForFreshTotpStep` then skips
+ * that step so the next generated code is usable.
+ */
+export async function enableMfa(client: Client, password = PASSWORD) {
   const setup = await client.post('/v1/auth/mfa/setup');
   if (setup.status !== 201) throw new Error(`mfa setup ${setup.status}`);
   const secret = setup.body.secret as string;
-  const enabled = await client.post('/v1/auth/mfa/enable', { code: totp.generate(secret) });
+  await waitForStepTime(3);
+  const step = currentTotpStep();
+  const enabled = await client.post('/v1/auth/mfa/enable', {
+    code: totp.generate(secret),
+    currentPassword: password,
+  });
   if (enabled.status !== 201) throw new Error(`mfa enable ${enabled.status} ${JSON.stringify(enabled.body)}`);
+  lastEnrolmentStep = step;
   return { secret, recoveryCodes: enabled.body.recoveryCodes as string[] };
 }
 
 /**
  * Waits for the next 30-second TOTP step when fewer than `minSeconds` remain in the current one,
- * so a test that uses a code twice is not split across a step boundary.
+ * so a test that uses a code twice is not split across a step boundary. Also skips the step burnt
+ * by the last `enableMfa` (its code was consumed by the enrolment).
  */
 export async function waitForFreshTotpStep(minSeconds = 6) {
+  if (currentTotpStep() <= lastEnrolmentStep) await sleep(totp.timeRemaining() * 1000 + 250);
+  await waitForStepTime(minSeconds);
+}
+
+/** Waits for the next step when fewer than `minSeconds` remain in the current one. */
+async function waitForStepTime(minSeconds: number) {
   const remaining = totp.timeRemaining();
   if (remaining < minSeconds) await sleep(remaining * 1000 + 250);
 }

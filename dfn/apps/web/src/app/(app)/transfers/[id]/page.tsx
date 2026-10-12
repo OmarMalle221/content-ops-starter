@@ -34,7 +34,6 @@ const EVENT_FIELDS = [
   'provider',
   'externalRef',
   'purpose',
-  'riskScore',
   'refunded',
 ] as const;
 
@@ -149,7 +148,6 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
                 <span className="font-medium">{t('xfer.reviewReason')}:</span> {x.reviewReason}
               </>
             ) : null}
-            {typeof x.riskScore === 'number' ? ` · ${t('xfer.riskScore')} ${x.riskScore}` : ''}
           </AlertDescription>
         </Alert>
       ) : null}

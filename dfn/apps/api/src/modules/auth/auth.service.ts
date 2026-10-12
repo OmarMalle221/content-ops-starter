@@ -6,6 +6,7 @@ import {
   ErrorCode,
   type LoginInput,
   type MfaDisableInput,
+  type MfaEnableInput,
   type MfaVerifyInput,
   type RecoveryCodesRegenerateInput,
   type RegisterInput,
@@ -181,20 +182,39 @@ export class AuthService {
   }
 
   /**
-   * Confirms the enrolment with a code of the freshly configured app, enables MFA and returns the
-   * 10 recovery codes — shown once, stored hashed. The confirmation code is checked but not
-   * burnt (ADR-0009): it proves the configuration, it authenticates nothing.
+   * Confirms the enrolment with a code of the freshly configured app and the current password,
+   * enables MFA and returns the 10 recovery codes — shown once, stored hashed (ADR-0009).
+   * - the password is required: a stolen session alone must not attach its own second factor
+   *   (it would lock the owner out and could then register a passkey with that factor);
+   * - the confirmation code is burnt like any other code (no replay as a login proof);
+   * - the account's other sessions are revoked: they were opened without the new factor.
    */
-  async mfaEnable(auth: AuthContext, code: string, req: Request) {
+  async mfaEnable(auth: AuthContext, input: MfaEnableInput, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (user.mfaEnabled) throw DomainError.conflict('MFA is already enabled');
     if (!user.mfaSecretEnc) throw DomainError.validation('Run MFA setup first');
-    await this.mfa.verifyTotp(user.id, code, {
-      consume: false,
+    const passwordOk = await argon2.verify(user.passwordHash, input.currentPassword).catch(() => false);
+    if (!passwordOk) {
+      await this.audit.log({
+        actorUserId: user.id,
+        action: 'auth.mfa_enable_refused',
+        entityType: 'User',
+        entityId: user.id,
+        metadata: { reason: 'password_invalid' },
+        ...requestMeta(req),
+      });
+      throw new DomainError(
+        ErrorCode.STEP_UP_REQUIRED,
+        'Confirm your current password to enable two-factor authentication',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    await this.mfa.verifyTotp(user.id, input.code, {
+      consume: true,
       invalid: () => DomainError.validation('Invalid code'),
     });
     const recoveryCodes = await this.prisma.$transaction(async (db) => {
-      await db.user.update({ where: { id: user.id }, data: { mfaEnabled: true } });
+      await db.user.update({ where: { id: user.id }, data: { mfaEnabled: true, mfaFailedCount: 0 } });
       const codes = await this.recoveryCodes.replaceAll(user.id, db);
       await this.audit.log(
         {
@@ -207,8 +227,21 @@ export class AuthService {
         },
         db,
       );
+      await this.notifications.notify(
+        {
+          userId: user.id,
+          type: 'auth.mfa_enabled',
+          title: 'Double authentification activée',
+          body:
+            'La double authentification a été activée sur votre compte et vos autres sessions ont ' +
+            'été fermées. Si vous n’êtes pas à l’origine de cette opération, contactez le support.',
+          data: {},
+        },
+        db,
+      );
       return codes;
     });
+    await this.sessions.revokeAllForUser(user.id, auth.sessionId);
     await this.sessions.markMfaVerified(auth.sessionId);
     return { enabled: true, recoveryCodes };
   }

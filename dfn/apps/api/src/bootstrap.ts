@@ -9,13 +9,28 @@ import { buildAppModule } from './app.module';
 import { env, type Env } from './config/env';
 import { installBigIntJson } from './common/serialize';
 
+/**
+ * TRUST_PROXY → Express "trust proxy" value: "true"/"false", a hop count ("1"), or a list of
+ * addresses / subnets / Express names ("loopback, uniquelocal").
+ */
+export function parseTrustProxy(raw: string): boolean | number | string[] {
+  const value = raw.trim();
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 export async function createApp(envOverrides: Partial<Record<keyof Env, string>> = {}) {
   installBigIntJson();
   const AppModule = buildAppModule(envOverrides);
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
   const cfg = env();
   app.useLogger(app.get(Logger));
-  app.set('trust proxy', 1);
+  app.set('trust proxy', parseTrustProxy(cfg.TRUST_PROXY));
   app.use(
     helmet({
       contentSecurityPolicy: cfg.NODE_ENV === 'production' ? undefined : false,

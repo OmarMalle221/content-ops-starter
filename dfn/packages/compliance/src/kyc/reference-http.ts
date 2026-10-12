@@ -199,7 +199,9 @@ function httpError(res: Response, text: string): PartnerCallError {
   }
   if (status === 429) {
     const err = new PartnerCallError('RATE_LIMITED', 'Partner rate limit reached', true, 429);
-    const retryAfter = Number(res.headers.get('retry-after'));
+    // A missing or blank header must not read as "retry immediately" (Number(null) === 0).
+    const header = res.headers.get('retry-after');
+    const retryAfter = header !== null && header.trim() !== '' ? Number(header) : Number.NaN;
     if (Number.isFinite(retryAfter) && retryAfter >= 0) {
       Object.assign(err, { retryAfterMs: retryAfter * 1000 });
     }

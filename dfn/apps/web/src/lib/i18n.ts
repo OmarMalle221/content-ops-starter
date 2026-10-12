@@ -389,7 +389,9 @@ const baseFr = {
     mfaEnable: 'Activer',
     mfaDisable: 'Désactiver',
     mfaSetupHint:
-      'Ajoutez ce secret dans votre application d’authentification puis saisissez le code généré.',
+      'Ajoutez ce secret dans votre application d’authentification, saisissez le code généré puis confirmez avec votre mot de passe actuel. Vos autres sessions seront fermées.',
+    mfaCode: 'Code de l’application',
+    mfaPasswordInvalid: 'Mot de passe actuel incorrect : la double authentification n’a pas été activée.',
     sessions: 'Sessions actives',
     revokeOthers: 'Déconnecter les autres sessions',
     identity: 'Vérification d’identité (simulée)',
@@ -853,7 +855,10 @@ const baseEn: typeof baseFr = {
     mfa: 'Two-factor authentication (TOTP)',
     mfaEnable: 'Enable',
     mfaDisable: 'Disable',
-    mfaSetupHint: 'Add this secret to your authenticator app then enter the generated code.',
+    mfaSetupHint:
+      'Add this secret to your authenticator app, enter the generated code and confirm with your current password. Your other sessions will be signed out.',
+    mfaCode: 'Authenticator code',
+    mfaPasswordInvalid: 'Incorrect current password: two-factor authentication was not enabled.',
     sessions: 'Active sessions',
     revokeOthers: 'Sign out other sessions',
     identity: 'Identity verification (simulated)',

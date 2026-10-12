@@ -187,9 +187,13 @@ services:
       S3_BUCKET: ${S3_BUCKET:-dfn-documents}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
+      REQUIRE_STAFF_MFA: ${REQUIRE_STAFF_MFA:-false}
     tmpfs: ['/tmp:size=64m']
     volumes: ['storage:/data/storage']
-    ports: ['${API_HOST_PORT:-4000}:4000']
+    # Loopback only: browsers go through the web app (/api proxy); a public deployment puts a
+    # reverse proxy in front and sets TRUST_PROXY to that proxy (docs/operations/RUNBOOK.md).
+    ports: ['127.0.0.1:${API_HOST_PORT:-4000}:4000']
     depends_on:
       migrate: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }

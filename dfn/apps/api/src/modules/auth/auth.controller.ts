@@ -7,6 +7,7 @@ import {
   loginSchema,
   mfaDisableSchema,
   mfaEnableSchema,
+  type MfaEnableInput,
   mfaVerifySchema,
   recoveryCodesRegenerateSchema,
   registerSchema,
@@ -100,10 +101,10 @@ export class AuthController {
   @Post('mfa/enable')
   mfaEnable(
     @CurrentUser() auth: AuthContext,
-    @Body(zodBody(mfaEnableSchema)) body: { code: string },
+    @Body(zodBody(mfaEnableSchema)) body: MfaEnableInput,
     @Req() req: Request,
   ) {
-    return this.auth.mfaEnable(auth, body.code, req);
+    return this.auth.mfaEnable(auth, body, req);
   }
 
   /** Login MFA step: TOTP code, recovery code, or passkey assertion (STEP_UP challenge). */

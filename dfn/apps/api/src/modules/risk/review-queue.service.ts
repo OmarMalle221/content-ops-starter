@@ -429,8 +429,16 @@ export class ReviewQueueService {
           firstActionAt: alert.firstActionAt ?? now,
           ...(decision ? { resolvedById: auth.userId, resolutionNote: note, resolvedAt: now } : {}),
           ...(autoAssign ? { assignedToUserId: auth.userId, assignedAt: now } : {}),
+          // CONTEST reopens the alert: new SLA cycle, and the previous decision is no longer the
+          // alert's resolution (it stays in the action history).
           ...(action === 'CONTEST'
-            ? { dueAt: computeDueAt(now, alert.severity, this.risk.slaHours), slaBreachedAt: null }
+            ? {
+                dueAt: computeDueAt(now, alert.severity, this.risk.slaHours),
+                slaBreachedAt: null,
+                resolvedById: null,
+                resolvedAt: null,
+                resolutionNote: null,
+              }
             : {}),
         },
       });

@@ -9,6 +9,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ENV, type Env } from '../../config/env';
 import { JobRegistry, type JobResult } from '../jobs/job-registry';
 import { unsafeDestinationReason } from './ssrf';
+import { postWebhook } from './webhook-http';
 
 /** Consecutive failures after which a subscription is switched off automatically. */
 export const AUTO_DISABLE_AFTER_FAILURES = 50;
@@ -17,11 +18,17 @@ const RETRY_BATCH = 200;
 /** Share of a run's budget reserved for stale PENDING deliveries (never attempted). */
 const STALE_PENDING_BATCH = 100;
 /**
- * A delivery still PENDING this long after its creation was never attempted (the process crashed
- * or restarted between the insert and the first POST): WEBHOOK_RETRY attempts it. Far above the
- * longest in-flight first attempt (WEBHOOK_TIMEOUT_MS ≤ 30 s), so a live attempt is never doubled.
+ * A delivery still PENDING and unclaimed this long after its creation was never attempted (the
+ * process crashed or restarted between the insert and the first POST): WEBHOOK_RETRY attempts it.
  */
 export const STALE_PENDING_AFTER_MS = 5 * 60_000;
+/**
+ * Every attempt first claims its row (compare-and-set, `nextAttemptAt` = now + this delay), so two
+ * workers never send the same delivery at the same time. A claim older than this belongs to an
+ * attempt that died in flight (crash, lost result write): the row is attempted again — delivery is
+ * at-least-once and receivers deduplicate on `X-DFN-Delivery`. Far above WEBHOOK_TIMEOUT_MS (≤ 30 s).
+ */
+export const DELIVERY_CLAIM_MS = 5 * 60_000;
 
 export interface WebhookEnvelope {
   id: string;
@@ -153,6 +160,22 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
       include: { subscription: true },
     });
     if (!delivery) throw new Error(`webhook delivery ${deliveryId} not found`);
+    if (delivery.status === 'DELIVERED') return delivery;
+    // Claim the row on the state just read: a concurrent attempt (retry job, manual retry, stale
+    // sweep) that read the same state loses the compare-and-set and does not send anything.
+    const claimed = await this.prisma.webhookDelivery.updateMany({
+      where: {
+        id: delivery.id,
+        status: delivery.status,
+        attempts: delivery.attempts,
+        nextAttemptAt: delivery.nextAttemptAt,
+      },
+      data: { nextAttemptAt: new Date(Date.now() + DELIVERY_CLAIM_MS) },
+    });
+    if (claimed.count !== 1) {
+      this.logger.debug(`delivery ${delivery.id} (${source}) already claimed by another attempt`);
+      return this.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
+    }
     const { subscription } = delivery;
     const rawBody = JSON.stringify(delivery.payload);
     const timestamp = Math.floor(Date.now() / 1000);
@@ -172,30 +195,23 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
       if (unsafe) throw new Error(`Destination refused: ${unsafe}`);
       const secret = openString(this.env, KeyPurpose.WEBHOOKS, subscription.secretEnc);
       signature = signatureHeader(secret, timestamp, rawBody);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.env.WEBHOOK_TIMEOUT_MS);
-      try {
-        const response = await fetch(subscription.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'DFN-Webhooks/1.0 (sandbox)',
-            'X-DFN-Event': delivery.eventType,
-            'X-DFN-Delivery': delivery.id,
-            'X-DFN-Signature': signature,
-            'X-DFN-Mode': 'sandbox',
-          },
-          body: rawBody,
-          redirect: 'manual',
-          signal: controller.signal,
-        });
-        statusCode = response.status;
-        if (statusCode < 200 || statusCode >= 300) error = `HTTP ${statusCode}`;
-        // Drain the body so that the socket is released; the content is irrelevant.
-        await response.arrayBuffer().catch(() => undefined);
-      } finally {
-        clearTimeout(timer);
-      }
+      // The socket's own DNS lookup re-checks every address (DNS rebinding between the check
+      // above and the connection is refused); redirects are never followed.
+      statusCode = await postWebhook(
+        subscription.url,
+        {
+          'Content-Type': 'application/json',
+          'User-Agent': 'DFN-Webhooks/1.0 (sandbox)',
+          'X-DFN-Event': delivery.eventType,
+          'X-DFN-Delivery': delivery.id,
+          'X-DFN-Signature': signature,
+          'X-DFN-Mode': 'sandbox',
+        },
+        rawBody,
+        this.env.WEBHOOK_TIMEOUT_MS,
+        this.env.NODE_ENV !== 'test',
+      );
+      if (statusCode < 200 || statusCode >= 300) error = `HTTP ${statusCode}`;
     } catch (err) {
       error =
         err instanceof Error && err.name === 'AbortError'
@@ -265,8 +281,13 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
       where: {
         status: 'PENDING',
         attempts: 0,
-        createdAt: { lte: new Date(now.getTime() - STALE_PENDING_AFTER_MS) },
         subscription: activeSubscription,
+        OR: [
+          // never claimed: crash between the insert and the first attempt
+          { nextAttemptAt: null, createdAt: { lte: new Date(now.getTime() - STALE_PENDING_AFTER_MS) } },
+          // claimed, but the claim expired: the first attempt died in flight
+          { nextAttemptAt: { lte: now } },
+        ],
       },
       orderBy: { createdAt: 'asc' },
       take: STALE_PENDING_BATCH,

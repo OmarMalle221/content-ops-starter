@@ -147,6 +147,13 @@ export class PasskeysService {
     const transports = (input.response.response.transports ?? info.credential.transports ?? []).slice(0, 10);
     const meta = requestMeta(req);
     const created = await this.prisma.$transaction(async (db) => {
+      // The cap is re-checked under a lock of the user row: parallel ceremonies started while the
+      // account had MAX-1 passkeys must not all succeed.
+      await db.$queryRaw`SELECT id FROM "User" WHERE id = ${auth.userId}::uuid FOR UPDATE`;
+      const active = await db.webAuthnCredential.count({ where: { userId: auth.userId, revokedAt: null } });
+      if (active >= MAX_PASSKEYS_PER_USER) {
+        throw DomainError.conflict(`At most ${MAX_PASSKEYS_PER_USER} passkeys per account`);
+      }
       const row = await db.webAuthnCredential.create({
         data: {
           userId: auth.userId,

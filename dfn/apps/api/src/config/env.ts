@@ -25,6 +25,15 @@ const envSchema = z
       .string()
       .default('false')
       .transform((v) => v === 'true'),
+    /**
+     * Staff (ADMIN, COMPLIANCE) must have two-factor authentication enabled to use any staff
+     * permission: every staff session then went through a second factor (TOTP, recovery code or
+     * passkey). Off by default in the sandbox (seeded staff accounts); required before any pilot.
+     */
+    REQUIRE_STAFF_MFA: z
+      .string()
+      .default('false')
+      .transform((v) => v === 'true'),
     STORAGE_DIR: z.string().default('./storage'),
     MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(100).default(15),
     PAYMENT_PROVIDER: z.string().default('sandbox'),
@@ -81,6 +90,12 @@ const envSchema = z
     WEBAUTHN_ORIGINS: z.string().default('http://localhost:3000'),
     JOBS_DRIVER: z.enum(['inprocess', 'bullmq']).default('inprocess'),
     /** Lease duration of a running job; the runner renews it by heartbeat while the job runs. */
+    /**
+     * Express "trust proxy": which peers may set X-Forwarded-For (rate limits and audit IPs depend
+     * on it). Addresses/subnets ("loopback, uniquelocal"), a hop count ("1") or "false". The
+     * default trusts only private networks, so a client reaching the API directly cannot spoof it.
+     */
+    TRUST_PROXY: z.string().min(1).default('loopback, linklocal, uniquelocal'),
     JOB_LEASE_SECONDS: z.coerce.number().int().min(15).max(3600).default(120),
     RATE_LIMIT_STORE: z.enum(['memory', 'redis']).default('memory'),
     /** Optional comma-separated allowlist of webhook destination hosts (exact or *.suffix). */

@@ -139,6 +139,12 @@ describe('HttpReferenceKycProvider — request contract', () => {
       .map((r) => r.headers['idempotency-key']);
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
+    // …but each verification attempt submits its own check: never answered from a stale cache.
+    const checkKeys = partner.requests
+      .filter((r) => r.path.endsWith('/checks'))
+      .map((r) => r.headers['idempotency-key']);
+    expect(checkKeys).toHaveLength(2);
+    expect(checkKeys[0]).not.toBe(checkKeys[1]);
   });
 
   it('maps a provider APPROVED decision to PENDING + manual review (never a pass)', async () => {
@@ -231,6 +237,15 @@ describe('HttpReferenceKycProvider — errors, timeouts and retries', () => {
     );
     await provider.startIdentityCheck(PERSON);
     expect(delays).toEqual([1_500]);
+  });
+
+  it('backs off on a 429 without Retry-After (never an immediate retry)', async () => {
+    const { provider, delays } = await kycProvider((req, i) =>
+      i === 0 ? { status: 429, body: {} } : kycHandler('PENDING')(req, i),
+    );
+    await provider.startIdentityCheck(PERSON);
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBeGreaterThan(0);
   });
 
   it('times out slow partners and retries the idempotent call', async () => {
@@ -392,6 +407,18 @@ describe('HttpReferenceSanctionsProvider', () => {
       partner,
     };
   }
+
+  it('re-screens the same person with a new idempotency key (current lists, not a cached answer)', async () => {
+    const { provider, partner } = await sanctions(() => ({
+      status: 200,
+      body: { screeningId: 'scr_1', status: 'CLEAR', matches: [] },
+    }));
+    await provider.screen({ fullName: 'Awa Diop', country: 'SN' });
+    await provider.screen({ fullName: 'Awa Diop', country: 'SN' });
+    const keys = partner.requests.map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
 
   it('posts the screening and maps a clear result', async () => {
     const { provider, partner } = await sanctions(() => ({

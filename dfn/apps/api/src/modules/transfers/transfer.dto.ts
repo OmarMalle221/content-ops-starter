@@ -113,15 +113,27 @@ function reviewReasonFor(transfer: Transfer, viewer: TransferViewer): string | n
 
 function eventPayloadFor(event: TransferEvent, viewer: TransferViewer): unknown {
   const payload = event.payload;
-  if (viewer.isStaff || event.type !== TransferEventType.REVIEW_REQUIRED) return payload;
+  if (viewer.isStaff) return payload;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  // The risk score is staff-only on every event: it would let a customer probe confidential
+  // thresholds (structuring, velocity) even when the transfer goes through.
   const redacted = Object.fromEntries(
-    Object.entries(payload).filter(([key]) => key !== 'signals' && key !== 'reason'),
+    Object.entries(payload).filter(
+      ([key]) =>
+        key !== 'riskScore' &&
+        (event.type !== TransferEventType.REVIEW_REQUIRED || (key !== 'signals' && key !== 'reason')),
+    ),
   );
-  return { ...redacted, reason: MEMBER_REVIEW_REASON };
+  return event.type === TransferEventType.REVIEW_REQUIRED
+    ? { ...redacted, reason: MEMBER_REVIEW_REASON }
+    : redacted;
 }
 
-export function toTransferSummary(transfer: TransferWithRelations) {
+/** `riskScore` only for staff (`isStaff`): members never see risk scoring (no threshold probing). */
+export function toTransferSummary(
+  transfer: TransferWithRelations,
+  viewer: Pick<TransferViewer, 'isStaff'> = { isStaff: false },
+) {
   const src = transfer.sourceCurrency;
   const dst = transfer.destinationCurrency;
   const beneficiary = (transfer.beneficiary ?? {}) as Record<string, unknown>;
@@ -143,7 +155,7 @@ export function toTransferSummary(transfer: TransferWithRelations) {
     totalDebit: moneyDto(transfer.sourceAmountMinor + transfer.feeMinor, src),
     destination: moneyDto(transfer.destinationAmountMinor, dst),
     beneficiaryName: typeof beneficiary.name === 'string' ? beneficiary.name : null,
-    riskScore: transfer.riskScore,
+    riskScore: viewer.isStaff ? transfer.riskScore : null,
     quoteExpiresAt: transfer.quote?.expiresAt ?? null,
     createdAt: transfer.createdAt,
     updatedAt: transfer.updatedAt,
@@ -157,7 +169,7 @@ export function toTransferDto(transfer: TransferWithRelations, viewer: TransferV
   const dst = transfer.destinationCurrency;
   const meta = metadataOf(transfer);
   return {
-    ...toTransferSummary(transfer),
+    ...toTransferSummary(transfer, viewer),
     createdBy: transfer.createdBy
       ? {
           id: transfer.createdBy.id,

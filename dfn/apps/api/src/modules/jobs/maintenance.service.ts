@@ -110,6 +110,7 @@ export class MaintenanceService {
       );
     }
     const runId = randomUUID();
+    const leaseRequestedAt = Date.now();
     const acquired = await this.leases.acquire(jobName, runId);
     if (!acquired) {
       const holder = await this.leases.get(jobName).catch(() => null);
@@ -133,7 +134,7 @@ export class MaintenanceService {
     this.logger.log(
       `job ${jobName} started (run ${run.id}, triggered by ${triggeredBy}, instance ${this.instanceId})`,
     );
-    return this.execute(run, handler);
+    return this.execute(run, handler, leaseRequestedAt);
   }
 
   /**
@@ -157,34 +158,48 @@ export class MaintenanceService {
     }
   }
 
-  private async execute(run: MaintenanceRun, handler: JobHandler): Promise<MaintenanceRun> {
+  private async execute(
+    run: MaintenanceRun,
+    handler: JobHandler,
+    leaseRequestedAt: number,
+  ): Promise<MaintenanceRun> {
     const { jobName } = run;
     const controller = new AbortController();
     const leaseMs = this.leases.leaseSeconds * 1000;
-    let lastRenewal = Date.now();
+    // The database lease expires `leaseMs` after a renewal was EXECUTED; this replica only knows
+    // when it SENT the renewal, which is earlier: the local deadline (send time + lease - margin)
+    // therefore always falls before the real expiry, whether renewals fail, hang or never settle.
+    const marginMs = Math.max(500, Math.floor(leaseMs / 10));
     let renewing = false;
     let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
 
     const lose = (message: string) => {
       if (settled || controller.signal.aborted) return;
       this.logger.error(`job ${jobName} (run ${run.id}): ${message} — aborting`);
       controller.abort(new LeaseLostError(message));
     };
+    const armDeadline = (sentAt: number) => {
+      clearTimeout(deadline);
+      deadline = setTimeout(
+        () => lose(`${LEASE_LOST}: lease not renewed within ${this.leases.leaseSeconds}s`),
+        Math.max(0, sentAt + leaseMs - marginMs - Date.now()),
+      );
+      deadline.unref?.();
+    };
+    armDeadline(leaseRequestedAt);
     const heartbeat = setInterval(() => {
       if (renewing || settled || controller.signal.aborted) return;
       renewing = true;
+      const sentAt = Date.now();
       this.heartbeat(run)
         .then((renewed) => {
-          if (renewed) lastRenewal = Date.now();
+          if (renewed) armDeadline(sentAt);
           else lose(`${LEASE_LOST}: the lease of ${jobName} was taken over by another instance`);
         })
         .catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
-          if (Date.now() - lastRenewal >= leaseMs) {
-            lose(`${LEASE_LOST}: lease could not be renewed for ${this.leases.leaseSeconds}s (${reason})`);
-          } else {
-            this.logger.warn(`job ${jobName} (run ${run.id}): heartbeat failed, will retry: ${reason}`);
-          }
+          this.logger.warn(`job ${jobName} (run ${run.id}): heartbeat failed, will retry: ${reason}`);
         })
         .finally(() => {
           renewing = false;
@@ -205,6 +220,7 @@ export class MaintenanceService {
       const result = await Promise.race([execution, aborted]);
       settled = true;
       clearInterval(heartbeat);
+      clearTimeout(deadline);
       return await this.finish(run.id, {
         status: 'COMPLETED',
         summary: sanitizeSummary(result?.summary),
@@ -212,12 +228,14 @@ export class MaintenanceService {
     } catch (err) {
       settled = true;
       clearInterval(heartbeat);
+      clearTimeout(deadline);
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`job ${jobName} failed (run ${run.id}): ${message}`);
       return await this.finish(run.id, { status: 'FAILED', error: message.slice(0, 2000) });
     } finally {
       settled = true;
       clearInterval(heartbeat);
+      clearTimeout(deadline);
       await this.leases.release(jobName, run.id).catch((err: unknown) => {
         // The lease simply expires after JOB_LEASE_SECONDS if it cannot be deleted now.
         this.logger.warn(
@@ -307,8 +325,13 @@ export class MaintenanceService {
     };
   }
 
-  async listRuns(jobName: MaintenanceJobName | undefined, page: number, pageSize: number) {
-    const where = jobName ? { jobName } : {};
+  async listRuns(
+    jobName: MaintenanceJobName | undefined,
+    page: number,
+    pageSize: number,
+    excludeJobs: MaintenanceJobName[] = [],
+  ) {
+    const where = jobName ? { jobName } : excludeJobs.length ? { jobName: { notIn: excludeJobs } } : {};
     const [items, total] = await Promise.all([
       this.prisma.maintenanceRun.findMany({
         where,

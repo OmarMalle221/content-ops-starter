@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   PartnerCallError,
   ReferenceHttpClient,
@@ -214,7 +215,9 @@ export class HttpReferenceKycProvider implements KycProvider {
       await this.http.post(
         `/v1/applicants/${encodeURIComponent(applicantId)}/checks`,
         check,
-        idempotencyKeyFor(`${operation}-check`, { applicantId, check }),
+        // One key per verification attempt (reused by the retries of this call only): a later
+        // re-verification of the same applicant must reach the provider, not its cached answer.
+        idempotencyKeyFor(`${operation}-check`, { applicantId, check, attempt: randomUUID() }),
       ),
       'check',
     );
@@ -255,7 +258,13 @@ export class HttpReferenceSanctionsProvider implements SanctionsProvider {
       ...(input.dateOfBirth ? { dateOfBirth: input.dateOfBirth } : {}),
     };
     const body = asObject(
-      await this.http.post('/v1/screenings', payload, idempotencyKeyFor('sanctions-screening', payload)),
+      // One key per screening (reused by the retries of this call only): re-screening the same
+      // person later must be screened against the current lists, not answered from a cache.
+      await this.http.post(
+        '/v1/screenings',
+        payload,
+        idempotencyKeyFor('sanctions-screening', { ...payload, screeningId: randomUUID() }),
+      ),
       'screening',
     );
     const status = body.status;

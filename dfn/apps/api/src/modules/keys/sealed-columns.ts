@@ -81,11 +81,14 @@ export async function pendingRows(
   activeKeyId: string,
   afterId: string,
   take: number,
+  /** Inclusive upper bound of the id range (second half of a wrapped scan). */
+  untilId?: string,
 ): Promise<Array<{ id: string; value: string }>> {
   const { table, column } = identifiers(spec);
+  const upper = untilId ? Prisma.sql`AND id <= ${untilId}::uuid` : Prisma.empty;
   return db.$queryRaw<Array<{ id: string; value: string }>>`
     SELECT id::text AS "id", ${column} AS "value" FROM ${table}
-    WHERE ${column} IS NOT NULL AND ${needsRotation(spec, activeKeyId)} AND id > ${afterId}::uuid
+    WHERE ${column} IS NOT NULL AND ${needsRotation(spec, activeKeyId)} AND id > ${afterId}::uuid ${upper}
     ORDER BY id
     LIMIT ${take}::int`;
 }

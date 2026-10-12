@@ -73,7 +73,14 @@ export class RiskService {
     const evaluation = this.engine.evaluate(enriched);
     for (const signal of evaluation.signals) {
       if (signal.ruleCode === STRUCTURING_RULE_CODE) {
-        await this.recordStructuring(enriched, signal, now, db);
+        try {
+          await this.recordStructuring(enriched, signal, now, db);
+        } catch (err) {
+          // Like the fact collection above: the queue entry must never break the operation.
+          this.logger.warn(
+            `risk: structuring alert not recorded for ${facts.event}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       } else {
         await this.createAlert(facts, signal, now, db);
       }
@@ -157,7 +164,14 @@ export class RiskService {
       });
       const escalate = severityAbove(signal.severity, existing.severity);
       const currentDue = existing.dueAt ?? this.slaDueAt(existing.severity, existing.createdAt);
-      const escalatedDue = this.slaDueAt(signal.severity, existing.createdAt);
+      // The SLA cycle restarts when a decision is contested: escalation counts from that restart,
+      // not from the creation (a reopened alert must not become overdue at once).
+      const contested = await tx.riskAlertAction.findFirst({
+        where: { alertId: existing.id, action: 'CONTEST' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+      const escalatedDue = this.slaDueAt(signal.severity, contested?.createdAt ?? existing.createdAt);
       // The original explanation stays as detected; repeated detections are appended (bounded).
       await tx.riskAlert.update({
         where: { id: existing.id },

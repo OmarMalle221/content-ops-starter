@@ -304,6 +304,8 @@ describe('assignment and decisions', () => {
     expect(contested.body.slaBreachedAt).toBeNull();
     expect(new Date(contested.body.dueAt).getTime()).toBeGreaterThanOrEqual(before + 72 * HOUR - 1000);
     expect(contested.body.overdue).toBe(false);
+    // The contested decision is no longer the alert's resolution (it stays in the history).
+    expect(contested.body).toMatchObject({ resolvedBy: null, resolvedAt: null, resolutionNote: null });
 
     // No tipping-off: decisions on a STRUCTURING alert are not notified to the person concerned.
     const n0 = await ctx.prisma.notification.count({

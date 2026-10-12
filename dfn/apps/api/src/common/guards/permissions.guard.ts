@@ -1,6 +1,6 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, HttpStatus, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { globalRoleHas, type Permission } from '@dfn/shared';
+import { ErrorCode, globalRoleHas, type Permission } from '@dfn/shared';
 import { DomainError } from '../domain-error';
 import { PERMISSIONS_KEY } from '../decorators/require-permission.decorator';
 import type { AuthContext } from '../auth-context';
@@ -18,7 +18,15 @@ export class PermissionsGuard implements CanActivate {
     const auth = context.switchToHttp().getRequest().auth as AuthContext | undefined;
     if (!auth) throw DomainError.forbidden();
     const ok = required.every((p) => globalRoleHas(auth.globalRole, p));
-    if (!ok) throw DomainError.forbidden('Insufficient privileges');
-    return true;
+    if (ok) return true;
+    // REQUIRE_STAFF_MFA: the session resolved a staff account without MFA to USER rights.
+    if (auth.staffMfaRequired) {
+      throw new DomainError(
+        ErrorCode.STAFF_MFA_REQUIRED,
+        'Enable two-factor authentication to use staff permissions',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    throw DomainError.forbidden('Insufficient privileges');
   }
 }

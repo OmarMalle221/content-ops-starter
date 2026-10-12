@@ -662,24 +662,34 @@ export class InvoicesService implements OnModuleInit {
       );
       return { ...applied, ledgerTransactionId: posted.id };
     });
-    await this.notifications.notify({
-      userId: auth.userId,
-      type: 'invoice.wallet_payment_sent',
-      title: `Paiement fictif envoyé — ${invoice.number}`,
-      body: `${minorToDecimalString(amountMinor, ccy)} ${ccy} fictifs ont été débités du portefeuille ${payerMembership.organizationName} pour la facture ${invoice.number}. ${BUSINESS_DISCLAIMER_FR}.`,
-      data: { invoiceId: id, paymentId, ledgerTransactionId: result.ledgerTransactionId },
-    });
-    await this.afterPayment(
-      invoice,
-      result,
-      {
-        id: paymentId,
-        amountMinor,
-        method: 'WALLET_SIMULATED',
-        ledgerTransactionId: result.ledgerTransactionId,
-      },
-      auth.userId,
-    );
+    // The payment is committed: a notification failure is logged, never returned as an error
+    // (the payer would retry and book a second payment).
+    try {
+      await this.notifications.notify({
+        userId: auth.userId,
+        type: 'invoice.wallet_payment_sent',
+        title: `Paiement fictif envoyé — ${invoice.number}`,
+        body: `${minorToDecimalString(amountMinor, ccy)} ${ccy} fictifs ont été débités du portefeuille ${payerMembership.organizationName} pour la facture ${invoice.number}. ${BUSINESS_DISCLAIMER_FR}.`,
+        data: { invoiceId: id, paymentId, ledgerTransactionId: result.ledgerTransactionId },
+      });
+    } catch (err) {
+      this.logger.error(`payer notification after wallet payment ${paymentId} failed: ${String(err)}`);
+    }
+    try {
+      await this.afterPayment(
+        invoice,
+        result,
+        {
+          id: paymentId,
+          amountMinor,
+          method: 'WALLET_SIMULATED',
+          ledgerTransactionId: result.ledgerTransactionId,
+        },
+        auth.userId,
+      );
+    } catch (err) {
+      this.logger.error(`notifications after wallet payment ${paymentId} failed: ${String(err)}`);
+    }
     // Post-commit AML evaluation (structuring across wallet payments). The payment is already
     // booked: an evaluation failure is logged, never turned into an error for the payer.
     try {

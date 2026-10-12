@@ -711,7 +711,8 @@ export class TransactionsService {
 
   async cancel(auth: AuthContext, id: string, reason: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER', 'SELLER', 'STAFF');
+    // Only the parties cancel: staff are read-only on Protect transactions (no support write).
+    this.access.assertRole(role, 'BUYER', 'SELLER');
     if (!CANCELLABLE_TRANSACTION_STATES.includes(tx.status)) {
       throw DomainError.invalidTransition(
         `A ${tx.status} transaction cannot be cancelled; open a dispute instead`,

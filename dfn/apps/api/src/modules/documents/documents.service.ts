@@ -1,13 +1,7 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { randomUUID } from 'node:crypto';
-import {
-  globalRoleHas,
-  ErrorCode,
-  Permission,
-  TransactionEventType,
-  type DocumentMetadataInput,
-} from '@dfn/shared';
+import { ErrorCode, Permission, TransactionEventType, type DocumentMetadataInput } from '@dfn/shared';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { sha256Hex } from '../../common/crypto';
@@ -300,14 +294,13 @@ export class DocumentsService {
 
   async softDelete(auth: AuthContext, id: string, req: Request) {
     const doc = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
-    if (!doc) throw DomainError.notFound('Document');
-    // The uploader may delete their own document; staff need the support-write permission (ADMIN):
-    // reading tenant data never implies the right to destroy it.
-    if (
-      doc.uploadedByUserId !== auth.userId &&
-      !globalRoleHas(auth.globalRole, Permission.ADMIN_SUPPORT_WRITE)
-    ) {
-      throw DomainError.forbidden();
+    // Someone who cannot see the document gets the same 404 as for an unknown id (no oracle).
+    if (!doc || !(await this.canAccess(auth, doc))) throw DomainError.notFound('Document');
+    // The uploader may delete their own document. Anyone else needs the support-write permission
+    // (ADMIN) AND a support reason, audited as `support.write` before the deletion: reading tenant
+    // data never implies the right to destroy it.
+    if (doc.uploadedByUserId !== auth.userId) {
+      await this.organizations.authorizeSupportAction(auth, doc.organizationId, 'document:delete', req);
     }
     const used = await this.prisma.evidence.count({ where: { documentId: id } });
     if (used > 0) throw DomainError.conflict('Document is attached as evidence and cannot be deleted');

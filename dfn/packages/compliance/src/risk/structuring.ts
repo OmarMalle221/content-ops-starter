@@ -64,16 +64,20 @@ export function structuringThresholdFor(spec: string, currencyCode: string): str
   return fallback;
 }
 
-/** True when every entry of a STRUCTURING_THRESHOLD specification is well formed. */
+/**
+ * True when every entry of a STRUCTURING_THRESHOLD specification is well formed. Entries are
+ * comma-separated, so amounts use a dot as decimal separator, and the optional bare default must
+ * come FIRST: `CAD:9000,50` (a decimal comma typed by mistake) is refused instead of silently
+ * defining a default threshold of 50 for every other currency.
+ */
 export function isValidStructuringThresholdSpec(spec: string): boolean {
   const entries = spec.split(',').map((e) => e.trim());
   if (!entries.length || entries.some((e) => !e)) return false;
-  let defaults = 0;
-  for (const entry of entries) {
-    if (/^\d{1,13}([.,]\d{1,2})?$/.test(entry)) defaults++;
-    else if (!/^[A-Z]{3}:\d{1,13}([.,]\d{1,2})?$/.test(entry)) return false;
-  }
-  return defaults <= 1;
+  return entries.every((entry, index) =>
+    index === 0 && /^\d{1,13}(\.\d{1,2})?$/.test(entry)
+      ? true
+      : /^[A-Z]{3}:\d{1,13}(\.\d{1,2})?$/.test(entry),
+  );
 }
 
 export function structuringThresholdMinor(threshold: string, currencyCode: string): bigint {

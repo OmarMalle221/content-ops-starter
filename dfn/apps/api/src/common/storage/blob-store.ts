@@ -98,6 +98,13 @@ export function assertValidStorageKey(key: unknown): asserts key is string {
   }
 }
 
+/**
+ * Hard ceiling of an upload (the multer limit and the maximum of MAX_UPLOAD_MB). Stores cap READS
+ * with it — not with the current MAX_UPLOAD_MB — so lowering the upload limit never makes older,
+ * larger documents unreadable or impossible to rotate.
+ */
+export const MAX_UPLOAD_HARD_MB = 100;
+
 /** Upper bound of a sealed document blob for a given MAX_UPLOAD_MB. */
 export function maxSealedBytes(maxUploadMb: number): number {
   return maxUploadMb * 1024 * 1024 + SEALED_OVERHEAD_BYTES;

@@ -47,6 +47,20 @@ Les routes `/v1/admin/*` ne sont pas concernées (elles relèvent de `Permission
 Le **consentement** d'une liaison (`ORG_LINK_DECIDE`) n'est jamais délégable au support : il appartient au
 tenant.
 
+Garde-fous ajoutés après la revue adversariale de la phase 6 :
+
+- **Membres** : une écriture de support (`via: 'STAFF_SUPPORT'`) n'invite ni son auteur ni un autre compte du
+  personnel, n'accorde jamais les rôles `OWNER` / `ADMIN` (seulement `MEMBER` / `VIEWER`), ne modifie ni ne
+  retire un propriétaire, et la réponse d'une invitation de support ne contient pas le lien (seul l'invité le
+  reçoit). Sans cela, un ADMIN pouvait devenir membre de plein droit d'un tenant et déplacer de l'argent.
+- **Transactions Protect** : seules les parties les annulent ; le personnel n'a aucune écriture.
+- **Documents** : supprimer le document d'un autre utilisateur exige `ADMIN_SUPPORT_WRITE`, le motif
+  `X-Support-Reason` et l'audit `support.write` (permission `document:delete`), même pour un ADMIN membre ;
+  un appelant qui ne voit pas le document reçoit `404`.
+- **`REQUIRE_STAFF_MFA=true`** : un compte du personnel sans MFA est résolu avec les droits `USER` sur
+  **tous** les chemins (lectures de tenants, écritures de support, routes `/v1/admin/*` qui répondent
+  `403 STAFF_MFA_REQUIRED`).
+
 Côté interface, les `nextActions` d'un document vu par le personnel non membre se limitent à
 `VIEW_DOCUMENT`, et l'espace Entreprise (`resolveWorkspace`) ne donne plus de droits implicites au
 personnel : seul le rôle réel dans l'organisation compte.
@@ -66,14 +80,17 @@ NONE ─────────────────────────
   │ (aucun compte : NONE + linkRequestedAt)              ▼                     ▼
   │                                                  ACCEPTED              DECLINED
   │                                                      │ A révoque            │
-  └──────────── A retire la demande ─────────────▶ REVOKED ◀────────────────────┘ (nouvelle demande
+  └──── A retire la demande, A ou B met fin ────▶ REVOKED ◀────────────────────┘ (nouvelle demande
                                                       │                              après 24 h)
                                                       └── nouvelle demande après 24 h ──▶ PENDING / NONE
 ```
 
 Invariant : `linkedOrganizationId` n'est renseigné **que** dans l'état `ACCEPTED`
-(`linkRequestedOrganizationId` conserve la cible de la demande). Les liaisons antérieures à la phase 6 ont
-été migrées en `ACCEPTED`.
+(`linkRequestedOrganizationId` conserve la cible de la demande). Les liaisons antérieures à la phase 6
+avaient été posées par simple correspondance d'e-mail, sans accord de la cible : la migration
+`20261012040000_legacy_links_need_consent` les remet en `PENDING` (toute liaison `ACCEPTED` sans décideur
+enregistré), la cible doit donc les accepter. Les liaisons acceptées par le flux de consentement ne sont pas
+touchées.
 
 ### Aucune énumération des comptes
 
@@ -88,6 +105,11 @@ Invariant : `linkedOrganizationId` n'est renseigné **que** dans l'état `ACCEPT
   (journal visible du seul personnel).
 - Les états `DECLINED` / `ACCEPTED` sont visibles du demandeur : ils résultent d'une décision explicite de la
   cible.
+- Le délai de 24 h après un refus ou une fin de liaison vaut pour **le couple demandeur / cible**, quelle
+  que soit la fiche : créer une nouvelle fiche avec le même e-mail ne rouvre pas la décision. La demande
+  n'est alors simplement pas envoyée, avec la même réponse que pour toute autre adresse.
+- La notification de la cible part **après** la réponse : le temps de réponse ne dépend presque plus de
+  l'existence d'un compte, et une panne de notification ne produit plus d'erreur sur ce seul cas.
 
 ### Points d'API
 
@@ -99,6 +121,7 @@ Invariant : `linkedOrganizationId` n'est renseigné **que** dans l'état `ACCEPT
 | Demandeur | `POST /v1/organizations/:id/counterparties/:cpId/link/revoke`                | `TRANSACTION_CREATE` (support possible) |
 | Cible     | `GET /v1/organizations/:id/link-requests?status=PENDING\|ACCEPTED\|DECLINED` | `ORG_LINK_DECIDE` (personnel : lecture) |
 | Cible     | `POST /v1/organizations/:id/link-requests/:cpId/accept` / `…/decline`        | `ORG_LINK_DECIDE` (membres réels)       |
+| Cible     | `POST /v1/organizations/:id/link-requests/:cpId/revoke` (fin de liaison)     | `ORG_LINK_DECIDE` (membres réels)       |
 
 Erreurs : `LINK_NOT_PENDING` (409) pour une décision ou une révocation sans demande / liaison active,
 `CONFLICT` (409) pour une nouvelle demande alors qu'une demande ou une liaison est en cours,

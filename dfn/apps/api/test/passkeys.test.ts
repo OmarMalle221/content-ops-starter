@@ -224,6 +224,37 @@ describe('passkeys — registration', () => {
     expect(viaPasskey.status, JSON.stringify(viaPasskey.body)).toBe(201);
     expect((await client.get('/v1/auth/passkeys')).body.items).toHaveLength(3);
   });
+
+  it('re-checks the 20-passkey cap when a ceremony completes (parallel ceremonies)', async () => {
+    const { client, user } = await registerUser(ctx, 'passkey-cap@example.com');
+    await ctx.prisma.webAuthnCredential.createMany({
+      data: Array.from({ length: 19 }, (_, i) => ({
+        userId: user.id,
+        credentialId: `cap${i}${user.id.replace(/-/g, '')}`,
+        publicKey: Buffer.alloc(32, i),
+        transports: [],
+        name: `Clé ${i}`,
+      })),
+    });
+    // Two ceremonies started while the account had 19 passkeys: only one may complete.
+    const first = await client.post('/v1/auth/passkeys/registration/options', { currentPassword: PASSWORD });
+    const second = await client.post('/v1/auth/passkeys/registration/options', { currentPassword: PASSWORD });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const done = await client.post('/v1/auth/passkeys/registration/verify', {
+      name: 'Vingtième',
+      response: new SoftwareAuthenticator().createCredential(first.body),
+    });
+    expect(done.status, JSON.stringify(done.body)).toBe(201);
+    const capped = await client.post('/v1/auth/passkeys/registration/verify', {
+      name: 'De trop',
+      response: new SoftwareAuthenticator().createCredential(second.body),
+    });
+    expect(capped.status).toBe(409);
+    expect(await ctx.prisma.webAuthnCredential.count({ where: { userId: user.id, revokedAt: null } })).toBe(
+      20,
+    );
+  });
 });
 
 describe('passkeys — passwordless login', () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { Prisma } from '@dfn/database';
 import { ErrorCode, KeyPurpose } from '@dfn/shared';
@@ -35,6 +36,35 @@ export const ROTATION_BATCH: Readonly<Record<KeyPurpose, number>> = {
   [KeyPurpose.WEBHOOKS]: 200,
   [KeyPurpose.BENEFICIARIES]: 200,
 };
+/**
+ * Scan position of one run: it starts at a random point of the id space and wraps around once.
+ * Rows that keep failing therefore cannot pin every run to the same window (a fixed start would
+ * re-scan the same failures forever once SCAN_FACTOR × batch of them sort first).
+ */
+export class WrappingCursor {
+  private readonly start: string;
+  private wrapped = false;
+  after: string;
+
+  constructor(start: string = randomUUID()) {
+    this.start = start;
+    this.after = start;
+  }
+
+  /** Inclusive upper bound once wrapped (ids up to the starting point). */
+  get until(): string | undefined {
+    return this.wrapped ? this.start : undefined;
+  }
+
+  /** Called when a page comes back empty: false once the whole space has been covered. */
+  wrap(): boolean {
+    if (this.wrapped) return false;
+    this.wrapped = true;
+    this.after = ZERO_UUID;
+    return true;
+  }
+}
+
 /** Candidates examined per purpose and per run, as a multiple of the batch (skips past failures). */
 const SCAN_FACTOR = 5;
 const PAGE_SIZE = 100;
@@ -182,19 +212,23 @@ export class KeyRotationService implements OnModuleInit {
       remaining: 0,
     };
     const errors: Record<string, number> = {};
-    let after = ZERO_UUID;
+    const cursor = new WrappingCursor();
 
     outer: while (result.rotated < batch && result.scanned < scanCap && !shouldStop()) {
       const rows = await pendingRows(
         this.prisma,
         spec,
         active,
-        after,
+        cursor.after,
         Math.min(PAGE_SIZE, scanCap - result.scanned),
+        cursor.until,
       );
-      if (rows.length === 0) break;
+      if (rows.length === 0) {
+        if (cursor.wrap()) continue;
+        break;
+      }
       for (const row of rows) {
-        after = row.id;
+        cursor.after = row.id;
         result.scanned += 1;
         try {
           const keyId = ring.keyIdOfString(row.value);
@@ -235,11 +269,12 @@ export class KeyRotationService implements OnModuleInit {
     };
     const errors: Record<string, number> = {};
     const pending = pendingDocumentsWhere(active);
-    let after = ZERO_UUID;
+    const cursor = new WrappingCursor();
 
     outer: while (result.rotated < batch && result.scanned < scanCap && !shouldStop()) {
+      const until = cursor.until;
       const docs = await this.prisma.document.findMany({
-        where: { ...pending, id: { gt: after } },
+        where: { ...pending, id: until ? { gt: cursor.after, lte: until } : { gt: cursor.after } },
         orderBy: { id: 'asc' },
         take: Math.min(PAGE_SIZE, scanCap - result.scanned),
         select: {
@@ -251,9 +286,12 @@ export class KeyRotationService implements OnModuleInit {
           sha256: true,
         },
       });
-      if (docs.length === 0) break;
+      if (docs.length === 0) {
+        if (cursor.wrap()) continue;
+        break;
+      }
       for (const doc of docs) {
-        after = doc.id;
+        cursor.after = doc.id;
         result.scanned += 1;
         try {
           const outcome = await this.documents.reseal(doc);

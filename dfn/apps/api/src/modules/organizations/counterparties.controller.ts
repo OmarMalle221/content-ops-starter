@@ -98,4 +98,17 @@ export class CounterpartiesController {
   ) {
     return this.counterparties.decline(auth, id, counterpartyId, body, req);
   }
+
+  /** Target side: ends an accepted link (OWNER / ADMIN members of the linked organisation). */
+  @HttpCode(200)
+  @Post(':id/link-requests/:counterpartyId/revoke')
+  revokeAsTarget(
+    @CurrentUser() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('counterpartyId', ParseUUIDPipe) counterpartyId: string,
+    @Body(zodBody(decideCounterpartyLinkSchema)) body: DecideCounterpartyLinkInput,
+    @Req() req: Request,
+  ) {
+    return this.counterparties.revokeAsTarget(auth, id, counterpartyId, body, req);
+  }
 }

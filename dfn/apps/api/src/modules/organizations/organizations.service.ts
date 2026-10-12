@@ -6,6 +6,7 @@ import {
   Permission,
   SUPPORT_REASON_HEADER,
   globalRoleHas,
+  isStaff as isStaffRole,
   orgRoleHas,
   supportReasonSchema,
   type CreateOrganizationInput,
@@ -129,6 +130,34 @@ export class OrganizationsService {
     ) {
       throw staffWriteRefusal(auth, permission);
     }
+    const { reason, organizationName } = await this.recordSupportWrite(auth, organizationId, permission, req);
+    return {
+      organizationId,
+      organizationName,
+      role: 'OWNER',
+      via: 'STAFF_SUPPORT',
+      supportReason: reason,
+    };
+  }
+
+  /**
+   * Staff support action that is not an organisation permission (e.g. deleting a document someone
+   * else uploaded): ADMIN_SUPPORT_WRITE, an `X-Support-Reason` and a `support.write` audit entry
+   * written before the action, whether or not the staff member also belongs to the organisation.
+   */
+  async authorizeSupportAction(auth: AuthContext, organizationId: string, action: string, req: Request) {
+    if (!isStaffActor(auth) || !globalRoleHas(auth.globalRole, Permission.ADMIN_SUPPORT_WRITE)) {
+      throw DomainError.forbidden();
+    }
+    return this.recordSupportWrite(auth, organizationId, action, req);
+  }
+
+  private async recordSupportWrite(
+    auth: AuthContext,
+    organizationId: string,
+    permission: string,
+    req: Request,
+  ): Promise<{ reason: string; organizationName: string }> {
     const reason = supportReasonFrom(req);
     if (!reason) {
       throw DomainError.validation(
@@ -157,13 +186,7 @@ export class OrganizationsService {
       },
       ...requestMeta(req),
     });
-    return {
-      organizationId,
-      organizationName: org.name,
-      role: 'OWNER',
-      via: 'STAFF_SUPPORT',
-      supportReason: reason,
-    };
+    return { reason, organizationName: org.name };
   }
 
   async listMine(auth: AuthContext) {
@@ -213,7 +236,9 @@ export class OrganizationsService {
   }
 
   async inviteMember(auth: AuthContext, organizationId: string, input: InviteMemberInput, req: Request) {
-    await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
+    const access = await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
+    const support = access.via === 'STAFF_SUPPORT';
+    if (support) await this.assertSupportInvite(auth, input.email, input.role);
     const token = randomToken(24);
     const invitation = await this.prisma.organizationInvitation.create({
       data: {
@@ -244,12 +269,29 @@ export class OrganizationsService {
       metadata: { role: input.role },
       ...requestMeta(req),
     });
-    // The token is returned once so the inviter can share the link (sandbox email transport is log-only).
+    // The token is returned once so the inviter can share the link (sandbox email transport is
+    // log-only) — except to support staff: the invitee alone receives it.
+    if (support) return { invitationId: invitation.id, token: null, acceptUrl: null };
     return {
       invitationId: invitation.id,
       token,
       acceptUrl: `${this.env.WEB_PUBLIC_URL}/invite/org/${token}`,
     };
+  }
+
+  /**
+   * A support write manages members for the organisation, never for the staff member: no
+   * invitation of oneself or of another staff account (which would turn read-only staff into a
+   * tenant member able to move money or decide link consent), and no OWNER / ADMIN role.
+   */
+  private async assertSupportInvite(auth: AuthContext, email: string, role: OrgRole) {
+    if (!SUPPORT_GRANTABLE_ROLES.has(role)) throw supportMembershipRefusal();
+    if (email.trim().toLowerCase() === auth.email.trim().toLowerCase()) throw supportMembershipRefusal();
+    const invitee = await this.prisma.user.findFirst({
+      where: { email: { equals: email.trim(), mode: 'insensitive' } },
+      select: { globalRole: true },
+    });
+    if (invitee && isStaffRole(invitee.globalRole)) throw supportMembershipRefusal();
   }
 
   async acceptMemberInvitation(auth: AuthContext, token: string, req: Request) {
@@ -303,6 +345,10 @@ export class OrganizationsService {
       where: { id: memberId, organizationId },
     });
     if (!member) throw DomainError.notFound('Member');
+    // Support may lower a member's role, never grant OWNER / ADMIN nor touch an owner.
+    if (actor.via === 'STAFF_SUPPORT' && (!SUPPORT_GRANTABLE_ROLES.has(role) || member.role === 'OWNER')) {
+      throw supportMembershipRefusal();
+    }
     if (member.role === 'OWNER' && actor.role !== 'OWNER')
       throw DomainError.forbidden('Only an owner can change an owner');
     if (member.role === 'OWNER' && role !== 'OWNER') {
@@ -323,11 +369,12 @@ export class OrganizationsService {
   }
 
   async removeMember(auth: AuthContext, organizationId: string, memberId: string, req: Request) {
-    await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
+    const actor = await this.authorizeWrite(auth, organizationId, Permission.ORG_MANAGE_MEMBERS, req);
     const member = await this.prisma.organizationMember.findFirst({
       where: { id: memberId, organizationId },
     });
     if (!member) throw DomainError.notFound('Member');
+    if (actor.via === 'STAFF_SUPPORT' && member.role === 'OWNER') throw supportMembershipRefusal();
     if (member.role === 'OWNER') {
       const owners = await this.prisma.organizationMember.count({ where: { organizationId, role: 'OWNER' } });
       if (owners <= 1) throw DomainError.conflict('An organisation must keep at least one owner');
@@ -427,6 +474,15 @@ const SUPPORT_WRITABLE: ReadonlySet<Permission> = new Set<Permission>([
   Permission.ORG_MANAGE_MEMBERS,
   Permission.ORG_MANAGE_SETTINGS,
 ]);
+
+/** Roles a support write may grant: OWNER and ADMIN carry money movement, credentials and consent. */
+const SUPPORT_GRANTABLE_ROLES: ReadonlySet<OrgRole> = new Set<OrgRole>(['MEMBER', 'VIEWER']);
+
+function supportMembershipRefusal(): DomainError {
+  return DomainError.forbidden(
+    'Support cannot invite itself or other staff, grant the OWNER or ADMIN role, or change an owner',
+  );
+}
 
 export function intentOf(permission?: Permission): TenantAccessIntent {
   return !permission || READ_PERMISSIONS.has(permission) ? 'read' : 'write';

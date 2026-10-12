@@ -157,7 +157,15 @@ export default async function LinksPage({
                       {formatDate(r.decidedAt, locale)}
                     </p>
                   </div>
-                  <Badge variant="success">{t('counterpartyLinks.status.ACCEPTED')}</Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="success">{t('counterpartyLinks.status.ACCEPTED')}</Badge>
+                    <LinkRequestActions
+                      organizationId={organizationId}
+                      counterpartyId={r.counterpartyId}
+                      requesterName={r.requesterOrganization.name}
+                      nextActions={r.nextActions}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>

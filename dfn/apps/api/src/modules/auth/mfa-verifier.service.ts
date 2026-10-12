@@ -16,10 +16,15 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RecoveryCodesService } from './recovery-codes.service';
 import { AssertionFailure, WebAuthnService, isUuid } from './webauthn.service';
 
 export type MfaProofMethod = 'totp' | 'recovery_code' | 'passkey';
+
+/** Wrong TOTP / recovery codes tolerated per account before second-factor attempts are locked. */
+export const MAX_MFA_FAILURES = 5;
+export const MFA_LOCK_MINUTES = 15;
 
 /**
  * TOTP time step (RFC 6238 counter) a code was accepted at, or null when the code is invalid.
@@ -53,6 +58,10 @@ export interface ProofFailure {
  *   accepted at most once, even by concurrent requests (401 MFA_CODE_REUSED);
  * - single-use recovery codes (wherever a TOTP code is accepted);
  * - passkey assertions answering a STEP_UP challenge bound to the same user AND session.
+ *
+ * Wrong codes are counted per account (not per IP, which a client may influence): after
+ * MAX_MFA_FAILURES consecutive failures, code attempts are refused (423 ACCOUNT_LOCKED) for
+ * MFA_LOCK_MINUTES, the account's pre-MFA sessions are revoked and the owner is notified.
  */
 @Injectable()
 export class MfaVerifierService {
@@ -61,8 +70,75 @@ export class MfaVerifierService {
     private readonly audit: AuditService,
     private readonly recoveryCodes: RecoveryCodesService,
     private readonly webauthn: WebAuthnService,
+    private readonly notifications: NotificationsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
+
+  private lockedError() {
+    return new DomainError(
+      ErrorCode.ACCOUNT_LOCKED,
+      `Too many invalid second-factor codes. Try again in ${MFA_LOCK_MINUTES} minutes.`,
+      HttpStatus.LOCKED,
+    );
+  }
+
+  /** Refuses code attempts while the account's second-factor lock is active (no code oracle). */
+  async assertCodesNotLocked(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { mfaLockedUntil: true },
+    });
+    if (user?.mfaLockedUntil && user.mfaLockedUntil > new Date()) throw this.lockedError();
+  }
+
+  /**
+   * Counts a wrong code. The request that reaches the threshold sets the lock (compare-and-set on
+   * the counter, so concurrent failures lock once), revokes the pre-MFA sessions, audits and
+   * notifies; it then throws 423 instead of the original error.
+   */
+  private async recordCodeFailure(userId: string, purpose: string, req?: Request) {
+    const counted = await this.prisma.user.update({
+      where: { id: userId },
+      data: { mfaFailedCount: { increment: 1 } },
+      select: { mfaFailedCount: true },
+    });
+    if (counted.mfaFailedCount < MAX_MFA_FAILURES) return;
+    const until = new Date(Date.now() + MFA_LOCK_MINUTES * 60_000);
+    const locked = await this.prisma.user.updateMany({
+      where: { id: userId, mfaFailedCount: { gte: MAX_MFA_FAILURES } },
+      data: { mfaFailedCount: 0, mfaLockedUntil: until },
+    });
+    if (locked.count === 1) {
+      const revoked = await this.prisma.session.updateMany({
+        where: { userId, mfaVerified: false, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.log({
+        actorUserId: userId,
+        action: 'auth.mfa_locked',
+        entityType: 'User',
+        entityId: userId,
+        metadata: {
+          purpose,
+          failures: MAX_MFA_FAILURES,
+          lockedUntil: until.toISOString(),
+          preMfaSessionsRevoked: revoked.count,
+        },
+        ...(req ? requestMeta(req) : {}),
+      });
+      await this.notifications.notify({
+        userId,
+        type: 'auth.mfa_locked',
+        title: 'Second facteur temporairement bloqué',
+        body:
+          `Plusieurs codes de vérification erronés ont été saisis sur votre compte. Les codes sont ` +
+          `refusés pendant ${MFA_LOCK_MINUTES} minutes. Si vous n'êtes pas à l'origine de ces ` +
+          `tentatives, votre mot de passe est probablement connu d'un tiers : changez-le immédiatement.`,
+        data: { purpose, lockedUntil: until.toISOString() },
+      });
+    }
+    throw this.lockedError();
+  }
 
   /**
    * Verifies a TOTP code for the user. With `consume` (every authentication or step-up use) the
@@ -175,11 +251,31 @@ export class MfaVerifierService {
       select: { mfaEnabled: true },
     });
     if (!user?.mfaEnabled) throw fail();
-    if (isTotpCode(code)) {
-      await this.verifyTotp(auth.userId, code, { consume: true, invalid: fail });
-      return 'totp';
+    await this.assertCodesNotLocked(auth.userId);
+    let wrongTotp = false;
+    let method: MfaProofMethod;
+    try {
+      if (isTotpCode(code)) {
+        const invalid = () => {
+          wrongTotp = true;
+          return fail();
+        };
+        await this.verifyTotp(auth.userId, code, { consume: true, invalid });
+        method = 'totp';
+      } else {
+        await this.recoveryCodes.consume(auth.userId, code, purpose, req);
+        method = 'recovery_code';
+      }
+    } catch (err) {
+      // A replayed valid code (MFA_CODE_REUSED) is not a guess; wrong codes are.
+      const guess = wrongTotp || (err instanceof DomainError && err.code === ErrorCode.RECOVERY_CODE_INVALID);
+      if (guess) await this.recordCodeFailure(auth.userId, purpose, req);
+      throw err;
     }
-    await this.recoveryCodes.consume(auth.userId, code, purpose, req);
-    return 'recovery_code';
+    await this.prisma.user.updateMany({
+      where: { id: auth.userId, mfaFailedCount: { gt: 0 } },
+      data: { mfaFailedCount: 0 },
+    });
+    return method;
   }
 }
