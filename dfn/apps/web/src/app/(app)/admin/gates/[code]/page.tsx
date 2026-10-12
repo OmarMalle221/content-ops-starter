@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@dfn/ui';
 import { GateActions } from '@/components/admin/gates-actions';
 import { GatesHistory } from '@/components/admin/gates-history';
-import type { GateActor, GateDetailDto } from '@/components/admin/gates-register-table';
+import { gateTitle, type GateActor, type GateDetailDto } from '@/components/admin/gates-register-table';
 import { GateLevelBadge, GateStatusBadge } from '@/components/admin/gates-status-badge';
 import { GatesTrackingBanner } from '@/components/admin/gates-tracking-banner';
 import { ApiError, apiFetch, getSession } from '@/lib/api-server';
@@ -84,7 +84,7 @@ export default async function AdminGatePage({ params }: { params: Promise<{ code
             <GateStatusBadge status={gate.status} t={t} />
             <GateLevelBadge level={gate.level} t={t} />
           </h2>
-          <p className="max-w-3xl text-sm">{gate.title}</p>
+          <p className="max-w-3xl text-sm">{gateTitle(t, gate)}</p>
           <p className="text-xs text-muted-foreground">
             {gate.jurisdiction} · {t('app.sandbox')}
           </p>

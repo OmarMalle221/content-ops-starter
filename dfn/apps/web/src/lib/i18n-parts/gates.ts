@@ -43,6 +43,19 @@ export const gatesAdminPart = definePart(
         STRONG: 'Fort',
         ABSOLUTE: 'Bloquant absolu',
       },
+      /** Gate titles (REGULATORY_GATES in @dfn/shared, French only); unknown codes show the API title. */
+      titles: {
+        R1: 'Avis juridique écrit sur la qualification des activités (Protect, Wallet, Transfer) et le modèle « fonds détenus par un partenaire agréé »',
+        R2: 'Fournisseur KYC/KYB et criblage sanctions contractualisé ; fin des statuts SIMULATED_* en production',
+        R3: 'Inscription ESM auprès de CANAFE (ou confirmation écrite de non-assujettissement) ; programme LBC/FT approuvé',
+        R4: 'Enregistrement fournisseur de services de paiement (Banque du Canada, LAPD) ou analyse d’exclusion validée ; protection des fonds',
+        R5: 'Permis d’entreprise de services monétaires (AMF) ou confirmation de non-assujettissement',
+        R6: 'Partenariat avec une banque / un EME agréé BCEAO et conformité change ; équivalent BCRG pour la Guinée',
+        R7: 'Protection des données : EFVP (Loi 25), déclarations CDP, transferts transfrontaliers, registre d’incidents',
+        R8: 'Audit de sécurité indépendant (test d’intrusion, revue du registre et des gardes), plan de reprise testé',
+        R9: 'Assurance responsabilité / cyber, conditions d’utilisation et politique de litiges validées par un conseil',
+        R10: 'Activité DDA : avis juridique spécifique, aucun lancement sans cadre explicite',
+      },
       statuses: {
         NOT_STARTED: 'Non commencée',
         IN_PROGRESS: 'En cours',
@@ -98,7 +111,6 @@ export const gatesAdminPart = definePart(
         evidencePlaceholder: 'Ex. COFFRE-CONFORMITE/2026/R1-avis-juridique',
         evidenceHint:
           'Texte uniquement : identifiant d’archive, chemin du coffre documentaire ou numéro de dossier. Aucun fichier n’est téléversé.',
-        mfaCode: 'Code de double authentification ou code de secours',
         mfaHint:
           'Exigé si votre compte a la double authentification ou une clé d’accès : une session seule ne suffit pas.',
         minChars: 'Au moins 3 caractères.',
@@ -188,6 +200,18 @@ export const gatesAdminPart = definePart(
         STRONG: 'Strong',
         ABSOLUTE: 'Absolute block',
       },
+      titles: {
+        R1: 'Written legal opinion on how the activities (Protect, Wallet, Transfer) qualify and on the “funds held by a licensed partner” model',
+        R2: 'KYC/KYB provider and sanctions screening under contract; no SIMULATED_* statuses in production',
+        R3: 'MSB registration with FINTRAC (or written confirmation of non-applicability); approved AML/ATF programme',
+        R4: 'Payment service provider registration (Bank of Canada, RPAA) or validated exclusion analysis; safeguarding of funds',
+        R5: 'Money services business licence (AMF) or confirmation of non-applicability',
+        R6: 'Partnership with a BCEAO-licensed bank / e-money institution and foreign-exchange compliance; BCRG equivalent for Guinea',
+        R7: 'Data protection: privacy impact assessment (Law 25), CDP filings, cross-border transfers, incident register',
+        R8: 'Independent security audit (penetration test, review of the ledger and guards), tested recovery plan',
+        R9: 'Liability / cyber insurance, terms of use and dispute policy validated by counsel',
+        R10: 'DDA activity: specific legal opinion, no launch without an explicit framework',
+      },
       statuses: {
         NOT_STARTED: 'Not started',
         IN_PROGRESS: 'In progress',
@@ -241,7 +265,6 @@ export const gatesAdminPart = definePart(
         evidenceOptional: 'Evidence reference (optional)',
         evidencePlaceholder: 'E.g. COMPLIANCE-VAULT/2026/R1-legal-opinion',
         evidenceHint: 'Text only: archive id, document vault path or case number. No file is uploaded.',
-        mfaCode: 'Two-factor code or recovery code',
         mfaHint:
           'Required when your account has two-factor authentication or a passkey: a session alone is not enough.',
         minChars: 'At least 3 characters.',

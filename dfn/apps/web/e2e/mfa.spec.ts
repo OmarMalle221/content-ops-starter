@@ -64,7 +64,9 @@ test('enables TOTP with the current password, then signs in with a recovery code
   });
   expect(logout.status()).toBe(200);
   await page.context().clearCookies();
-  await page.goto('/login');
+  // A hostile `next` (here a javascript: URL) is dropped at both steps: the sign-in lands on the
+  // dashboard of this origin and nothing runs.
+  await page.goto(`/login?next=${encodeURIComponent('javascript:document.title="pwned"')}`);
   await page.getByLabel(/Courriel|Email/).fill(email);
   await page.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
   await page.getByRole('button', { name: /^(Se connecter|Sign in)$/ }).click();
@@ -73,7 +75,8 @@ test('enables TOTP with the current password, then signs in with a recovery code
   await page.getByRole('button', { name: /Utiliser un code de secours|Use a recovery code/ }).click();
   await page.locator('#recovery-code').fill(recovery);
   await page.getByRole('button', { name: /^(Confirmer|Confirm)$/ }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  await expect(page).toHaveURL(`${WEB_URL}/dashboard`);
+  expect(await page.title()).not.toBe('pwned');
   const remaining = await page.request.get('/api/v1/auth/mfa/recovery-codes');
   expect(((await remaining.json()) as { remaining: number }).remaining).toBe(9);
 });

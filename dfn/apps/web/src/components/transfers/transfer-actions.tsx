@@ -12,7 +12,14 @@ import { AuthorizeTransferDialog } from './authorize-dialog';
 import type { TransferDto } from './types';
 
 /** Every control is derived from `nextActions` computed server-side; nothing decorative. */
-export function TransferActions({ transfer, mfaEnabled }: { transfer: TransferDto; mfaEnabled: boolean }) {
+export function TransferActions({
+  transfer,
+  stepUpRequired,
+}: {
+  transfer: TransferDto;
+  /** Server-computed: MFA enabled AND the user's `requireMfaForTransfers` preference on. */
+  stepUpRequired: boolean;
+}) {
   const { t } = useI18n();
   const router = useRouter();
   const actions = transfer.nextActions ?? [];
@@ -47,7 +54,7 @@ export function TransferActions({ transfer, mfaEnabled }: { transfer: TransferDt
         {has('AUTHORIZE') ? (
           <AuthorizeTransferDialog
             transfer={transfer}
-            mfaEnabled={mfaEnabled}
+            stepUpRequired={stepUpRequired}
             onDone={() => router.refresh()}
           />
         ) : null}

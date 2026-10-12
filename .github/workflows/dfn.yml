@@ -20,7 +20,7 @@ defaults:
 env:
   DFN_MODE: sandbox
   SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789abcdef
-  DOCUMENT_ENCRYPTION_KEY: '3333333333333333333333333333333333333333333333333333333333333333'
+  DOCUMENT_ENCRYPTION_KEY: 'd8589ba73fe5a7384a765be0bfc726238777660de457f465d9616cbbb38b375d'
 
 jobs:
   quality:
@@ -82,7 +82,9 @@ jobs:
         run: bash infra/ops/smoke-api.sh --boot --base-url http://127.0.0.1:4100
       - run: pnpm test:unit
       - run: pnpm test:api
-      - run: pnpm audit --audit-level=high || echo "::warning::pnpm audit reported issues — review before any non-sandbox deployment"
+      # Blocking: high and critical advisories fail the build. Accepted exceptions (dev tooling only)
+      # are listed in package.json pnpm.auditConfig.ignoreGhsas and justified in SECURITY.md.
+      - run: pnpm audit --audit-level=high
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -216,6 +218,7 @@ jobs:
           grep -vE '^(SESSION_SECRET|DOCUMENT_ENCRYPTION_KEY)=' .env.example > .env
           {
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "POSTGRES_APP_PASSWORD=$(openssl rand -hex 16)"
             echo "REDIS_PASSWORD=$(openssl rand -hex 16)"
             echo "SESSION_SECRET=$(openssl rand -hex 32)"
             echo "DOCUMENT_ENCRYPTION_KEY=$(openssl rand -hex 32)"
@@ -236,9 +239,23 @@ jobs:
           curl -sf http://127.0.0.1:3000/login | grep -q 'Aucun fonds réel'
           curl -sf http://127.0.0.1:3000/api/v1/health | grep -q '"mode":"sandbox"'
           test "$(docker compose exec -T api id -u)" = "10001"
-          docker compose exec -T api sh -c 'touch /app/probe 2>/dev/null && exit 1 || exit 0'
+          # Read-only root filesystem (ADR-0013), checked on the containers themselves: the uid
+          # alone could not write to the root-owned /app anyway.
+          for s in api web; do
+            test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$(docker compose ps -q "$s")")" = "true"
+            docker compose exec -T "$s" sh -c 'grep -Eq "^[^ ]+ / [^ ]+ ro[, ]" /proc/mounts'
+          done
+          # The API runs as the least-privilege database role, without DDL rights.
+          docker compose exec -T postgres psql -U dfn -d dfn -At -c "SELECT rolsuper FROM pg_roles WHERE rolname = 'dfn_app'" | grep -qx f
       - name: Graceful stop
-        run: docker compose stop -t 30 api web
+        run: |
+          docker compose stop -t 30 api web
+          # 0 or 143 (SIGTERM re-raised after a clean shutdown); 1 = shutdown watchdog, 137 = killed.
+          for s in api web; do
+            code="$(docker compose ps -a "$s" --format '{{.ExitCode}}')"
+            echo "$s exit code: $code"
+            [[ "$code" == 0 || "$code" == 143 ]]
+          done
       - name: Stack logs
         if: always()
         run: docker compose logs --no-color --timestamps > compose.log 2>&1 || true

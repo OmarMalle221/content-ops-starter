@@ -161,6 +161,18 @@ const envSchema = z
     DOCUMENT_PURGE_GRACE_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
   })
   .superRefine((v, ctx) => {
+    if (v.NODE_ENV === 'production') {
+      // `cp .env.example .env` must not boot a production build on the published sample secrets.
+      for (const key of ['SESSION_SECRET', 'DOCUMENT_ENCRYPTION_KEY', 'KMS_LOCAL_MASTER_KEY'] as const) {
+        if (isPlaceholderSecret(v[key])) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `${key} is a sample value: generate one (openssl rand -hex 32)`,
+          });
+        }
+      }
+    }
     if (v.STORAGE_DRIVER === 's3' && !v.S3_BUCKET) {
       ctx.addIssue({
         code: 'custom',
@@ -192,6 +204,12 @@ const envSchema = z
   });
 
 export type Env = z.infer<typeof envSchema>;
+
+/** Sample secrets of .env.example and the docs: "change-me…" text or one repeated character. */
+export function isPlaceholderSecret(value: string | undefined): boolean {
+  if (!value) return false;
+  return /change-?me/i.test(value) || /^(.)\1*$/.test(value);
+}
 
 let cached: Env | undefined;
 

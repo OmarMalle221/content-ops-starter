@@ -49,3 +49,21 @@ export function errorMessage(e: unknown, fallback = 'Une erreur est survenue'): 
   if (e instanceof Error) return e.message;
   return fallback;
 }
+
+/** Shared wording of the second-factor / passkey error codes (see packages/shared/src/errors.ts). */
+const API_ERROR_KEYS = 'passkeys.errors';
+
+/**
+ * Error message in the interface language: `<scope>.<CODE>` when the caller has a wording for
+ * its own context, then the shared `passkeys.errors.<CODE>`, then the API's (English) message.
+ */
+export function localizedApiError(e: unknown, t: (path: string) => string, scope?: string): string {
+  if (e instanceof ClientApiError) {
+    for (const prefix of scope ? [scope, API_ERROR_KEYS] : [API_ERROR_KEYS]) {
+      const key = `${prefix}.${e.body.code}`;
+      const text = t(key);
+      if (text !== key) return text;
+    }
+  }
+  return errorMessage(e);
+}

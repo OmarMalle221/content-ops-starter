@@ -28,9 +28,23 @@ redact_url() {
   printf '%s' "$1" | sed -E 's#(://[^:/@]+):[^@]*@#\1:***@#'
 }
 
+# Percent-decodes a URL component. `+` stays literal (userinfo and path, as libpq and Prisma read
+# them) and a backslash is data, never an escape: only %XX sequences are decoded.
 urldecode() {
-  local s="${1//+/ }"
-  printf '%b' "${s//%/\\x}"
+  local s="$1" out="" hex
+  while [[ "$s" == *%* ]]; do
+    out+="${s%%\%*}"
+    s="${s#*%}"
+    hex="${s:0:2}"
+    if [[ "$hex" =~ ^[0-9A-Fa-f]{2}$ ]]; then
+      # shellcheck disable=SC2059 # the format is a single \xHH escape built from two hex digits
+      out+="$(printf "\\x$hex")"
+      s="${s:2}"
+    else
+      out+="%"
+    fi
+  done
+  printf '%s' "$out$s"
 }
 
 # parse_pg_url URL — exports libpq variables (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE,

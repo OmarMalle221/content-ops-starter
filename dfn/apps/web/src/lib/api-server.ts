@@ -1,5 +1,5 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 
 const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:4000';
 
@@ -14,19 +14,26 @@ export class ApiError extends Error {
   }
 }
 
-/** Server-side fetch to the API with the user's session cookie forwarded. Never cached. */
+/**
+ * Server-side fetch to the API with the user's session cookie forwarded. Never cached. The client
+ * address (X-Forwarded-For, rewritten from the socket by xff-guard.cjs before Next sees the
+ * request) is forwarded too, so rate limits and audit entries see the user rather than this
+ * server.
+ */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const store = await cookies();
   const cookieHeader = store
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');
+  const clientAddress = (await headers()).get('x-forwarded-for');
   const res = await fetch(`${API_INTERNAL_URL}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
       ...(init.headers ?? {}),
       ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      ...(clientAddress ? { 'X-Forwarded-For': clientAddress } : {}),
     },
     cache: 'no-store',
   });
@@ -80,4 +87,24 @@ export async function getSession(): Promise<Me | null> {
   const me = await apiFetchOptional<Me>('/v1/auth/me');
   if (!me || !me.user) return null;
   return me;
+}
+
+/** GET /v1/users/me/security-preferences (defaults applied by the API). */
+export interface SecurityPreferences {
+  requireMfaForTransfers: boolean;
+  transferAlerts: boolean;
+  dailyTransferLimit: string | null;
+}
+
+/**
+ * Whether authorising a transfer asks this user for a fresh second factor — the API rule
+ * (TransfersService.assertMfa): MFA enabled AND `requireMfaForTransfers` not switched off.
+ * Unreadable preferences count as "required", the API default; the API decides either way.
+ */
+export async function getTransferStepUpRequired(me: Me | null): Promise<boolean> {
+  if (!me?.user.mfaEnabled) return false;
+  const prefs = await apiFetchOptional<SecurityPreferences>('/v1/users/me/security-preferences').catch(
+    () => null,
+  );
+  return prefs?.requireMfaForTransfers !== false;
 }

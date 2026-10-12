@@ -1,10 +1,13 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CheckCircle2, PencilLine, Undo2 } from 'lucide-react';
+import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
 import { Button, Input, Label, Textarea } from '@dfn/ui';
 import { ActionDialog } from '@/components/transactions/action-dialog';
 import { FormMessage } from '@/components/form-message';
+import { StepUpFields } from '@/components/security/step-up-fields';
+import type { StepUpProof } from '@/components/security/webauthn-client';
 import { ClientApiError, api, errorMessage } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 
@@ -15,6 +18,8 @@ const MIN = 3;
  * Progress / approve / revoke forms of a regulatory gate. Only the actions offered by the API
  * (server-driven `nextActions`) are rendered — COMPLIANCE staff receive none, so they see no
  * control at all. Every button posts to /v1/admin/gates/:code/{progress|approve|revoke}.
+ * Approve and revoke carry a fresh second-factor proof: a code, or a passkey assertion when this
+ * browser supports WebAuthn and the account has a passkey (same STEP_UP ceremony as transfers).
  */
 export function GateActions({
   code,
@@ -30,6 +35,7 @@ export function GateActions({
   const [note, setNote] = useState('');
   const [evidenceRef, setEvidenceRef] = useState('');
   const [mfaCode, setMfaCode] = useState('');
+  const assertion = useRef<AuthenticationResponseJSON | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const secondApproval = status === 'PENDING_SECOND_APPROVAL';
 
@@ -41,7 +47,12 @@ export function GateActions({
 
   const submit = async (action: GateAction) => {
     const path = action === 'PROGRESS' ? 'progress' : action === 'APPROVE' ? 'approve' : 'revoke';
-    const proof = mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {};
+    const proof: StepUpProof = assertion.current
+      ? { passkeyAssertion: assertion.current }
+      : mfaCode.trim()
+        ? { mfaCode: mfaCode.trim() }
+        : {};
+    assertion.current = null;
     const body =
       action === 'PROGRESS'
         ? { status: 'IN_PROGRESS', note, ...(evidenceRef.trim() ? { evidenceRef } : {}) }
@@ -96,19 +107,19 @@ export function GateActions({
     </div>
   );
 
-  const mfaField = (
-    <div className="space-y-2">
-      <Label htmlFor={`gate-mfa-${code}`}>{t('gatesAdmin.form.mfaCode')}</Label>
-      <Input
-        id={`gate-mfa-${code}`}
-        value={mfaCode}
-        autoComplete="one-time-code"
-        inputMode="text"
-        maxLength={32}
-        onChange={(e) => setMfaCode(e.target.value)}
-      />
-      <p className="text-xs text-muted-foreground">{t('gatesAdmin.form.mfaHint')}</p>
-    </div>
+  const mfaField = (formComplete: boolean) => (
+    <StepUpFields
+      id={`gate-mfa-${code}`}
+      code={mfaCode}
+      onCodeChange={setMfaCode}
+      hint={t('gatesAdmin.form.mfaHint')}
+      passkeyDisabled={!formComplete}
+      onPasskey={(a, form) => {
+        // The dialog's own submit path runs the request (loading, error, close on success).
+        assertion.current = a;
+        form?.requestSubmit();
+      }}
+    />
   );
 
   if (nextActions.length === 0) {
@@ -158,7 +169,7 @@ export function GateActions({
           >
             {noteField}
             {evidenceField(true)}
-            {mfaField}
+            {mfaField(noteValid && evidenceValid)}
           </ActionDialog>
         ) : null}
         {nextActions.includes('REVOKE') ? (
@@ -176,7 +187,7 @@ export function GateActions({
             onConfirm={() => submit('REVOKE')}
           >
             {noteField}
-            {mfaField}
+            {mfaField(noteValid)}
           </ActionDialog>
         ) : null}
       </div>

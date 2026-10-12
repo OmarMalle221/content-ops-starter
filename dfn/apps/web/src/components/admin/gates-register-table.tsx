@@ -74,6 +74,13 @@ export interface ProvidersDto {
 
 type T = (path: string) => string;
 
+/** Gate title in the interface language; the API's (French) title for a code without a key. */
+export function gateTitle(t: T, gate: { code: string; title: string }): string {
+  const key = `gatesAdmin.titles.${gate.code}`;
+  const localized = t(key);
+  return localized === key ? gate.title : localized;
+}
+
 function Approvers({ gate, t }: { gate: GateDto; t: T }) {
   if (!gate.firstApprover) return <span className="text-muted-foreground">{t('gatesAdmin.noApprover')}</span>;
   return (
@@ -114,7 +121,7 @@ export function GatesRegisterTable({ gates, t, locale }: { gates: GateDto[]; t: 
             <TableCell className="font-mono font-semibold">{gate.code}</TableCell>
             <TableCell className="max-w-md">
               <Link href={`/admin/gates/${gate.code}`} className="text-sm hover:underline">
-                {gate.title}
+                {gateTitle(t, gate)}
               </Link>
             </TableCell>
             <TableCell className="text-xs text-muted-foreground">{gate.jurisdiction}</TableCell>

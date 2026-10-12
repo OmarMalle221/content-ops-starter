@@ -178,7 +178,15 @@ Règles complémentaires :
 
 ## 13. Dépendances et analyse statique
 
-- `pnpm audit` à chaque CI ; blocage sur vulnérabilités hautes/critiques sans correctif documenté.
+- `pnpm audit --audit-level=high` à chaque CI, **bloquant** : toute vulnérabilité haute ou critique fait échouer la CI. Les seules exceptions sont listées dans `package.json` (`pnpm.auditConfig.ignoreGhsas`) et justifiées ici ; elles sont revues à chaque montée de version (révision au 2026-10-12) :
+
+  | Avis                                         | Paquet (chemin)                                     | Justification                                                                                                                                 |
+  | -------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `GHSA-5gmw-xhrv-c9v3`, `GHSA-85c8-ppgw-ccpr` | `tinypool` 1.x (`vitest` 3, tests uniquement)       | outil de test, absent des images ; options de pool écrites par le dépôt, jamais par un tiers. Levée : passage à `vitest` 4 (sans `tinypool`). |
+  | `GHSA-vfj7-8cjw-p6xm`                        | `braces` (`typescript-eslint` → `micromatch`, lint) | aucun correctif publié ; motifs de fichiers du dépôt uniquement, absent des images d'exécution.                                               |
+  | `GHSA-ggr8-5vv4-36mx`                        | `deepmerge-ts` 7 (CLI `prisma` → `@prisma/config`)  | fusionne la configuration Prisma du dépôt (aucune donnée externe) ; correctif en version majeure 8, à reprendre avec la montée de Prisma.     |
+
+- Next.js est maintenu sur la dernière version corrective 15.5.x (15.5.27 : avis critiques d'exécution de code et de contournement du middleware corrigés) ; `postcss` et `sharp` sont forcés aux versions corrigées par `pnpm.overrides`.
 - Versions épinglées dans les `package.json` ; `pnpm-lock.yaml` versionné ; `onlyBuiltDependencies` restreint les scripts post-installation.
 - ESLint (`typescript-eslint`) avec règles de sécurité ; `tsc --strict` ; Prettier.
 - Évolution : CodeQL / Semgrep, SBOM, Renovate avec fenêtre de revue.

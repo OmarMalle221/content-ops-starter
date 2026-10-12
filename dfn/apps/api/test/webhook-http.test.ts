@@ -1,7 +1,12 @@
 import { createServer, type Server } from 'node:http';
+import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
+import type { Express } from 'express';
+import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseTrustProxy } from '../src/bootstrap';
+import { isPlaceholderSecret, loadEnv } from '../src/config/env';
+import { requestMeta } from '../src/common/request-meta';
 import {
   PrivateDestinationError,
   guardedLookup,
@@ -76,5 +81,45 @@ describe('TRUST_PROXY parsing', () => {
     expect(parseTrustProxy('1')).toBe(1);
     expect(parseTrustProxy('false')).toBe(false);
     expect(parseTrustProxy('true')).toBe(true);
+  });
+});
+
+describe('requestMeta', () => {
+  // The Express instance Nest itself runs on (express is not a direct dependency of the API).
+  const nestRequire = createRequire(createRequire(__filename).resolve('@nestjs/platform-express'));
+  const express = nestRequire('express') as () => Express;
+  const appWith = (trustProxy: string) => {
+    const app = express();
+    app.set('trust proxy', parseTrustProxy(trustProxy));
+    app.get('/', (req, res) => {
+      res.json(requestMeta(req));
+    });
+    return app;
+  };
+  const spoofed = { 'X-Forwarded-For': '203.0.113.9, 198.51.100.1' };
+
+  it('reads X-Forwarded-For through trusted peers only, never its client-chosen leftmost entry', async () => {
+    // Trusted loopback peer: the closest untrusted hop it reports, not the leftmost spoof.
+    expect((await request(appWith('loopback')).get('/').set(spoofed)).body.ip).toBe('198.51.100.1');
+    // No trusted proxy: the socket address, whatever the header says.
+    expect((await request(appWith('false')).get('/').set(spoofed)).body.ip).toMatch(/127\.0\.0\.1$/);
+  });
+});
+
+describe('sample secrets', () => {
+  it('refuses the .env.example placeholders in production only', () => {
+    expect(isPlaceholderSecret('change-me-generate-64-hex-chars')).toBe(true);
+    expect(isPlaceholderSecret('0'.repeat(64))).toBe(true);
+    expect(isPlaceholderSecret('8f'.repeat(32))).toBe(false);
+    expect(isPlaceholderSecret(undefined)).toBe(false);
+    const samples = {
+      SESSION_SECRET: 'change-me-generate-64-hex-chars',
+      DOCUMENT_ENCRYPTION_KEY: '0'.repeat(64),
+    };
+    expect(() => loadEnv({ ...samples, NODE_ENV: 'production' })).toThrow(
+      /SESSION_SECRET is a sample value[\s\S]*DOCUMENT_ENCRYPTION_KEY is a sample value/,
+    );
+    expect(() => loadEnv({ ...samples, NODE_ENV: 'test' })).not.toThrow();
+    loadEnv();
   });
 });

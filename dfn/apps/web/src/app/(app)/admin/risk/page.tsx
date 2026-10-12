@@ -11,6 +11,7 @@ import {
   reviewQueueSearch,
 } from '@/components/admin/review-queue-query';
 import { ReviewQueueStats, type ReviewQueueStatsData } from '@/components/admin/review-queue-stats';
+import { riskRuleText } from '@/components/admin/risk-rule-text';
 import { apiFetch } from '@/lib/api-server';
 import { getT } from '@/lib/i18n-server';
 
@@ -128,7 +129,7 @@ export default async function AdminRiskPage({
                 >
                   {r.code}
                 </Link>
-                <p className="text-muted-foreground">{r.description}</p>
+                <p className="text-muted-foreground">{riskRuleText(t, r.code, r.description)}</p>
               </li>
             ))}
           </ul>

@@ -59,7 +59,8 @@ const loadedFromDotEnv = loadRootEnv();
 
 const prisma = new PrismaClient();
 const ledger = new LedgerService(prisma);
-const PASSWORD = process.env.SEED_DEMO_PASSWORD ?? 'Demo-Sandbox-2026!Protect';
+// `||`, not `??`: compose passes an empty SEED_DEMO_PASSWORD when it is not set in .env.
+const PASSWORD = process.env.SEED_DEMO_PASSWORD || 'Demo-Sandbox-2026!Protect';
 const SANDBOX_PROVIDER = 'SANDBOX_PARTNER';
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const SANDBOX_NOTICE = 'Données fictives — Aucun fonds réel';

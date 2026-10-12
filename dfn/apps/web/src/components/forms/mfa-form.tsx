@@ -3,8 +3,9 @@ import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { KeyRound } from 'lucide-react';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '@dfn/ui';
-import { api, errorMessage } from '@/lib/api-client';
+import { api, localizedApiError } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
+import { safeNext } from '@/lib/safe-next';
 import { FormMessage } from '@/components/form-message';
 import {
   isMfaCodeInput,
@@ -34,7 +35,7 @@ export function MfaForm() {
   const passkeyAvailable = supported === true && (factors?.passkeyCount ?? 0) > 0;
 
   function done() {
-    router.push(params.get('next') || '/dashboard');
+    router.push(safeNext(params.get('next')));
     router.refresh();
   }
 
@@ -46,7 +47,7 @@ export function MfaForm() {
       await api('/v1/auth/mfa/verify', { method: 'POST', json: { code } });
       done();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(localizedApiError(err, t));
     } finally {
       setLoading(false);
     }

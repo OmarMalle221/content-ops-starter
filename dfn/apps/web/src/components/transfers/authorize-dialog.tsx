@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
 import { Badge, Button } from '@dfn/ui';
-import { api, errorMessage } from '@/lib/api-client';
+import { api, localizedApiError } from '@/lib/api-client';
 import { formatMoney } from '@/lib/format';
 import { useI18n } from '@/lib/i18n-client';
 import { ActionDialog } from '@/components/transactions/action-dialog';
@@ -12,18 +12,20 @@ import { isMfaCodeInput, type StepUpProof } from '@/components/security/webauthn
 import type { TransferDto } from './types';
 
 /**
- * Authorisation dialog: debits the fictitious wallet. When the user has MFA it asks for a fresh
- * proof — TOTP code, recovery code, or (if this browser supports WebAuthn and the account has a
- * passkey) a passkey assertion for a STEP_UP challenge of this session.
+ * Authorisation dialog: debits the fictitious wallet. When the server requires a step-up (MFA
+ * enabled and the `requireMfaForTransfers` preference on) it asks for a fresh proof — TOTP code,
+ * recovery code, or (if this browser supports WebAuthn and the account has a passkey) a passkey
+ * assertion for a STEP_UP challenge of this session. Otherwise it sends an empty proof.
  */
 export function AuthorizeTransferDialog({
   transfer,
-  mfaEnabled,
+  stepUpRequired,
   onDone,
   variant = 'default',
 }: {
   transfer: Pick<TransferDto, 'id' | 'totalDebit' | 'destination' | 'beneficiary'>;
-  mfaEnabled: boolean;
+  /** Computed server-side by the page (getTransferStepUpRequired), never guessed from mfaEnabled. */
+  stepUpRequired: boolean;
   onDone: (updated: TransferDto) => void | Promise<void>;
   variant?: 'default' | 'accent';
 }) {
@@ -41,11 +43,11 @@ export function AuthorizeTransferDialog({
       description={t('xfer.authorizeDescription')}
       confirmLabel={t('xfer.authorize')}
       variant={variant}
-      disabled={mfaEnabled && !isMfaCodeInput(code)}
+      disabled={stepUpRequired && !isMfaCodeInput(code)}
       onConfirm={async () => {
         const proof: StepUpProof = assertion.current
           ? { passkeyAssertion: assertion.current }
-          : mfaEnabled
+          : stepUpRequired
             ? { mfaCode: code }
             : {};
         assertion.current = null;
@@ -56,7 +58,7 @@ export function AuthorizeTransferDialog({
             json: proof,
           });
         } catch (e) {
-          throw new Error(errorMessage(e));
+          throw new Error(localizedApiError(e, t));
         }
         setCode('');
         await onDone(updated);
@@ -77,7 +79,7 @@ export function AuthorizeTransferDialog({
           {transfer.beneficiary.name} · {transfer.beneficiary.accountIdentifierMasked}
         </dd>
       </dl>
-      {mfaEnabled ? (
+      {stepUpRequired ? (
         <StepUpFields
           id="transfer-mfa-code"
           code={code}

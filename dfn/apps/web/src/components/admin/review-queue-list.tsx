@@ -7,6 +7,7 @@ import { formatDate, formatMoney, statusVariant } from '@/lib/format';
 import { useI18n } from '@/lib/i18n-client';
 import { ReviewQueueAssign } from './review-queue-assign';
 import { ReviewQueueSlaBadge, useDurationFormatter } from './review-queue-sla';
+import { riskRuleText } from './risk-rule-text';
 
 type Scalar = string | number | boolean | null;
 
@@ -98,9 +99,13 @@ function AlertCard({ a, assignees }: { a: ReviewQueueItem; assignees: Array<{ id
               {t('reviewQueue.item.score')} {a.score}
             </span>
           </div>
-          <p className="text-sm">{a.explanation?.summary}</p>
+          {a.explanation?.summary ? (
+            <p className="text-sm">{riskRuleText(t, a.ruleCode, a.explanation.summary)}</p>
+          ) : null}
           {a.explanation?.recommendation ? (
-            <p className="text-xs text-muted-foreground">{a.explanation.recommendation}</p>
+            <p className="text-xs text-muted-foreground">
+              {riskRuleText(t, a.ruleCode, a.explanation.recommendation)}
+            </p>
           ) : null}
           {a.explanation?.evidence?.length ? (
             <Evidence items={a.explanation.evidence} currency={currency} />

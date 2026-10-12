@@ -2,7 +2,8 @@
 # Diaspora Financial Network — sandbox stack. SANDBOX ONLY: Données fictives — Aucun fonds réel.
 #
 # No secret has a default value here: copy .env.example to .env and set at least POSTGRES_PASSWORD,
-# REDIS_PASSWORD, SESSION_SECRET and DOCUMENT_ENCRYPTION_KEY (see docs/operations/RUNBOOK.md).
+# POSTGRES_APP_PASSWORD, REDIS_PASSWORD, SESSION_SECRET and DOCUMENT_ENCRYPTION_KEY
+# (see docs/operations/RUNBOOK.md).
 #
 #   docker compose up -d --build                  web http://localhost:3000 · api http://localhost:4000/docs
 #   docker compose --profile s3 up -d --build     + MinIO (set STORAGE_DRIVER=s3, S3_*, MINIO_ROOT_* in .env)
@@ -14,7 +15,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 name: dfn-sandbox
 
+# Owner (superuser of the postgres image): migrations and the seed only.
 x-database-url: &database-url 'postgresql://${POSTGRES_USER:-dfn}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dfn}?schema=public'
+# Runtime role of the API: data access only, no DDL (infra/postgres/initdb/10-app-role.sh).
+x-app-database-url: &app-database-url 'postgresql://${POSTGRES_APP_USER:-dfn_app}:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dfn}?schema=public'
 
 x-api-build: &api-build
   context: .
@@ -38,8 +42,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-dfn}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-dfn}
+      # Read by initdb/10-app-role.sh on the first initialisation of the volume only.
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-dfn_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
     ports: ['127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432']
-    volumes: ['pgdata:/var/lib/postgresql/data']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
     security_opt: ['no-new-privileges:true']
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
@@ -168,7 +177,14 @@ services:
     environment:
       DFN_MODE: sandbox
       NODE_ENV: production
-      DATABASE_URL: *database-url
+      DATABASE_URL: *app-database-url
+      # .env also feeds the infrastructure containers: their credentials stay out of the API
+      # process (it uses the least-privilege S3_* user and the runtime database role).
+      POSTGRES_PASSWORD: ''
+      POSTGRES_APP_PASSWORD: ''
+      REDIS_PASSWORD: ''
+      MINIO_ROOT_USER: ''
+      MINIO_ROOT_PASSWORD: ''
       REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
       JOBS_DRIVER: bullmq
       RATE_LIMIT_STORE: redis
@@ -229,10 +245,15 @@ services:
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-dfn_session}
       HOSTNAME: 0.0.0.0
       PORT: '3000'
+      # 0: browsers reach this container directly, the socket address is the client address.
+      # Behind N reverse proxies (and reachable through them only), set N.
+      WEB_TRUSTED_PROXY_HOPS: ${WEB_TRUSTED_PROXY_HOPS:-0}
     tmpfs:
       - /tmp:size=64m
       - /app/apps/web/.next/cache:size=128m,uid=10001,gid=10001,mode=0700
-    ports: ['${WEB_HOST_PORT:-3000}:3000']
+    # Loopback by default, like the API: the sandbox defaults (http, localhost origins) are not
+    # meant for a network. WEB_HOST_BIND=0.0.0.0 exposes it on purpose (RUNBOOK).
+    ports: ['${WEB_HOST_BIND:-127.0.0.1}:${WEB_HOST_PORT:-3000}:3000']
     depends_on:
       api: { condition: service_healthy }
     healthcheck:

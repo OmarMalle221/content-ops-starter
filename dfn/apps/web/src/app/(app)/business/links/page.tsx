@@ -50,6 +50,11 @@ export default async function LinksPage({
 }) {
   const ws = await resolveWorkspace(searchParams);
   const { t, locale, organizationId, qs } = ws;
+  const orgType = (type: string) => {
+    const key = `counterpartyLinks.orgTypes.${type}`;
+    const label = t(key);
+    return label === key ? type : label;
+  };
   const header = (
     <BusinessHeader
       ws={ws}
@@ -108,7 +113,7 @@ export default async function LinksPage({
                     <TableCell className="font-medium">
                       {r.requesterOrganization.name}
                       <span className="block text-xs text-muted-foreground">
-                        {r.requesterOrganization.type} · {r.requesterOrganization.country}
+                        {orgType(r.requesterOrganization.type)} · {r.requesterOrganization.country}
                       </span>
                     </TableCell>
                     <TableCell>

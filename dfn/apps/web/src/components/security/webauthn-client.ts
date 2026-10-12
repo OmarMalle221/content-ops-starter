@@ -7,7 +7,7 @@ import {
   type AuthenticationResponseJSON,
 } from '@simplewebauthn/browser';
 import { isTotpCode, normalizeRecoveryCode } from '@dfn/shared';
-import { ClientApiError, api, errorMessage } from '@/lib/api-client';
+import { ClientApiError, api, localizedApiError } from '@/lib/api-client';
 
 /** Second factors of the signed-in account (GET /v1/auth/mfa/status, readable before the MFA step). */
 export interface MfaFactors {
@@ -68,7 +68,7 @@ export function isCeremonyCancelled(e: unknown): boolean {
 }
 
 export function webAuthnErrorMessage(e: unknown, t: (key: string) => string): string {
-  if (e instanceof ClientApiError) return errorMessage(e);
+  if (e instanceof ClientApiError) return localizedApiError(e, t);
   if (isCeremonyCancelled(e)) return t('passkeys.cancelled');
   return t('passkeys.failed');
 }

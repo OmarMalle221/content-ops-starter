@@ -42,7 +42,7 @@ const CONNECTIONS = intEnv('LOAD_CONNECTIONS', 10, 1, 1000);
 const DURATION = intEnv('LOAD_DURATION', 10, 1, 3600);
 const WARMUP = intEnv('LOAD_WARMUP', 2, 0, 600);
 const CLIENT_MODE = process.env.LOAD_CLIENT_MODE === 'single' ? 'single' : 'distinct';
-const DEMO_PASSWORD = process.env.SEED_DEMO_PASSWORD ?? 'Demo-Sandbox-2026!Protect';
+const DEMO_PASSWORD = process.env.SEED_DEMO_PASSWORD || 'Demo-Sandbox-2026!Protect';
 const READ_TARGET_P95_MS = 500;
 const WRITE_TARGET_P95_MS = 100;
 const MAX_ERROR_RATE = 0.01;

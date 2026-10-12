@@ -51,6 +51,11 @@ export const passkeysPart = definePart(
         disableHint:
           'Pour désactiver, saisissez un code de l’application ou un code de secours, ou confirmez avec une clé d’accès.',
         enabledWithCodes: 'Double authentification activée. Conservez vos codes de secours ci-dessous.',
+        /** Settings card (enable / disable TOTP): context wording, before `passkeys.errors`. */
+        errors: {
+          VALIDATION_FAILED:
+            'Code invalide : vérifiez le code affiché par votre application d’authentification.',
+        },
       },
       recovery: {
         title: 'Codes de secours',
@@ -72,6 +77,21 @@ export const passkeysPart = definePart(
       transfer: {
         codeHint: 'Code à 6 chiffres de votre application, ou un code de secours.',
         usePasskey: 'Autoriser avec une clé d’accès',
+      },
+      /** API error codes (packages/shared/src/errors.ts) → interface wording; see localizedApiError. */
+      errors: {
+        MFA_REQUIRED: 'Code de vérification invalide ou manquant.',
+        MFA_CODE_REUSED:
+          'Ce code a déjà été utilisé. Attendez le code suivant de votre application d’authentification.',
+        RECOVERY_CODE_INVALID: 'Ce code de secours est invalide ou a déjà été utilisé.',
+        STEP_UP_REQUIRED:
+          'Confirmation refusée : le code, la clé d’accès ou le mot de passe fourni est manquant ou invalide.',
+        PASSKEY_VERIFICATION_FAILED: 'La clé d’accès n’a pas pu être vérifiée. Réessayez.',
+        PASSKEY_NOT_FOUND: 'Clé d’accès introuvable ou déjà révoquée.',
+        CHALLENGE_EXPIRED: 'La demande de clé d’accès a expiré ou a déjà servi. Recommencez.',
+        ACCOUNT_LOCKED:
+          'Trop de tentatives erronées : l’accès est temporairement bloqué. Réessayez plus tard.',
+        RATE_LIMITED: 'Trop de tentatives rapprochées. Patientez un instant puis réessayez.',
       },
     },
   },
@@ -121,6 +141,9 @@ export const passkeysPart = definePart(
         usePasskey: 'Use a passkey',
         disableHint: 'To disable, enter an app code or a recovery code, or confirm with a passkey.',
         enabledWithCodes: 'Two-factor authentication enabled. Keep your recovery codes below.',
+        errors: {
+          VALIDATION_FAILED: 'Invalid code: check the code shown by your authenticator app.',
+        },
       },
       recovery: {
         title: 'Recovery codes',
@@ -141,6 +164,19 @@ export const passkeysPart = definePart(
       transfer: {
         codeHint: '6-digit code from your app, or a recovery code.',
         usePasskey: 'Authorise with a passkey',
+      },
+      errors: {
+        MFA_REQUIRED: 'Invalid or missing verification code.',
+        MFA_CODE_REUSED:
+          'This code has already been used. Wait for the next code from your authenticator app.',
+        RECOVERY_CODE_INVALID: 'This recovery code is invalid or has already been used.',
+        STEP_UP_REQUIRED:
+          'Confirmation refused: the code, passkey or password provided is missing or invalid.',
+        PASSKEY_VERIFICATION_FAILED: 'The passkey could not be verified. Please try again.',
+        PASSKEY_NOT_FOUND: 'Passkey not found or already revoked.',
+        CHALLENGE_EXPIRED: 'The passkey request expired or was already used. Start again.',
+        ACCOUNT_LOCKED: 'Too many failed attempts: access is temporarily blocked. Try again later.',
+        RATE_LIMITED: 'Too many attempts in a short time. Wait a moment and try again.',
       },
     },
   },

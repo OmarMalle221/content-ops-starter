@@ -7,7 +7,8 @@
 #
 #   --target-url URL  target database (default: RESTORE_DATABASE_URL, then DATABASE_URL)
 #   --create          create the target database first (it must not exist); otherwise the target
-#                     must exist and its objects are dropped and recreated (--clean --if-exists)
+#                     must exist and its schema (?schema=, default public) is dropped with
+#                     everything in it, then restored — in the same transaction unless --jobs
 #   --jobs N          parallel restore (faster, NOT atomic); default is a single transaction
 #   --yes             skip the interactive confirmation (required when stdin is not a terminal)
 #
@@ -61,7 +62,7 @@ else
 fi
 
 # 2. Confirmation (never print credentials: host, port and database name only).
-mode="drop and recreate the objects of the existing database"
+mode="drop schema $DFN_PG_SCHEMA of the existing database (CASCADE) and restore it"
 $CREATE && mode="create a new database"
 if ! $YES; then
   [[ -t 0 ]] || die "refusing to restore non-interactively without --yes"
@@ -104,10 +105,40 @@ if $CREATE; then
 fi
 
 # 5. Restore. Ownership and grants are not restored: objects belong to the connecting role.
-args=(--no-owner --no-privileges --exit-on-error --dbname="$TARGET_DB")
-$CREATE || args+=(--clean --if-exists)
-if [[ -n "$JOBS" ]]; then args+=(--jobs="$JOBS"); else args+=(--single-transaction); fi
+# Over an existing database, `pg_restore --clean` would drop only the objects the archive contains,
+# without CASCADE: tables added by a later migration (foreign keys to restored tables) make it
+# abort — the usual case when rolling back a bad release. The target schema is dropped with
+# everything in it and recreated instead; the archive's own CREATE SCHEMA entry is skipped.
+# The grants on the schema itself (e.g. USAGE for the API's runtime role) are carried over.
+args=(--no-owner --no-privileges --exit-on-error)
+if ! $CREATE; then
+  cat >"$WORK/reset.sql" <<'SQL'
+CREATE TEMP TABLE dfn_schema_grants AS
+  SELECT format('GRANT %s ON SCHEMA %I TO %s', a.privilege_type, n.nspname,
+    CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END) AS stmt
+  FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+  WHERE n.nspname = :'schema' AND a.grantee <> n.nspowner;
+DROP SCHEMA IF EXISTS :"schema" CASCADE;
+CREATE SCHEMA :"schema";
+SELECT stmt FROM dfn_schema_grants \gexec
+SQL
+  pg_restore --list "$ARCHIVE" | grep -vE "^[0-9]+; [0-9]+ [0-9]+ SCHEMA - \"?${DFN_PG_SCHEMA}\"? " \
+    >"$WORK/toc.list"
+  args+=(--use-list="$WORK/toc.list")
+fi
 log "restoring $(basename "$FILE") into ${PGHOST}:${PGPORT}/${TARGET_DB}"
-pg_restore "${args[@]}" "$ARCHIVE"
+if [[ -n "$JOBS" ]]; then
+  $CREATE || psql -X -q -v ON_ERROR_STOP=1 -v schema="$DFN_PG_SCHEMA" --single-transaction -f "$WORK/reset.sql" >/dev/null
+  pg_restore "${args[@]}" --jobs="$JOBS" --dbname="$TARGET_DB" "$ARCHIVE"
+elif $CREATE; then
+  pg_restore "${args[@]}" --single-transaction --dbname="$TARGET_DB" "$ARCHIVE"
+else
+  # One transaction for the schema reset and the restore: any error leaves the database as it was.
+  # The script is written out first (private work dir): a pipe would let psql commit a truncated
+  # script if pg_restore failed half way.
+  pg_restore "${args[@]}" --file="$WORK/restore.sql" "$ARCHIVE"
+  psql -X -q -v ON_ERROR_STOP=1 -v schema="$DFN_PG_SCHEMA" --single-transaction \
+    -f "$WORK/reset.sql" -f "$WORK/restore.sql" >/dev/null
+fi
 log "restore completed in $(elapsed "$started") s"
 log "next: prisma migrate status, row counts and ledger reconciliation (see infra/ops/restore-test.sh)"

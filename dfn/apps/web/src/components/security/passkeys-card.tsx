@@ -14,7 +14,7 @@ import {
   Input,
   Label,
 } from '@dfn/ui';
-import { api, errorMessage } from '@/lib/api-client';
+import { api, errorMessage, localizedApiError } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
 import { useI18n } from '@/lib/i18n-client';
 import { FormMessage } from '@/components/form-message';
@@ -246,7 +246,7 @@ function PasskeyRow({ passkey, mfaEnabled }: { passkey: PasskeyItem; mfaEnabled:
                 try {
                   await api(`/v1/auth/passkeys/${passkey.id}`, { method: 'DELETE', json: proof });
                 } catch (e) {
-                  throw new Error(errorMessage(e));
+                  throw new Error(localizedApiError(e, t));
                 }
                 setCode('');
                 router.refresh();

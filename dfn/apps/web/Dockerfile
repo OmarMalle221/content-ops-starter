@@ -9,6 +9,8 @@
 # API) when it builds, so the image is tied to the API address it was built for. Server components
 # also read it at run time (keep both values identical).
 # Runtime: uid 10001, tini as PID 1, read-only friendly (writable: /tmp and .next/cache, tmpfs).
+# X-Forwarded-For handed to the API is set from the socket (xff-guard.cjs); behind N reverse
+# proxies set WEB_TRUSTED_PROXY_HOPS=N.
 # ─────────────────────────────────────────────────────────────────────────────
 ARG NODE_IMAGE=node:22-bookworm-slim
 
@@ -74,6 +76,8 @@ WORKDIR /app
 COPY --from=build /repo/apps/web/.next/standalone ./
 COPY --from=build /repo/apps/web/.next/static ./apps/web/.next/static
 COPY --from=build /repo/apps/web/public ./apps/web/public
+# Preloaded client-address guard: X-Forwarded-For is rewritten from the socket before Next sees it.
+COPY --from=build /repo/apps/web/xff-guard.cjs ./apps/web/xff-guard.cjs
 RUN mkdir -p apps/web/.next/cache && chown 10001:10001 apps/web/.next/cache
 USER 10001:10001
 EXPOSE 3000
@@ -82,4 +86,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/dashboard',{redirect:'manual'}).then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))"]
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "apps/web/server.js"]
+CMD ["node", "--require", "./apps/web/xff-guard.cjs", "apps/web/server.js"]

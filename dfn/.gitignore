@@ -21,3 +21,5 @@ backups/
 *.dump
 *.dump.age
 *.dump.gpg
+# Blob archives of the RUNBOOK §5 fallback (docker compose exec api tar …)
+storage-*.tar

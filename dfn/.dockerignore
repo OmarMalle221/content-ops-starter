@@ -24,6 +24,7 @@ backups
 **/*.dump
 **/*.dump.age
 **/*.dump.gpg
+**/storage-*.tar
 
 # VCS, editors, OS noise.
 .git

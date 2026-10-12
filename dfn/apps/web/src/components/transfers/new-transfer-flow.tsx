@@ -42,13 +42,14 @@ export function NewTransferFlow({
   organizationId,
   beneficiaries,
   walletBalances,
-  mfaEnabled,
+  stepUpRequired,
   canAuthorize,
 }: {
   organizationId: string;
   beneficiaries: BeneficiaryDto[];
   walletBalances: WalletBalance[];
-  mfaEnabled: boolean;
+  /** Server-computed: MFA enabled AND the user's `requireMfaForTransfers` preference on. */
+  stepUpRequired: boolean;
   canAuthorize: boolean;
 }) {
   const { t, locale } = useI18n();
@@ -427,7 +428,7 @@ export function NewTransferFlow({
               {canAuthorize && transfer.nextActions.includes('AUTHORIZE') ? (
                 <AuthorizeTransferDialog
                   transfer={transfer}
-                  mfaEnabled={mfaEnabled}
+                  stepUpRequired={stepUpRequired}
                   variant="accent"
                   onDone={() => {
                     router.push(`/transfers/${transfer.id}`);

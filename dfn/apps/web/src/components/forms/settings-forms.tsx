@@ -12,7 +12,7 @@ import {
   Label,
   Select,
 } from '@dfn/ui';
-import { ClientApiError, api, errorMessage } from '@/lib/api-client';
+import { ClientApiError, api, errorMessage, localizedApiError } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
 import { LOCALE_COOKIE } from '@/lib/i18n';
 import { useI18n } from '@/lib/i18n-client';
@@ -187,7 +187,8 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
       setEnrolPassword('');
       router.refresh();
     } catch (err) {
-      setMsg({ error: errorMessage(err) });
+      // Enable / disable answer 400 VALIDATION_FAILED for a wrong code: context wording first.
+      setMsg({ error: localizedApiError(err, t, 'passkeys.mfa.errors') });
     } finally {
       setLoading(false);
     }

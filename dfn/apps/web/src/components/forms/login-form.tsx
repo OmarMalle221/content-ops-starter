@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '@dfn/ui';
 import { api, errorMessage } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
+import { safeNext } from '@/lib/safe-next';
 import { FormMessage } from '@/components/form-message';
 import { PasskeyLoginButton } from '@/components/security/passkey-login-button';
 
@@ -18,7 +19,7 @@ export function LoginForm() {
   const [loading, setLoading] = useState(false);
 
   function goNext(mfaRequired: boolean) {
-    const next = params.get('next') || '/dashboard';
+    const next = safeNext(params.get('next'));
     router.push(mfaRequired ? `/mfa?next=${encodeURIComponent(next)}` : next);
     router.refresh();
   }

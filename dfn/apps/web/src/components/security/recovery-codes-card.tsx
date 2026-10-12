@@ -13,7 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@dfn/ui';
-import { api, errorMessage } from '@/lib/api-client';
+import { api, localizedApiError } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
 import { useI18n } from '@/lib/i18n-client';
 import { CopyButton } from '@/components/copy-button';
@@ -114,7 +114,7 @@ export function RecoveryCodesCard({ summary }: { summary: RecoveryCodesSummary }
                       json: proof,
                     });
                   } catch (e) {
-                    throw new Error(errorMessage(e));
+                    throw new Error(localizedApiError(e, t));
                   }
                   setCode('');
                   setCodes(res.recoveryCodes);

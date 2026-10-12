@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@dfn/ui';
-import type { ProviderStatus } from './gates-register-table';
+import { gateTitle, type ProviderStatus } from './gates-register-table';
 
 type T = (path: string) => string;
 
@@ -65,7 +65,7 @@ export function GatesProvidersCard({ providers, t }: { providers: ProviderStatus
                       <Link
                         key={g.code}
                         href={`/admin/gates/${g.code}`}
-                        title={g.title}
+                        title={gateTitle(t, g)}
                         className={`rounded border px-1.5 py-0.5 font-mono text-[11px] hover:underline ${
                           g.satisfied ? 'border-success/40 text-success' : 'text-muted-foreground'
                         }`}

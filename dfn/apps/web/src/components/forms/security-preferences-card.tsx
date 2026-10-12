@@ -13,7 +13,7 @@ import {
   Input,
   Label,
 } from '@dfn/ui';
-import { ClientApiError, api, errorMessage } from '@/lib/api-client';
+import { ClientApiError, api, localizedApiError } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 import { FormMessage } from '@/components/form-message';
 import { StepUpFields } from '@/components/security/step-up-fields';
@@ -53,6 +53,8 @@ export function SecurityPreferencesCard({ preferences }: { preferences: Record<s
   const [needsProof, setNeedsProof] = useState(false);
   const [code, setCode] = useState('');
   const limitValid = form.dailyTransferLimit.trim() === '' || AMOUNT_RE.test(form.dailyTransferLimit.trim());
+  // Once the API asked for a proof, saving without a well-formed code would only fail again.
+  const proofReady = !needsProof || isMfaCodeInput(code);
 
   async function save(proof: StepUpProof = {}) {
     setLoading(true);
@@ -75,9 +77,9 @@ export function SecurityPreferencesCard({ preferences }: { preferences: Record<s
     } catch (err) {
       if (err instanceof ClientApiError && err.status === 401 && STEP_UP_CODES.has(err.body.code)) {
         setNeedsProof(true);
-        setMsg({ error: needsProof ? errorMessage(err) : t('passkeys.stepUp.required') });
+        setMsg({ error: needsProof ? localizedApiError(err, t) : t('passkeys.stepUp.required') });
       } else {
-        setMsg({ error: errorMessage(err) });
+        setMsg({ error: localizedApiError(err, t) });
       }
     } finally {
       setLoading(false);
@@ -100,8 +102,8 @@ export function SecurityPreferencesCard({ preferences }: { preferences: Record<s
           className="space-y-4"
           onSubmit={async (e) => {
             e.preventDefault();
-            if (!limitValid) return;
-            await save(needsProof && isMfaCodeInput(code) ? { mfaCode: code } : {});
+            if (!limitValid || !proofReady) return;
+            await save(needsProof ? { mfaCode: code } : {});
           }}
         >
           <label className="flex items-start gap-3 text-sm">
@@ -151,7 +153,7 @@ export function SecurityPreferencesCard({ preferences }: { preferences: Record<s
           <FormMessage error={msg.error} success={msg.success} />
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">{t('secprefs.defaults')}</p>
-            <Button type="submit" loading={loading} disabled={!limitValid}>
+            <Button type="submit" loading={loading} disabled={!limitValid || !proofReady}>
               {t('common.save')}
             </Button>
           </div>

@@ -13,6 +13,95 @@ export const reviewQueuePart = definePart(
       empty: 'Aucune alerte ne correspond à ces filtres.',
       rules: 'Règles actives',
       rulesHint: 'Moteur explicable : chaque alerte détaille les faits qui l’ont déclenchée.',
+      /**
+       * Risk-rule texts (packages/compliance/src/risk/rules.ts, English only). Only static strings:
+       * riskRuleText() swaps a server text for its translation when it equals the English entry
+       * below; texts with figures (velocity, ratios…) are shown as sent.
+       */
+      ruleTexts: {
+        AMOUNT_VS_PROFILE: {
+          description:
+            'Montant de la transaction disproportionné par rapport à l’historique de l’organisation',
+          recommendation:
+            'Confirmer la justification commerciale et les pièces justificatives avant toute libération.',
+        },
+        VELOCITY_24H: {
+          description: 'Nombre inhabituel de transactions créées en 24 heures',
+          recommendation:
+            'Rechercher un fractionnement ou une prise de contrôle du compte ; contacter l’organisation si nécessaire.',
+        },
+        UNVERIFIED_HIGH_VALUE: {
+          description:
+            'Transaction de montant élevé alors que la vérification d’identité ou d’entreprise est incomplète',
+          summary:
+            'Transaction de montant élevé créée par une partie dont la vérification d’identité est incomplète',
+          recommendation: 'Exiger la vérification d’identité avant d’accepter le financement.',
+        },
+        REPEATED_LOGIN_FAILURES: {
+          description: 'Échecs de connexion répétés',
+          recommendation:
+            'Le compte est temporairement verrouillé ; vérifier l’identité du titulaire avant de le déverrouiller.',
+        },
+        MULTI_DISPUTE_ACCOUNT: {
+          description: 'Compte associé à plusieurs litiges',
+          recommendation: 'Examiner l’historique des litiges avant d’approuver d’autres libérations.',
+        },
+        GEOGRAPHY_MISMATCH: {
+          description:
+            'Pays de l’acheteur incohérent avec l’origine de la transaction, ou corridor non pris en charge',
+          summary: 'Le pays déclaré par l’utilisateur diffère du pays d’origine de la transaction',
+          summaryUnsupported: 'Corridor pas encore pris en charge',
+          recommendation: 'Confirmer la résidence de l’acheteur et l’éligibilité du corridor.',
+        },
+        DOCUMENT_REUSE: {
+          description: 'Empreinte de document identique déjà téléversée sur d’autres transactions',
+          recommendation: 'Vérifier que la preuve est authentique et propre à cette transaction.',
+        },
+        NEW_ACCOUNT_HIGH_VALUE: {
+          description: 'Compte très récent créant une transaction de montant élevé',
+          summary: 'Un compte de moins de 3 jours a créé une transaction de montant élevé',
+          recommendation: 'Surveiller ; demander la vérification avant le financement.',
+        },
+        TRANSFER_VELOCITY: {
+          description: 'Nombre inhabituel de transferts initiés par l’organisation en 24 heures',
+          recommendation:
+            'Rechercher un fractionnement (schtroumpfage) ou une prise de contrôle du compte avant le règlement d’autres transferts.',
+        },
+        NEW_BENEFICIARY_HIGH_VALUE: {
+          description: 'Transfert important vers un bénéficiaire ajouté il y a moins de 24 heures',
+          summary: 'Transfert de montant élevé vers un bénéficiaire enregistré il y a moins de 24 heures',
+          recommendation:
+            'Confirmer le bénéficiaire auprès de l’expéditeur par un second canal avant le règlement.',
+        },
+        BENEFICIARY_CHURN: {
+          description: 'Nombreux bénéficiaires ajoutés ou supprimés en 24 heures',
+          recommendation:
+            'Possible prise de contrôle du compte : vérifier les connexions récentes et contacter l’organisation.',
+        },
+        UNVERIFIED_TRANSFER: {
+          description:
+            'Transfert de montant élevé autorisé alors que la vérification d’identité est incomplète',
+          summary:
+            'Transfert de montant élevé autorisé par un utilisateur dont la vérification d’identité est incomplète',
+          recommendation: 'Retenir le transfert pour revue manuelle et exiger la vérification d’identité.',
+        },
+        TRANSFER_DRAINS_WALLET: {
+          description: 'Transfert qui vide (presque) tout le solde du portefeuille',
+          summary: 'Le montant du transfert atteint au moins 90 % du solde du portefeuille',
+          recommendation:
+            'Surveiller ; combiné à d’autres signaux, cela peut indiquer une escroquerie de sortie ou une prise de contrôle.',
+        },
+        STRUCTURING: {
+          description:
+            'Plusieurs opérations, chacune sous le seuil agrégé, dont la somme l’atteint dans la fenêtre glissante (même utilisateur ou organisation, même devise et même sens)',
+          recommendation:
+            'Examiner les opérations ensemble (objet, origine des fonds, liens entre elles). Ne pas informer le client d’une éventuelle déclaration (interdiction de divulgation) ; transmettre au responsable de la conformité si le soupçon est raisonnable.',
+        },
+        SANCTIONS_POTENTIAL_MATCH: {
+          summary: 'Correspondance potentielle avec une liste de sanctions (criblage simulé)',
+          recommendation: 'Revue de conformité manuelle avant tout financement.',
+        },
+      },
       stats: {
         open: 'Ouvertes',
         overdue: 'En retard',
@@ -104,6 +193,79 @@ export const reviewQueuePart = definePart(
       empty: 'No alert matches these filters.',
       rules: 'Active rules',
       rulesHint: 'Explainable engine: every alert details the facts that triggered it.',
+      ruleTexts: {
+        AMOUNT_VS_PROFILE: {
+          description: 'Transaction amount disproportionate to the organisation history',
+          recommendation: 'Confirm the commercial rationale and supporting documents before release.',
+        },
+        VELOCITY_24H: {
+          description: 'Unusual number of transactions created in 24 hours',
+          recommendation: 'Check for structuring or account takeover; contact the organisation if needed.',
+        },
+        UNVERIFIED_HIGH_VALUE: {
+          description: 'High-value transaction while identity/business verification is not complete',
+          summary: 'High-value transaction created by a party whose identity verification is incomplete',
+          recommendation: 'Require identity verification before funding is accepted.',
+        },
+        REPEATED_LOGIN_FAILURES: {
+          description: 'Repeated failed sign-in attempts',
+          recommendation: 'Account is temporarily locked; verify ownership before unlocking.',
+        },
+        MULTI_DISPUTE_ACCOUNT: {
+          description: 'Account associated with several disputes',
+          recommendation: 'Review dispute history before approving further releases.',
+        },
+        GEOGRAPHY_MISMATCH: {
+          description: 'Buyer country inconsistent with transaction origin or unsupported corridor',
+          summary: 'Declared user country differs from the transaction origin country',
+          summaryUnsupported: 'Corridor is not yet supported',
+          recommendation: 'Confirm the residency of the buyer and the corridor eligibility.',
+        },
+        DOCUMENT_REUSE: {
+          description: 'Identical document hash already uploaded on other transactions',
+          recommendation: 'Verify that the proof is genuine and specific to this transaction.',
+        },
+        NEW_ACCOUNT_HIGH_VALUE: {
+          description: 'Very recent account creating a high-value transaction',
+          summary: 'Account younger than 3 days created a high-value transaction',
+          recommendation: 'Monitor; request verification before funding.',
+        },
+        TRANSFER_VELOCITY: {
+          description: 'Unusual number of transfers initiated by the organisation in 24 hours',
+          recommendation:
+            'Check for structuring (smurfing) or account takeover before further transfers settle.',
+        },
+        NEW_BENEFICIARY_HIGH_VALUE: {
+          description: 'Large transfer to a beneficiary added less than 24 hours ago',
+          summary: 'High-value transfer to a beneficiary registered less than 24 hours ago',
+          recommendation:
+            'Confirm the beneficiary with the sender through a second channel before settlement.',
+        },
+        BENEFICIARY_CHURN: {
+          description: 'Many beneficiaries added or removed within 24 hours',
+          recommendation: 'Possible account takeover: verify recent sign-ins and contact the organisation.',
+        },
+        UNVERIFIED_TRANSFER: {
+          description: 'High-value transfer authorised while identity verification is incomplete',
+          summary: 'High-value transfer authorised by a user whose identity verification is incomplete',
+          recommendation: 'Hold the transfer for manual review and require identity verification.',
+        },
+        TRANSFER_DRAINS_WALLET: {
+          description: 'Transfer that empties (almost) the whole wallet balance',
+          summary: 'Transfer amount is at least 90 % of the wallet balance',
+          recommendation: 'Monitor; combined with other signals this may indicate an exit scam or takeover.',
+        },
+        STRUCTURING: {
+          description:
+            'Several operations each below the aggregate threshold whose sum reaches it within the rolling window (same user or organisation, same currency and direction)',
+          recommendation:
+            'Review the operations together (purpose, source of funds, links between them). Do not inform the customer of a possible report (tipping-off); escalate to the compliance officer if suspicion is reasonable.',
+        },
+        SANCTIONS_POTENTIAL_MATCH: {
+          summary: 'Potential sanctions list match (simulated screening)',
+          recommendation: 'Manual compliance review before any funding.',
+        },
+      },
       stats: {
         open: 'Open',
         overdue: 'Overdue',

@@ -16,6 +16,7 @@ import {
 } from '@dfn/ui';
 import { api, errorMessage } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
+import { safeNext } from '@/lib/safe-next';
 import { FormMessage } from '@/components/form-message';
 
 export function RegisterForm({ invitationToken }: { invitationToken?: string }) {
@@ -44,7 +45,7 @@ export function RegisterForm({ invitationToken }: { invitationToken?: string }) 
     setError(null);
     try {
       await api('/v1/auth/register', { method: 'POST', json: { ...form, locale, invitationToken } });
-      router.push(params.get('next') || '/dashboard');
+      router.push(safeNext(params.get('next')));
       router.refresh();
     } catch (err) {
       setError(errorMessage(err));

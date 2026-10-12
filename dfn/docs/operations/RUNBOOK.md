@@ -21,26 +21,29 @@ Ordre de démarrage imposé par `docker-compose.yml` : `postgres` et `redis` sai
 
 `docker-compose.yml` ne contient **aucun secret par défaut** : `docker compose` refuse de démarrer tant que les variables obligatoires ne sont pas définies dans `.env` (copie de `.env.example`, jamais versionnée).
 
-| Variable                                 | Obligatoire      | Règle                                                                                                                                                                                            |
-| ---------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POSTGRES_PASSWORD`                      | oui              | `openssl rand -hex 24` (hexadécimal : il est inséré tel quel dans l'URL de connexion)                                                                                                            |
-| `REDIS_PASSWORD`                         | oui              | `openssl rand -hex 24` (même raison)                                                                                                                                                             |
-| `SESSION_SECRET`                         | oui              | `openssl rand -hex 32`, unique par environnement ; le changer invalide sessions et codes de récupération MFA                                                                                     |
-| `DOCUMENT_ENCRYPTION_KEY`                | oui              | `openssl rand -hex 32` ; à sauvegarder **hors** des sauvegardes de la base                                                                                                                       |
-| `ENCRYPTION_KEYRING`                     | recommandé       | trousseau versionné par usage, voir [`KEY_ROTATION.md`](KEY_ROTATION.md)                                                                                                                         |
-| `DFN_MODE`                               | imposé           | `sandbox` (forcé par la composition ; toute autre valeur empêche le démarrage)                                                                                                                   |
-| `API_PUBLIC_URL`, `WEB_PUBLIC_URL`       | hors poste local | URL publiques réelles de la recette                                                                                                                                                              |
-| `CORS_ORIGINS`, `WEBAUTHN_ORIGINS`       | hors poste local | origine(s) exacte(s) du web ; la garde CSRF rejette toute autre origine                                                                                                                          |
-| `WEBAUTHN_RP_ID`                         | hors poste local | domaine du web (sans schéma ni port)                                                                                                                                                             |
-| `COOKIE_SECURE`                          | hors poste local | `true` derrière TLS                                                                                                                                                                              |
-| `TRUST_PROXY`                            | non              | pairs autorisés à fixer `X-Forwarded-For` (défaut : boucle locale et réseaux privés, c'est-à-dire le proxy `/api` du web). Derrière un proxy public, n'y mettre **que** ce proxy ; jamais `true` |
-| `REQUIRE_STAFF_MFA`                      | avant pilote     | `true` : ADMIN et COMPLIANCE doivent activer la MFA pour utiliser leurs permissions (`403 STAFF_MFA_REQUIRED`) ; laisser `false` uniquement pour les comptes de démonstration                    |
-| `STORAGE_DRIVER`                         | non (`local`)    | `s3` pour plusieurs hôtes ; alors `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`                                                                                         |
-| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | profil `s3`      | vérifiés au démarrage du conteneur (MinIO aurait sinon des identifiants par défaut connus)                                                                                                       |
-| `LOG_LEVEL`                              | non (`info`)     | `debug` interdit en recette partagée                                                                                                                                                             |
-| `SEED_DEMO_PASSWORD`                     | profil `seed`    | mot de passe des comptes de démonstration ; à changer avant toute recette partagée                                                                                                               |
+| Variable                                 | Obligatoire       | Règle                                                                                                                                                                                                          |
+| ---------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD`                      | oui               | `openssl rand -hex 24` (hexadécimal : il est inséré tel quel dans l'URL de connexion)                                                                                                                          |
+| `POSTGRES_APP_PASSWORD`                  | oui               | `openssl rand -hex 24` ; rôle `dfn_app` (`POSTGRES_APP_USER`) de l'API : lecture/écriture des données, aucun droit DDL ni superutilisateur. Les migrations et le seed gardent `POSTGRES_USER`                  |
+| `REDIS_PASSWORD`                         | oui               | `openssl rand -hex 24` (même raison)                                                                                                                                                                           |
+| `SESSION_SECRET`                         | oui               | `openssl rand -hex 32`, unique par environnement ; le changer invalide sessions et codes de récupération MFA                                                                                                   |
+| `DOCUMENT_ENCRYPTION_KEY`                | oui               | `openssl rand -hex 32` ; à sauvegarder **hors** des sauvegardes de la base                                                                                                                                     |
+| `ENCRYPTION_KEYRING`                     | recommandé        | trousseau versionné par usage, voir [`KEY_ROTATION.md`](KEY_ROTATION.md)                                                                                                                                       |
+| `DFN_MODE`                               | imposé            | `sandbox` (forcé par la composition ; toute autre valeur empêche le démarrage)                                                                                                                                 |
+| `API_PUBLIC_URL`, `WEB_PUBLIC_URL`       | hors poste local  | URL publiques réelles de la recette                                                                                                                                                                            |
+| `CORS_ORIGINS`, `WEBAUTHN_ORIGINS`       | hors poste local  | origine(s) exacte(s) du web ; la garde CSRF rejette toute autre origine                                                                                                                                        |
+| `WEBAUTHN_RP_ID`                         | hors poste local  | domaine du web (sans schéma ni port)                                                                                                                                                                           |
+| `COOKIE_SECURE`                          | hors poste local  | `true` derrière TLS                                                                                                                                                                                            |
+| `TRUST_PROXY`                            | non               | pairs autorisés à fixer `X-Forwarded-For` (défaut : boucle locale et réseaux privés, c'est-à-dire le proxy `/api` du web). Derrière un proxy public, n'y mettre **que** ce proxy ; jamais `true`               |
+| `WEB_TRUSTED_PROXY_HOPS`                 | non (`0`)         | nombre de proxys inverses devant le web ; `0` : l'adresse du client est celle de la connexion TCP (tout `X-Forwarded-For` reçu est remplacé). Ne le fixer que si le web n'est joignable **que** par ces proxys |
+| `WEB_HOST_BIND`                          | non (`127.0.0.1`) | interface hôte du port web ; `0.0.0.0` l'expose au réseau (recette, derrière TLS)                                                                                                                              |
+| `REQUIRE_STAFF_MFA`                      | avant pilote      | `true` : ADMIN et COMPLIANCE doivent activer la MFA pour utiliser leurs permissions (`403 STAFF_MFA_REQUIRED`) ; laisser `false` uniquement pour les comptes de démonstration                                  |
+| `STORAGE_DRIVER`                         | non (`local`)     | `s3` pour plusieurs hôtes ; alors `S3_BUCKET`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`                                                                                                       |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | profil `s3`       | vérifiés au démarrage du conteneur (MinIO aurait sinon des identifiants par défaut connus)                                                                                                                     |
+| `LOG_LEVEL`                              | non (`info`)      | `debug` interdit en recette partagée                                                                                                                                                                           |
+| `SEED_DEMO_PASSWORD`                     | profil `seed`     | mot de passe des comptes de démonstration ; à changer avant toute recette partagée                                                                                                                             |
 
-Les valeurs propres aux conteneurs sont fixées par la composition et l'emportent sur `.env` : `NODE_ENV=production`, `DATABASE_URL`, `REDIS_URL`, `JOBS_DRIVER=bullmq`, `RATE_LIMIT_STORE=redis`, `STORAGE_DIR=/data/storage`, `API_PORT=4000`.
+Les valeurs propres aux conteneurs sont fixées par la composition et l'emportent sur `.env` : `NODE_ENV=production`, `DATABASE_URL`, `REDIS_URL`, `JOBS_DRIVER=bullmq`, `RATE_LIMIT_STORE=redis`, `STORAGE_DIR=/data/storage`, `API_PORT=4000`. Les identifiants des conteneurs d'infrastructure (`POSTGRES_*`, `REDIS_PASSWORD`, `MINIO_ROOT_*`) sont vidés dans l'environnement de l'API.
 
 Avant toute recette partagée : secrets uniques et stockés dans un coffre, TLS en frontal, `COOKIE_SECURE=true`, `REQUIRE_STAFF_MFA=true`, `TRUST_PROXY` limité au proxy frontal, origines exactes, comptes de démonstration supprimés ou mots de passe changés, sauvegardes planifiées **et** un exercice de restauration réussi (§6).
 
@@ -74,6 +77,25 @@ Les migrations sont **additives** (expand/contract) : une réplique de l'ancienn
 - **Mot de passe PostgreSQL** : `POSTGRES_PASSWORD` n'est appliqué qu'à l'initialisation du volume `pgdata`. Une pile existante garde l'ancien mot de passe (`dfn`) : soit le reporter tel quel dans `.env` le temps de la bascule, soit le changer d'abord (`docker compose exec postgres psql -U dfn -c "ALTER USER dfn PASSWORD '<nouveau>'"`) puis mettre `.env` à jour.
 - **Volume `storage`** : l'API s'exécute désormais sous l'uid 10001, sans capacité. Rendre le volume existant inscriptible une fois : `docker run --rm -v dfn-sandbox_storage:/data alpine chown -R 10001:10001 /data`.
 - **Redis** exige maintenant `REDIS_PASSWORD` ; aucune donnée Redis n'est à migrer.
+
+### Mise à niveau d'une pile de la phase 6
+
+- **Rôle `dfn_app`** : le script `infra/postgres/initdb/10-app-role.sh` ne s'exécute qu'à l'initialisation d'un volume `pgdata` vide. Sur une pile existante, définir `POSTGRES_APP_PASSWORD` dans `.env` puis, **avant** `docker compose up -d` :
+
+  ```bash
+  docker compose exec -T postgres psql -U dfn -d dfn -v ON_ERROR_STOP=1 -v pw="$(grep '^POSTGRES_APP_PASSWORD=' .env | cut -d= -f2-)" <<'SQL'
+  CREATE ROLE dfn_app LOGIN PASSWORD :'pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+  GRANT CONNECT, TEMPORARY ON DATABASE dfn TO dfn_app;
+  GRANT USAGE ON SCHEMA public TO dfn_app;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dfn_app;
+  GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO dfn_app;
+  ALTER DEFAULT PRIVILEGES FOR ROLE dfn GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dfn_app;
+  ALTER DEFAULT PRIVILEGES FOR ROLE dfn GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO dfn_app;
+  SQL
+  ```
+
+- **Port web** : publié sur `127.0.0.1` par défaut (`WEB_HOST_BIND`) ; une recette exposée met un proxy TLS devant et fixe `WEB_TRUSTED_PROXY_HOPS=1`.
+- **Restauration** (§7) : `restore.sh` sans `--create` recrée le schéma `public` en conservant ses droits (`USAGE` de `dfn_app`) ; les droits de `dfn_app` sur les tables restaurées viennent des privilèges par défaut ci-dessus, non liés au schéma (restauration exécutée en tant que `dfn`).
 
 ### Arrêt
 
@@ -128,17 +150,30 @@ BACKUP_AGE_RECIPIENT=age1… \
 - **Chiffrement** : avec `BACKUP_AGE_RECIPIENT` (ou `BACKUP_AGE_RECIPIENTS_FILE`), l'archive est chiffrée par `age` (`.dump.age`) ; avec `BACKUP_GPG_RECIPIENT` (empreinte complète), par `gpg` (`.dump.gpg`). La clé privée de déchiffrement **ne doit jamais** être stockée avec les sauvegardes. Sans chiffrement, l'archive est vérifiée par `pg_restore --list` ; chiffrée, elle l'est si `BACKUP_AGE_IDENTITY_FILE` est fourni (sinon par l'exercice du §6).
 - **Rétention** : suppression des sauvegardes de la même base plus anciennes que `BACKUP_RETENTION_DAYS` (30), en conservant toujours les `BACKUP_KEEP_MIN` (7) plus récentes ; `--no-prune` pour désactiver.
 - Les identifiants de connexion sont passés par les variables `PG*` (jamais en argument de commande, jamais affichés) ; `umask 077` sur tous les fichiers produits.
-- Planification (exemple cron, hôte d'exploitation) : `15 2 * * * cd /srv/dfn && BACKUP_DIR=/srv/dfn/backups bash infra/ops/backup.sh >> /var/log/dfn-backup.log 2>&1`, puis copie hors site (stockage objet avec verrouillage, autre région).
-- Depuis la composition : `docker compose exec -T postgres pg_dump -U dfn -Fc dfn > dfn-$(date -u +%Y%m%dT%H%M%SZ).dump` dépanne, mais ne chiffre ni ne purge : préférer `backup.sh` avec `DATABASE_URL` pointant sur `127.0.0.1:5432`.
+- Planification (hôte d'exploitation) : cron ne fournit **aucune** variable du `.env`. Les paramètres vont dans un fichier réservé à root, lu par la tâche :
+
+  ```bash
+  # /etc/dfn/backup.env (chmod 600, propriétaire root) — jamais dans le dépôt
+  BACKUP_DATABASE_URL='postgresql://dfn:…@127.0.0.1:5432/dfn'
+  BACKUP_DIR=/srv/dfn/backups
+  BACKUP_AGE_RECIPIENT=age1…            # sans destinataire, l'archive serait en clair
+
+  # crontab de root
+  15 2 * * * cd /srv/dfn && set -a && . /etc/dfn/backup.env && set +a && bash infra/ops/backup.sh >> /var/log/dfn-backup.log 2>&1 || logger -p user.err -t dfn-backup "échec de la sauvegarde"
+  ```
+
+  Un code de sortie non nul doit déclencher une alerte (ici `logger`, relayé par la supervision de l'hôte) ; puis copie hors site (stockage objet avec verrouillage, autre région).
+
+- Depuis la composition, en dépannage uniquement (ni chiffrement ni purge) : `(umask 077; docker compose exec -T postgres pg_dump -U dfn -Fc dfn > dfn-$(date -u +%Y%m%dT%H%M%SZ).dump)` — le sous-shell `umask 077` rend le fichier lisible par son seul propriétaire. Préférer `backup.sh` avec `DATABASE_URL` pointant sur `127.0.0.1:5432`.
 
 ### Documents, clés, Redis
 
-| Élément                                                                  | Procédure                                                                                                                                                                                                                                               |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Blobs `STORAGE_DRIVER=local`                                             | `docker compose exec -T api tar -C /data/storage -cf - . > storage-$(date -u +%Y%m%dT%H%M%SZ).tar` (les blobs sont déjà chiffrés AES-256-GCM par l'application). **Après** la sauvegarde de la base : un blob sans ligne est inoffensif, l'inverse non. |
-| Blobs `STORAGE_DRIVER=s3`                                                | `mc mirror --overwrite <alias>/<bucket> <sauvegarde>/<bucket>-<date>` ou réplication du bucket chez le fournisseur, après la sauvegarde de la base.                                                                                                     |
-| Clés (`ENCRYPTION_KEYRING`, `DOCUMENT_ENCRYPTION_KEY`, `SESSION_SECRET`) | dans le coffre de secrets, **séparément** des sauvegardes de la base et des blobs ; toute clé encore référencée (`/admin/keys`) doit rester restaurable.                                                                                                |
-| Redis                                                                    | non critique (AOF activé) : files et planifications sont reconstruites au démarrage.                                                                                                                                                                    |
+| Élément                                                                  | Procédure                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Blobs `STORAGE_DRIVER=local`                                             | `(umask 077; docker compose exec -T api tar -C /data/storage -cf - . > storage-$(date -u +%Y%m%dT%H%M%SZ).tar)` (les blobs sont déjà chiffrés AES-256-GCM par l'application ; `storage-*.tar` est ignoré par git). **Après** la sauvegarde de la base : un blob sans ligne est inoffensif, l'inverse non. |
+| Blobs `STORAGE_DRIVER=s3`                                                | `mc mirror --overwrite <alias>/<bucket> <sauvegarde>/<bucket>-<date>` ou réplication du bucket chez le fournisseur, après la sauvegarde de la base.                                                                                                                                                       |
+| Clés (`ENCRYPTION_KEYRING`, `DOCUMENT_ENCRYPTION_KEY`, `SESSION_SECRET`) | dans le coffre de secrets, **séparément** des sauvegardes de la base et des blobs ; toute clé encore référencée (`/admin/keys`) doit rester restaurable.                                                                                                                                                  |
+| Redis                                                                    | non critique (AOF activé) : files et planifications sont reconstruites au démarrage.                                                                                                                                                                                                                      |
 
 ## 6. Exercice de restauration (trimestriel)
 

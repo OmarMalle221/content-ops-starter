@@ -46,6 +46,8 @@ trap cleanup EXIT
 if $BOOT; then
   need node
   [[ -f "$ENTRY" ]] || die "compiled entry not found: $ENTRY (run: pnpm build:api)"
+  # Absolute: the boot below changes directory before starting node.
+  ENTRY="$(cd "$(dirname "$ENTRY")" && pwd)/$(basename "$ENTRY")"
   SMOKE_LOG="${SMOKE_LOG:-$WORK/api.log}"
   log "booting $(basename "$ENTRY") (NODE_ENV=${NODE_ENV:-unset}, port ${API_PORT:-4000}) — logs: $SMOKE_LOG"
   (cd "$(dirname "$ENTRY")/.." && exec node --enable-source-maps "$ENTRY") >"$SMOKE_LOG" 2>&1 &

@@ -3,7 +3,7 @@
 # SANDBOX ONLY — fictitious data and amounts. Never touches the source database except to read it.
 #
 # Usage: infra/ops/restore-test.sh [--source-url URL] [--dump FILE] [--scratch-db NAME] [--keep]
-#                                  [--allow-count-drift] [--allow-differences]
+#                                  [--allow-count-drift] [--allow-differences] [--allow-empty]
 #
 #   --source-url URL     database to back up (default: DATABASE_URL)
 #   --dump FILE          drill an existing backup (e.g. last night's) instead of taking a new one;
@@ -12,6 +12,7 @@
 #   --keep               keep the scratch database for inspection (dropped by default)
 #   --allow-count-drift  source and restored row counts may differ (live source being written)
 #   --allow-differences  ledger reconciliation differences are reported but do not fail the drill
+#   --allow-empty        with --dump: a backup without users or ledger rows passes (fresh database)
 #
 # Checks: 1) backup.sh + restore.sh succeed (checksum, decryption, pg_restore in one transaction)
 #         2) prisma migrate status: the restored schema is up to date with the code's migrations
@@ -32,12 +33,14 @@ SCRATCH_DB=""
 KEEP=false
 ALLOW_DRIFT=false
 ALLOW_DIFFERENCES=false
+ALLOW_EMPTY=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source-url) SOURCE_URL="$2"; shift 2 ;;
     --dump) DUMP="$2"; shift 2 ;;
     --scratch-db) SCRATCH_DB="$2"; shift 2 ;;
     --keep) KEEP=true; shift ;;
+    --allow-empty) ALLOW_EMPTY=true; shift ;;
     --allow-count-drift) ALLOW_DRIFT=true; shift ;;
     --allow-differences) ALLOW_DIFFERENCES=true; shift ;;
     -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
@@ -96,11 +99,35 @@ fi
 backup_s="$(elapsed "$t")"
 log "backup: $(basename "$DUMP") ($(du -h "$DUMP" | cut -f1), ${backup_s} s)"
 
+count_rows() {
+  # count_rows URL TABLE → row count, or "absent" when the table does not exist.
+  (
+    parse_pg_url "$1"
+    reg="$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('\"$SCHEMA\".\"$2\"') IS NOT NULL")"
+    if [[ "$reg" == "t" ]]; then
+      psql -X -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM \"$SCHEMA\".\"$2\""
+    else
+      echo absent
+    fi
+  )
+}
+
 # ── 2. Restore into the scratch database ─────────────────────────────────────
 t="$(now_ms)"
 SCRATCH_OWNED=true
 bash "$DFN_OPS_DIR/restore.sh" "$DUMP" --target-url "$SCRATCH_URL" --create --yes
 restore_s="$(elapsed "$t")"
+
+# In place over a newer schema (rolling back a bad release): a table that the backup does not know,
+# with a foreign key to a restored table, must not make the restore abort.
+(
+  parse_pg_url "$SCRATCH_URL"
+  psql -X -q -v ON_ERROR_STOP=1 -c "CREATE TABLE \"$SCHEMA\".\"DrillNewer\" (id int,
+    m varchar(36) REFERENCES \"$SCHEMA\".\"_prisma_migrations\"(id))"
+)
+bash "$DFN_OPS_DIR/restore.sh" "$DUMP" --target-url "$SCRATCH_URL" --yes
+[[ "$(count_rows "$SCRATCH_URL" DrillNewer 2>/dev/null || echo error)" == absent ]] ||
+  fail "in-place restore kept a table the backup does not contain"
 
 # ── 3. Prisma migration status of the restored schema ───────────────────────
 t="$(now_ms)"
@@ -131,18 +158,6 @@ fi
 TABLES=(_prisma_migrations User Organization OrganizationMember Transaction Wallet LedgerAccount
   LedgerTransaction LedgerEntry BalanceSnapshot ReconciliationJob Transfer Invoice Document AuditLog
   RiskAlert RegulatoryGate WebAuthnCredential)
-count_rows() {
-  # count_rows URL TABLE → row count, or "absent" when the table does not exist.
-  (
-    parse_pg_url "$1"
-    reg="$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('\"$SCHEMA\".\"$2\"') IS NOT NULL")"
-    if [[ "$reg" == "t" ]]; then
-      psql -X -At -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM \"$SCHEMA\".\"$2\""
-    else
-      echo absent
-    fi
-  )
-}
 compare_source=true
 [[ "$DUMP" == "$WORK/backups/"* ]] || compare_source=false
 printf '%-22s %12s %12s\n' table source restored >&2
@@ -163,6 +178,13 @@ for table in "${TABLES[@]}"; do
   printf '%-22s %12s %12s %s\n' "$table" "$source_count" "$restored" "$status" >&2
 done
 [[ "$(count_rows "$SCRATCH_URL" _prisma_migrations)" =~ ^[1-9] ]] || fail "no applied migration in the restored database"
+if ! $compare_source && ! $ALLOW_EMPTY; then
+  # No source to compare with: an empty or wrong-database backup must not pass the drill.
+  for table in User LedgerAccount LedgerTransaction LedgerEntry; do
+    [[ "$(count_rows "$SCRATCH_URL" "$table")" =~ ^[1-9] ]] ||
+      fail "$table is empty in the restored backup (--allow-empty for a fresh database)"
+  done
+fi
 
 # ── 5. Ledger reconciliation on the restored database ───────────────────────
 RUNNER="${DFN_RECONCILE_RUNNER:-auto}"

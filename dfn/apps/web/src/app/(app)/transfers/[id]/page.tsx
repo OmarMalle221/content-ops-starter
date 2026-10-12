@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, ArrowRight, Landmark, ShieldAlert } from 'lucide-react';
+import { TransferEventType } from '@dfn/shared';
 import {
   Alert,
   AlertDescription,
@@ -20,7 +21,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { CopyButton } from '@/components/copy-button';
 import { TransferActions } from '@/components/transfers/transfer-actions';
 import type { TransferDto, TransferEventDto } from '@/components/transfers/types';
-import { ApiError, apiFetch, getSession } from '@/lib/api-server';
+import { ApiError, apiFetch, getSession, getTransferStepUpRequired } from '@/lib/api-server';
 import { formatDate, formatMoney } from '@/lib/format';
 import { getT } from '@/lib/i18n-server';
 
@@ -90,8 +91,12 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
   const { id } = await params;
   const [{ t, locale }, session] = await Promise.all([getT(), getSession()]);
   let x: TransferDto;
+  let stepUpRequired: boolean;
   try {
-    x = await apiFetch<TransferDto>(`/v1/transfers/${id}`);
+    [x, stepUpRequired] = await Promise.all([
+      apiFetch<TransferDto>(`/v1/transfers/${id}`),
+      getTransferStepUpRequired(session),
+    ]);
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) notFound();
     throw e;
@@ -102,14 +107,26 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
     const label = t(key);
     return label === key ? type : label;
   };
+  // Members receive the placeholder COMPLIANCE_REVIEW (rule codes are staff-only); staff see the
+  // engine's reasons, shown as sent.
+  const reviewReasonLabel = (reason: string) => {
+    const key = `xfer.reviewReasons.${reason}`;
+    const label = t(key);
+    return label === key ? reason : label;
+  };
   const colon = locale === 'fr' ? ' : ' : ': ';
-  const eventDetails = (payload: TransferEventDto['payload']): string[] =>
+  const eventDetails = (type: string, payload: TransferEventDto['payload']): string[] =>
     payload
       ? EVENT_FIELDS.flatMap((field) => {
           const value = payload[field];
           if (typeof value !== 'string' && typeof value !== 'number') return [];
           const purposeKey = `xfer.purposes.${value}`;
-          const text = field === 'purpose' && t(purposeKey) !== purposeKey ? t(purposeKey) : String(value);
+          const text =
+            field === 'purpose' && t(purposeKey) !== purposeKey
+              ? t(purposeKey)
+              : field === 'reason' && type === TransferEventType.REVIEW_REQUIRED
+                ? reviewReasonLabel(String(value))
+                : String(value);
           return [`${t(`xfer.eventFields.${field}`)}${colon}${text}`];
         })
       : [];
@@ -145,7 +162,8 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
             {x.reviewReason ? (
               <>
                 {' '}
-                <span className="font-medium">{t('xfer.reviewReason')}:</span> {x.reviewReason}
+                <span className="font-medium">{t('xfer.reviewReason')}:</span>{' '}
+                {reviewReasonLabel(x.reviewReason)}
               </>
             ) : null}
           </AlertDescription>
@@ -185,7 +203,7 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
       ) : null}
 
       <div className="mb-6">
-        <TransferActions transfer={x} mfaEnabled={session?.user.mfaEnabled ?? false} />
+        <TransferActions transfer={x} stepUpRequired={stepUpRequired} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -345,8 +363,10 @@ export default async function TransferDetailPage({ params }: { params: Promise<{
               >
                 <div>
                   <p className="font-medium">{eventLabel(e.type)}</p>
-                  {eventDetails(e.payload).length ? (
-                    <p className="text-xs text-muted-foreground">{eventDetails(e.payload).join(' · ')}</p>
+                  {eventDetails(e.type, e.payload).length ? (
+                    <p className="text-xs text-muted-foreground">
+                      {eventDetails(e.type, e.payload).join(' · ')}
+                    </p>
                   ) : null}
                 </div>
                 <span className="whitespace-nowrap text-xs text-muted-foreground">
