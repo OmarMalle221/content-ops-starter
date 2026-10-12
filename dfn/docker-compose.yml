@@ -187,7 +187,7 @@ services:
       S3_BUCKET: ${S3_BUCKET:-dfn-documents}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
+      TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
       REQUIRE_STAFF_MFA: ${REQUIRE_STAFF_MFA:-false}
     tmpfs: ['/tmp:size=64m']
     volumes: ['storage:/data/storage']

@@ -30,7 +30,9 @@ while [[ $# -gt 0 ]]; do
 done
 BASE_URL="${BASE_URL:-http://127.0.0.1:${API_PORT:-4000}}"
 # The CSRF guard only accepts browser origins listed in CORS_ORIGINS / WEB_PUBLIC_URL.
-ORIGIN="${ORIGIN:-${CORS_ORIGINS%%,*}}"
+# CORS_ORIGINS may be unset (CI sets none): `set -u` needs the default before the expansion.
+ORIGIN="${ORIGIN:-${CORS_ORIGINS:-}}"
+ORIGIN="${ORIGIN%%,*}"
 ORIGIN="${ORIGIN:-http://localhost:3000}"
 
 WORK="$(mktemp -d)"

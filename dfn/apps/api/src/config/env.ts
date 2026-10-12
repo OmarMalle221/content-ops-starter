@@ -92,10 +92,10 @@ const envSchema = z
     /** Lease duration of a running job; the runner renews it by heartbeat while the job runs. */
     /**
      * Express "trust proxy": which peers may set X-Forwarded-For (rate limits and audit IPs depend
-     * on it). Addresses/subnets ("loopback, uniquelocal"), a hop count ("1") or "false". The
+     * on it). Comma-separated addresses/subnets ("loopback,uniquelocal"), a hop count ("1") or "false". The
      * default trusts only private networks, so a client reaching the API directly cannot spoof it.
      */
-    TRUST_PROXY: z.string().min(1).default('loopback, linklocal, uniquelocal'),
+    TRUST_PROXY: z.string().min(1).default('loopback,linklocal,uniquelocal'),
     JOB_LEASE_SECONDS: z.coerce.number().int().min(15).max(3600).default(120),
     RATE_LIMIT_STORE: z.enum(['memory', 'redis']).default('memory'),
     /** Optional comma-separated allowlist of webhook destination hosts (exact or *.suffix). */

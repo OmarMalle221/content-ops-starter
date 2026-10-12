@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parseTrustProxy } from '../src/bootstrap';
 import {
   PrivateDestinationError,
   guardedLookup,
@@ -61,5 +62,19 @@ describe('webhook transport', () => {
       (e: unknown) => e,
     );
     expect((slow as Error).name).toBe('AbortError');
+  });
+});
+
+describe('TRUST_PROXY parsing', () => {
+  it('reads subnet lists, hop counts and booleans', () => {
+    expect(parseTrustProxy('loopback,linklocal,uniquelocal')).toEqual([
+      'loopback',
+      'linklocal',
+      'uniquelocal',
+    ]);
+    expect(parseTrustProxy(' loopback , 10.0.0.0/8 ')).toEqual(['loopback', '10.0.0.0/8']);
+    expect(parseTrustProxy('1')).toBe(1);
+    expect(parseTrustProxy('false')).toBe(false);
+    expect(parseTrustProxy('true')).toBe(true);
   });
 });
