@@ -37,6 +37,7 @@ import { DdaModule } from './modules/dda/dda.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { GatesModule } from './modules/gates/gates.module';
 import { KeysModule } from './modules/keys/keys.module';
+import { ObservabilityModule } from './modules/observability/observability.module';
 
 export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> = {}) {
   const env = loadEnv(envOverrides);
@@ -102,6 +103,7 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
       JobsModule,
       GatesModule,
       KeysModule,
+      ObservabilityModule,
     ],
     controllers: [HealthController, ReferenceController],
     providers: [

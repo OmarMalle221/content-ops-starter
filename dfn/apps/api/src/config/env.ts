@@ -89,13 +89,13 @@ const envSchema = z
     /** Comma-separated origins accepted in WebAuthn client data (the web app origin). */
     WEBAUTHN_ORIGINS: z.string().default('http://localhost:3000'),
     JOBS_DRIVER: z.enum(['inprocess', 'bullmq']).default('inprocess'),
-    /** Lease duration of a running job; the runner renews it by heartbeat while the job runs. */
     /**
      * Express "trust proxy": which peers may set X-Forwarded-For (rate limits and audit IPs depend
      * on it). Comma-separated addresses/subnets ("loopback,uniquelocal"), a hop count ("1") or "false". The
      * default trusts only private networks, so a client reaching the API directly cannot spoof it.
      */
     TRUST_PROXY: z.string().min(1).default('loopback,linklocal,uniquelocal'),
+    /** Lease duration of a running job; the runner renews it by heartbeat while the job runs. */
     JOB_LEASE_SECONDS: z.coerce.number().int().min(15).max(3600).default(120),
     RATE_LIMIT_STORE: z.enum(['memory', 'redis']).default('memory'),
     /** Optional comma-separated allowlist of webhook destination hosts (exact or *.suffix). */
@@ -114,6 +114,51 @@ const envSchema = z
       )
       .default('10000.00,XOF:4400000,GNF:63000000'),
     PAYOUT_PROVIDER: z.string().default('sandbox'),
+
+    // ── Phase 7 ──────────────────────────────────────────────────────────────
+    /**
+     * KMS holding the master key that wraps the data keys of the key ring (envelope encryption):
+     * "none" = data keys only from ENCRYPTION_KEYRING (phase 6 behaviour); "local" = sandbox KMS
+     * whose master key is KMS_LOCAL_MASTER_KEY; "aws" = AWS KMS (KMS_KEY_ID, KMS_REGION, optional
+     * KMS_ENDPOINT for a compatible service). Wrapped keys live in the EncryptionKey table.
+     */
+    KMS_PROVIDER: z.enum(['none', 'local', 'aws']).default('none'),
+    KMS_LOCAL_MASTER_KEY: z
+      .string()
+      .regex(/^[0-9a-fA-F]{64}$/, 'KMS_LOCAL_MASTER_KEY must be 32-byte hex')
+      .optional(),
+    KMS_KEY_ID: z.string().min(1).optional(),
+    KMS_REGION: z.string().min(1).optional(),
+    KMS_ENDPOINT: z.string().url().optional(),
+    /** Scheduled rotation: a new data key per purpose when the active one is older (0 = manual only). */
+    KEY_ROTATION_INTERVAL_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
+    /** A new key stays STAGED (decrypt-only) this long so every replica loads it before it seals. */
+    KEY_ACTIVATION_DELAY_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
+    /** How often each replica reloads KMS-managed keys from the database. */
+    KEYRING_REFRESH_SECONDS: z.coerce.number().int().min(5).max(3600).default(60),
+    /**
+     * "false" retires the legacy DOCUMENT_ENCRYPTION_KEY for decryption once every value has been
+     * re-sealed (the key ring then refuses legacy values; every purpose needs an active key).
+     */
+    ENCRYPTION_LEGACY_DECRYPT: z
+      .string()
+      .default('true')
+      .transform((v) => v !== 'false'),
+    /** Secret keying the recovery-code hashes (defaults to SESSION_SECRET for existing codes). */
+    MFA_RECOVERY_SECRET: z.string().min(32).optional(),
+    /** Prometheus metrics at GET /metrics (bearer METRICS_TOKEN; without a token: loopback only). */
+    METRICS_ENABLED: z
+      .string()
+      .default('true')
+      .transform((v) => v !== 'false'),
+    METRICS_TOKEN: z.string().min(24).optional(),
+    /** Antivirus for uploads: "none" (SKIPPED), "sandbox" (EICAR test signature), "clamd" (ClamAV daemon). */
+    ANTIVIRUS_PROVIDER: z.enum(['none', 'sandbox', 'clamd']).default('sandbox'),
+    CLAMD_HOST: z.string().default('127.0.0.1'),
+    CLAMD_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+    ANTIVIRUS_TIMEOUT_MS: z.coerce.number().int().min(500).max(120_000).default(10_000),
+    /** Days a deleted document's blob is kept when it has no later retentionUntil (0 = next purge run). */
+    DOCUMENT_PURGE_GRACE_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
   })
   .superRefine((v, ctx) => {
     if (v.STORAGE_DRIVER === 's3' && !v.S3_BUCKET) {
@@ -121,6 +166,20 @@ const envSchema = z
         code: 'custom',
         path: ['S3_BUCKET'],
         message: 'S3_BUCKET is required when STORAGE_DRIVER=s3',
+      });
+    }
+    if (v.KMS_PROVIDER === 'local' && !v.KMS_LOCAL_MASTER_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['KMS_LOCAL_MASTER_KEY'],
+        message: 'KMS_LOCAL_MASTER_KEY is required when KMS_PROVIDER=local',
+      });
+    }
+    if (v.KMS_PROVIDER === 'aws' && (!v.KMS_KEY_ID || !v.KMS_REGION)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['KMS_KEY_ID'],
+        message: 'KMS_KEY_ID and KMS_REGION are required when KMS_PROVIDER=aws',
       });
     }
     if ((v.JOBS_DRIVER === 'bullmq' || v.RATE_LIMIT_STORE === 'redis') && !v.REDIS_URL) {

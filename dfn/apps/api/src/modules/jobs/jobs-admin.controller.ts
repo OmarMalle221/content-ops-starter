@@ -18,10 +18,16 @@ const jobNameSchema = z.nativeEnum(MaintenanceJobName);
 const listRunsQuerySchema = paginationSchema.extend({ jobName: jobNameSchema.optional() });
 
 /**
- * Key rotation re-encrypts every secret and its runs expose key ids and failure counts: on this
- * generic console it stays reserved to ADMIN_KEYS holders (COMPLIANCE has ADMIN_JOBS only).
+ * Jobs that re-encrypt secrets, manage data keys or move / destroy tenant documents expose key ids
+ * and storage details: on this generic console they stay reserved to ADMIN_KEYS holders
+ * (COMPLIANCE has ADMIN_JOBS only).
  */
-const KEY_ROTATION_JOB = MaintenanceJobName.ENCRYPTION_KEY_ROTATION;
+const RESTRICTED_JOBS: ReadonlySet<MaintenanceJobName> = new Set<MaintenanceJobName>([
+  MaintenanceJobName.ENCRYPTION_KEY_ROTATION,
+  MaintenanceJobName.KEY_LIFECYCLE,
+  MaintenanceJobName.STORAGE_MIGRATION,
+  MaintenanceJobName.DOCUMENT_PURGE,
+]);
 const canSeeKeyJobs = (auth: AuthContext) => globalRoleHas(auth.globalRole, Permission.ADMIN_KEYS);
 
 @ApiTags('admin')
@@ -41,7 +47,7 @@ export class JobsAdminController {
   @Get()
   async list(@CurrentUser() auth: AuthContext) {
     const [jobs, scheduler] = await Promise.all([this.maintenance.listJobs(), this.scheduler.status()]);
-    const visible = (name: string) => name !== KEY_ROTATION_JOB || canSeeKeyJobs(auth);
+    const visible = (name: string) => !RESTRICTED_JOBS.has(name as MaintenanceJobName) || canSeeKeyJobs(auth);
     return {
       ...jobs,
       leases: jobs.leases.filter((lease) => visible(lease.jobName)),
@@ -64,8 +70,8 @@ export class JobsAdminController {
     },
   ) {
     if (canSeeKeyJobs(auth)) return this.maintenance.listRuns(q.jobName, q.page, q.pageSize);
-    if (q.jobName === KEY_ROTATION_JOB) throw DomainError.forbidden();
-    return this.maintenance.listRuns(q.jobName, q.page, q.pageSize, [KEY_ROTATION_JOB]);
+    if (q.jobName && RESTRICTED_JOBS.has(q.jobName)) throw DomainError.forbidden();
+    return this.maintenance.listRuns(q.jobName, q.page, q.pageSize, [...RESTRICTED_JOBS]);
   }
 
   @RequirePermission(Permission.ADMIN_JOBS)
@@ -76,7 +82,7 @@ export class JobsAdminController {
     @Param('name', zodBody(jobNameSchema)) name: MaintenanceJobName,
     @Req() req: Request,
   ) {
-    if (name === KEY_ROTATION_JOB && !canSeeKeyJobs(auth)) throw DomainError.forbidden();
+    if (RESTRICTED_JOBS.has(name) && !canSeeKeyJobs(auth)) throw DomainError.forbidden();
     const run = await this.maintenance.run(name, `manual:${auth.userId}`);
     await this.audit.log({
       actorUserId: auth.userId,

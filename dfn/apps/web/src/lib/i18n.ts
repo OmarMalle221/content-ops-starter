@@ -9,6 +9,7 @@ import { reviewQueuePart } from './i18n-parts/reviews';
 import { gatesAdminPart } from './i18n-parts/gates';
 import { counterpartyLinksPart } from './i18n-parts/links';
 import { keysAdminPart } from './i18n-parts/keys';
+import { documentStoragePart } from './i18n-parts/storage';
 
 export type Locale = 'fr' | 'en';
 export const LOCALE_COOKIE = 'dfn_locale';
@@ -477,6 +478,7 @@ const fr = {
   ...gatesAdminPart.fr,
   ...counterpartyLinksPart.fr,
   ...keysAdminPart.fr,
+  ...documentStoragePart.fr,
 };
 export type Dictionary = typeof fr;
 
@@ -941,6 +943,7 @@ const en: Dictionary = {
   ...gatesAdminPart.en,
   ...counterpartyLinksPart.en,
   ...keysAdminPart.en,
+  ...documentStoragePart.en,
 };
 
 export const dictionaries: Record<Locale, Dictionary> = { fr, en };

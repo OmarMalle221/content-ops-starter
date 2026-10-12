@@ -389,3 +389,22 @@ export const KeyPurpose = {
   BENEFICIARIES: 'beneficiaries',
 } as const;
 export type KeyPurpose = (typeof KeyPurpose)[keyof typeof KeyPurpose];
+
+/**
+ * Operations a STEP_UP proof is bound to (phase 7). A passkey step-up challenge is issued for one
+ * operation (and, when relevant, one resource id) and the assertion is only accepted for it, so a
+ * proof obtained for one action cannot be spent on another.
+ */
+export const StepUpOperation = {
+  LOGIN_MFA: 'auth.login_mfa',
+  MFA_DISABLE: 'mfa.disable',
+  RECOVERY_CODES_REGENERATE: 'mfa.recovery_codes_regenerate',
+  PASSKEY_REGISTER: 'passkey.register',
+  PASSKEY_REVOKE: 'passkey.revoke',
+  TRANSFER_AUTHORIZE: 'transfer.authorize',
+  SECURITY_PREFERENCES_LOWER: 'security_preferences.lower',
+  GATE_APPROVE: 'gate.approve',
+  GATE_REVOKE: 'gate.revoke',
+  KEY_MANAGE: 'keys.manage',
+} as const;
+export type StepUpOperation = (typeof StepUpOperation)[keyof typeof StepUpOperation];

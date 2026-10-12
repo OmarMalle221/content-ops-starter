@@ -16,3 +16,5 @@ export * from './reviews';
 export * from './gates';
 export * from './counterparty-links';
 export * from './storage';
+export * from './kms';
+export * from './document-storage';
