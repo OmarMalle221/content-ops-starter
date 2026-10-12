@@ -214,7 +214,7 @@ Franchir une porte signifie : document signé, référence d'autorisation ou avi
 
 ## 13. Rapport de livraison — Phase 6 (2026-10-12)
 
-**Tests exécutés** (tous verts) : 156 tests unitaires de paquets, 229 tests d'intégration API (1 test S3 réel ignoré faute de point d'accès), 9 parcours Playwright dans le navigateur, exercice de sauvegarde et restauration avec réconciliation du registre, démarrage du build compilé, tests de charge sur 100 000 transactions (tous les objectifs p95 tenus, voir `docs/operations/PERFORMANCE.md`).
+**Tests exécutés** (tous verts) : 156 tests unitaires de paquets, 230 tests d'intégration API (1 test S3 réel ignoré faute de point d'accès), 9 parcours Playwright dans le navigateur, exercice de sauvegarde et restauration avec réconciliation du registre, démarrage du build compilé, tests de charge sur 100 000 transactions (tous les objectifs p95 tenus, voir `docs/operations/PERFORMANCE.md`).
 
 **Revue adversariale** : revue en huit axes, dont six ont été interrompus par une limite d'usage ; quatre de ces six ont été repris par deux relectures ciblées. Constats corrigés et testés : 1 critique (une session volée pouvait installer son propre TOTP puis une clé d'accès permanente), 1 critique côté cloisonnement (un ADMIN pouvait s'inviter comme membre d'un tenant par une écriture de support), une quinzaine de constats moyens (verrou des codes par compte, rebinding DNS des webhooks, double envoi de webhooks, rotation de clés après un échec de remplacement, consentement des liaisons, score de risque visible des clients, bail des tâches, quatre yeux contournable par promotion d'un compte) et une dizaine de constats mineurs. Les axes « build, conteneurs, CI » et « écrans web » n'ont pas été relus. Détail : `SECURITY.md` §16 et §17.
 

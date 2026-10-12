@@ -135,7 +135,7 @@ Parcours suggérés : `moussa@demo.dfn` → _Portefeuille_ (soldes, filtres, rel
 | `pnpm --filter @dfn/api openapi:export`         | régénère `docs/api/openapi.json`                                                                                                                                                                                      |
 | `pnpm format` / `pnpm format:check`             | Prettier                                                                                                                                                                                                              |
 
-Tests exécutés à la fin de la phase 6 : 156 tests unitaires de paquets, 229 tests d'intégration API, 9 parcours Playwright, exercice de restauration et tests de charge — tous verts (rapport de livraison dans `ROADMAP.md` §13).
+Tests exécutés à la fin de la phase 6 : 156 tests unitaires de paquets, 230 tests d'intégration API, 9 parcours Playwright, exercice de restauration et tests de charge — tous verts (rapport de livraison dans `ROADMAP.md` §13).
 
 ## Déploiement sandbox
 
