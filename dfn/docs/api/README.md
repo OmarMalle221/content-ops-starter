@@ -18,7 +18,7 @@ Les opérations sensibles (autorisation de transfert, baisse des préférences d
 
 ### Écritures de support (staff)
 
-Le staff lit les données des organisations dont il n'est pas membre mais ne peut pas les modifier. Une écriture de support exige la permission `admin:support_write` (ADMIN) et l'en-tête `X-Support-Reason: <motif de 10 à 500 caractères>`, journalisé dans l'audit. Elle n'invite jamais son auteur ni un autre membre du staff, n'accorde pas les rôles OWNER / ADMIN et ne touche pas aux propriétaires ; supprimer le document d'un autre utilisateur passe aussi par ce motif. Avec `REQUIRE_STAFF_MFA=true`, toute permission staff exige que le membre du staff ait activé la MFA (`403 STAFF_MFA_REQUIRED`).
+Le staff lit les données des organisations dont il n'est pas membre mais ne peut pas les modifier. Une écriture de support exige la permission `admin:support_write` (ADMIN) et l'en-tête `X-Support-Reason: <motif de 10 à 500 caractères>`, journalisé dans l'audit. Elle n'invite jamais son auteur ni un autre membre du staff, n'accorde que le rôle VIEWER (notifié aux OWNER / ADMIN de l'organisation) et ne touche pas aux propriétaires ; supprimer le document d'un autre utilisateur passe aussi par ce motif. Avec `REQUIRE_STAFF_MFA=true`, toute permission staff exige que le membre du staff ait activé la MFA (`403 STAFF_MFA_REQUIRED`). Les destinataires staff choisis par rôle (transferts en revue, contestations, échéances de revue, anomalies de réconciliation, DDA, portes réglementaires) et les assignations d'alertes se limitent alors aux comptes ayant activé la MFA ; la tâche `REVIEW_SLA` traite une alerte assignée à un compte sans MFA comme non assignée.
 
 ## Idempotence
 

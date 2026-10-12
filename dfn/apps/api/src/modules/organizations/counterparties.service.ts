@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Counterparty, PrismaTransactionClient } from '@dfn/database';
 import {
@@ -25,6 +25,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { OrganizationsService, type TenantAccess } from './organizations.service';
 
 const HOUR_MS = 3_600_000;
+/** Age after which an unresolved e-mail link request is picked up by the sweep (and its period). */
+const LINK_RESOLUTION_SWEEP_MS = 60_000;
 const SANDBOX_NOTE = 'Données fictives — Aucun fonds réel.';
 
 /** Requester-side view: NONE + PENDING look the same once a request was attempted (no enumeration). */
@@ -147,18 +149,21 @@ function toLinkRequestDto(row: LinkRequestRow, canDecide: boolean) {
  * Requester side (organisation A): creating a counterparty with an e-mail — or with an explicit
  * organisation the caller belongs to — sends a link request (PENDING) to the personal workspace of the
  * matching active DFN user (or to the explicit organisation). Nothing is linked until the target
- * accepts. The response is identical whether or not an account matched. A can revoke a request or a
- * link, and re-request after a decline / revocation once the cooldown has elapsed.
+ * accepts. The response is identical whether or not an account matched — e-mail targets are even
+ * resolved after the response (`resolveLinkRequest`), so the request costs the same work either way.
+ * A can revoke a request or a link, and re-request after a decline / revocation once the cooldown
+ * has elapsed.
  *
  * Target side (organisation B): OWNER / ADMIN (ORG_LINK_DECIDE) list pending requests, accept or
  * decline them, and can end an accepted link at any time. Support staff can read but never decide
  * on behalf of a tenant.
  */
 @Injectable()
-export class CounterpartiesService implements OnModuleDestroy {
+export class CounterpartiesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CounterpartiesService.name);
-  /** Target notifications sent after the response (see `notifyAfterResponse`). */
+  /** Link resolutions and target notifications run after the response (see `afterResponse`). */
   private readonly inFlight = new Set<Promise<void>>();
+  private sweepTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -167,30 +172,144 @@ export class CounterpartiesService implements OnModuleDestroy {
     private readonly notifications: NotificationsService,
   ) {}
 
+  onModuleInit() {
+    // Crash recovery: a request whose post-response resolution never ran (process stopped in
+    // between) is resolved by any replica a minute later. The CAS in resolveLinkRequest makes
+    // concurrent sweeps harmless.
+    this.sweepTimer = setInterval(() => {
+      this.afterResponse('link request sweep', async () => {
+        await this.resolveStaleLinkRequests();
+      });
+    }, LINK_RESOLUTION_SWEEP_MS);
+    this.sweepTimer.unref();
+  }
+
   async onModuleDestroy() {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
     await this.whenIdle();
   }
 
-  /** Resolves once every pending target notification has settled (tests, shutdown). */
+  /** Resolves once every pending link resolution and target notification has settled (tests, shutdown). */
   async whenIdle(): Promise<void> {
-    await Promise.allSettled([...this.inFlight]);
+    while (this.inFlight.size > 0) await Promise.allSettled([...this.inFlight]);
   }
 
   /**
-   * The target of a link request is notified AFTER the response, never inside it: a matching
-   * account would otherwise cost measurably more (organisation lookup, decision makers, one
-   * notification per recipient) and a notification failure would surface as a 500 on matches only.
+   * Work that depends on whether an account matched runs AFTER the response, never inside it: a
+   * matching account would otherwise cost measurably more (user and workspace lookups, cooldown
+   * check, target audit row, decision makers, one notification per recipient) and a failure there
+   * would surface as a 500 on matches only.
    */
-  private notifyAfterResponse(target: string, requesterOrganizationId: string, counterpartyId: string) {
+  private afterResponse(label: string, work: () => Promise<void>) {
     const pending: Promise<void> = new Promise<void>((resolve) => setImmediate(resolve))
-      .then(() => this.notifyTargetOfRequest(target, requesterOrganizationId, counterpartyId))
+      .then(work)
       .catch((err: unknown) => {
-        this.logger.warn(
-          `link request notification failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        this.logger.warn(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => this.inFlight.delete(pending));
     this.inFlight.add(pending);
+  }
+
+  /**
+   * Resolves an e-mail link request recorded by `create` / `requestLink`: finds the personal
+   * workspace of an active account with that e-mail (outside any cooldown) and, in one CAS
+   * transaction, marks the request resolved and — on a match — PENDING towards that workspace,
+   * with the staff-only audit row on the target. The target is notified after the commit.
+   * Idempotent: a request already resolved, revoked or re-requested meanwhile is left alone.
+   */
+  async resolveLinkRequest(
+    counterpartyId: string,
+    origin: { actorUserId: string | null; ip?: string; userAgent?: string } = { actorUserId: null },
+  ): Promise<void> {
+    const cp = await this.prisma.counterparty.findUnique({ where: { id: counterpartyId } });
+    if (
+      !cp ||
+      !cp.email ||
+      !cp.linkRequestedAt ||
+      cp.linkResolvedAt ||
+      cp.linkStatus !== CounterpartyLinkStatus.NONE
+    ) {
+      return;
+    }
+    const now = new Date();
+    let target = await this.eligibleTargetForEmail(cp.email, cp.organizationId);
+    if (target && (await this.targetCoolingDown(cp.organizationId, target, now))) target = null;
+    const claimed = await this.prisma.$transaction(async (db) => {
+      const res = await db.counterparty.updateMany({
+        where: {
+          id: cp.id,
+          linkStatus: CounterpartyLinkStatus.NONE,
+          linkResolvedAt: null,
+          linkRequestedAt: cp.linkRequestedAt,
+        },
+        data: {
+          linkResolvedAt: now,
+          ...(target
+            ? { linkStatus: CounterpartyLinkStatus.PENDING, linkRequestedOrganizationId: target }
+            : {}),
+        },
+      });
+      if (res.count === 0) return false;
+      if (target) {
+        // Recorded on the TARGET organisation (staff-only audit trail): the requester never sees it.
+        await this.audit.log(
+          {
+            actorUserId: origin.actorUserId,
+            organizationId: target,
+            action: 'counterparty.link_requested',
+            entityType: 'Counterparty',
+            entityId: cp.id,
+            metadata: {
+              requesterOrganizationId: cp.organizationId,
+              via: 'EMAIL',
+              ...(origin.actorUserId ? {} : { resolvedBy: 'sweep' }),
+            },
+            ip: origin.ip,
+            userAgent: origin.userAgent,
+          },
+          db,
+        );
+      }
+      return true;
+    });
+    if (claimed && target) await this.notifyTargetOfRequest(target, cp.organizationId, cp.id);
+  }
+
+  /** E-mail requests still unresolved a minute after they were made (see `onModuleInit`). */
+  async resolveStaleLinkRequests(now = new Date()): Promise<number> {
+    const stale = await this.prisma.counterparty.findMany({
+      where: {
+        linkStatus: CounterpartyLinkStatus.NONE,
+        linkResolvedAt: null,
+        linkRequestedAt: { lt: new Date(now.getTime() - LINK_RESOLUTION_SWEEP_MS) },
+        email: { not: null },
+      },
+      select: { id: true },
+      orderBy: { linkRequestedAt: 'asc' },
+      take: 100,
+    });
+    for (const row of stale) await this.resolveLinkRequest(row.id);
+    return stale.length;
+  }
+
+  /** Post-response half of create / requestLink: notify an explicit target, or resolve an e-mail. */
+  private scheduleAfterResponse(
+    counterpartyId: string,
+    requesterOrganizationId: string,
+    explicitTarget: string | null,
+    resolveLater: boolean,
+    auth: AuthContext,
+    meta: { ip?: string; userAgent?: string },
+  ) {
+    if (explicitTarget) {
+      this.afterResponse('link request notification', () =>
+        this.notifyTargetOfRequest(explicitTarget, requesterOrganizationId, counterpartyId),
+      );
+    } else if (resolveLater) {
+      this.afterResponse('link request resolution', () =>
+        this.resolveLinkRequest(counterpartyId, { actorUserId: auth.userId, ...meta }),
+      );
+    }
   }
 
   // ───────────────────────────── Requester side ─────────────────────────────
@@ -356,14 +475,15 @@ export class CounterpartiesService implements OnModuleDestroy {
   async create(auth: AuthContext, organizationId: string, input: CreateCounterpartyInput, req: Request) {
     const access = await this.orgs.authorizeWrite(auth, organizationId, Permission.TRANSACTION_CREATE, req);
     const wantsLink = Boolean(input.email || input.linkedOrganizationId);
+    const now = new Date();
+    // An explicit target is an organisation the caller belongs to: resolved now, nothing to hide.
+    // An e-mail target is resolved after the response (resolveLinkRequest).
     let target: string | null = null;
     if (input.linkedOrganizationId) {
       target = await this.explicitTarget(auth, organizationId, input.linkedOrganizationId);
-    } else if (input.email) {
-      target = await this.eligibleTargetForEmail(input.email, organizationId);
+      if (await this.targetCoolingDown(organizationId, target, now)) target = null;
     }
-    const now = new Date();
-    if (target && (await this.targetCoolingDown(organizationId, target, now))) target = null;
+    const resolveLater = wantsLink && !input.linkedOrganizationId;
     const meta = requestMeta(req);
     const outcome = wantsLink
       ? CounterpartyLinkRequestOutcome.SENT_IF_ELIGIBLE
@@ -382,6 +502,7 @@ export class CounterpartiesService implements OnModuleDestroy {
           linkStatus: target ? CounterpartyLinkStatus.PENDING : CounterpartyLinkStatus.NONE,
           linkRequestedOrganizationId: target,
           linkRequestedAt: wantsLink ? now : null,
+          linkResolvedAt: wantsLink && !resolveLater ? now : null,
         },
       });
       await this.audit.log(
@@ -405,10 +526,7 @@ export class CounterpartiesService implements OnModuleDestroy {
             action: 'counterparty.link_requested',
             entityType: 'Counterparty',
             entityId: created.id,
-            metadata: {
-              requesterOrganizationId: organizationId,
-              via: input.linkedOrganizationId ? 'EXPLICIT_ORGANIZATION' : 'EMAIL',
-            },
+            metadata: { requesterOrganizationId: organizationId, via: 'EXPLICIT_ORGANIZATION' },
             ...meta,
           },
           db,
@@ -416,7 +534,7 @@ export class CounterpartiesService implements OnModuleDestroy {
       }
       return created;
     });
-    if (target) this.notifyAfterResponse(target, organizationId, cp.id);
+    this.scheduleAfterResponse(cp.id, organizationId, target, resolveLater, auth, meta);
     return { ...(await this.dto(cp, access)), linkRequest: outcome };
   }
 
@@ -452,10 +570,12 @@ export class CounterpartiesService implements OnModuleDestroy {
     if (!cp.email && !input.linkedOrganizationId) {
       throw DomainError.validation('An e-mail address or an organisation is required to request a link');
     }
-    let target = input.linkedOrganizationId
-      ? await this.explicitTarget(auth, organizationId, input.linkedOrganizationId)
-      : await this.eligibleTargetForEmail(cp.email!, organizationId);
-    if (target && (await this.targetCoolingDown(organizationId, target, now))) target = null;
+    let target: string | null = null;
+    if (input.linkedOrganizationId) {
+      target = await this.explicitTarget(auth, organizationId, input.linkedOrganizationId);
+      if (await this.targetCoolingDown(organizationId, target, now)) target = null;
+    }
+    const resolveLater = !input.linkedOrganizationId;
     const meta = requestMeta(req);
     const updated = await this.prisma.$transaction(async (db) => {
       await this.assertRequestQuota(db, organizationId, now);
@@ -466,6 +586,7 @@ export class CounterpartiesService implements OnModuleDestroy {
           linkStatus: target ? CounterpartyLinkStatus.PENDING : CounterpartyLinkStatus.NONE,
           linkRequestedOrganizationId: target,
           linkRequestedAt: now,
+          linkResolvedAt: resolveLater ? null : now,
           linkDecidedAt: null,
           linkDecidedByUserId: null,
         },
@@ -497,7 +618,7 @@ export class CounterpartiesService implements OnModuleDestroy {
             entityId: cp.id,
             metadata: {
               requesterOrganizationId: organizationId,
-              via: input.linkedOrganizationId ? 'EXPLICIT_ORGANIZATION' : 'EMAIL',
+              via: 'EXPLICIT_ORGANIZATION',
               repeated: true,
             },
             ...meta,
@@ -507,7 +628,7 @@ export class CounterpartiesService implements OnModuleDestroy {
       }
       return db.counterparty.findUniqueOrThrow({ where: { id: cp.id } });
     });
-    if (target) this.notifyAfterResponse(target, organizationId, cp.id);
+    this.scheduleAfterResponse(cp.id, organizationId, target, resolveLater, auth, meta);
     return {
       ...(await this.dto(updated, access)),
       linkRequest: CounterpartyLinkRequestOutcome.SENT_IF_ELIGIBLE,

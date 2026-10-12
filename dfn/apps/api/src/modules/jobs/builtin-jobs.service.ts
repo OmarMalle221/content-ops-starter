@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { LedgerService } from '@dfn/financial-ledger';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { staffUserWhere } from '../../common/staff-recipients';
 import { ENV, type Env } from '../../config/env';
 import { LEDGER } from '../ledger/ledger.provider';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -61,7 +62,7 @@ export class BuiltinJobsService implements OnModuleInit {
     let notified = 0;
     if (differences > 0 || unbalancedTransactions > 0) {
       const staff = await this.prisma.user.findMany({
-        where: { status: 'ACTIVE', deletedAt: null, globalRole: { in: ['ADMIN', 'COMPLIANCE'] } },
+        where: staffUserWhere(this.env),
         select: { id: true },
       });
       await this.notifications.notifyMany(

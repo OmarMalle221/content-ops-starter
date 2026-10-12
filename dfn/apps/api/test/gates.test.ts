@@ -356,6 +356,27 @@ describe('regulatory gates register', () => {
     expect(independent.body.secondApprover.id).toBe(ids.admin2);
   });
 
+  it('refuses the second approval of the promoter when the account they promoted approved first', async () => {
+    const { admin1, admin2, ids } = await actors();
+    const puppet = await registerUser(ctx, 'gate-puppet-first@example.com');
+    const promoted = await admin1.post(`/v1/admin/users/${puppet.user.id}/role`, { globalRole: 'ADMIN' });
+    expect(promoted.status, JSON.stringify(promoted.body)).toBe(201);
+    expect((await puppet.client.post('/v1/admin/gates/R6/progress', PROGRESS)).status).toBe(200);
+    const first = await puppet.client.post('/v1/admin/gates/R6/approve', APPROVE_1);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.firstApprover.id).toBe(puppet.user.id);
+    const refused = await admin1.post('/v1/admin/gates/R6/approve', APPROVE_2);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('GATE_SAME_APPROVER');
+    expect((await ctx.prisma.regulatoryGate.findUniqueOrThrow({ where: { code: 'R6' } })).status).toBe(
+      'PENDING_SECOND_APPROVAL',
+    );
+    // An independent administrator can still give it.
+    const independent = await admin2.post('/v1/admin/gates/R6/approve', APPROVE_2);
+    expect(independent.status).toBe(200);
+    expect(independent.body.secondApprover.id).toBe(ids.admin2);
+  });
+
   it('requires a fresh second factor from an ADMIN who has one (approve and revoke)', async () => {
     const { admin1, admin2 } = await actors();
     const enabled = { body: await enableMfa(admin1) };

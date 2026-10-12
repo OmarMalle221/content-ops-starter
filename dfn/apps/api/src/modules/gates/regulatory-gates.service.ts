@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Prisma, RegulatoryGate, RegulatoryGateStatus } from '@dfn/database';
 import {
@@ -20,6 +20,8 @@ import type { AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
+import { staffUserWhere } from '../../common/staff-recipients';
+import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { MfaVerifierService } from '../auth/mfa-verifier.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -116,6 +118,7 @@ export class RegulatoryGatesService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     private readonly mfa: MfaVerifierService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   /**
@@ -300,21 +303,24 @@ export class RegulatoryGatesService {
           { code, firstApproverId: gate.firstApproverId },
         );
       }
-      // An account whose role was changed by the first approver is not an independent second
-      // person: one ADMIN could otherwise promote an account they control and approve twice.
-      const promotedByFirst = await this.prisma.auditLog.findFirst({
+      // Two accounts where one changed the other's role are not independent people: one ADMIN
+      // could otherwise promote an account they control and approve twice, in either order (the
+      // controlled account first, then the promoter, or the reverse).
+      const rolePromotion = await this.prisma.auditLog.findFirst({
         where: {
           action: 'admin.user_role_changed',
           entityType: 'User',
-          entityId: auth.userId,
-          actorUserId: gate.firstApproverId,
+          OR: [
+            { entityId: auth.userId, actorUserId: gate.firstApproverId },
+            { entityId: gate.firstApproverId, actorUserId: auth.userId },
+          ],
         },
         select: { id: true },
       });
-      if (promotedByFirst) {
+      if (rolePromotion) {
         throw new DomainError(
           ErrorCode.GATE_SAME_APPROVER,
-          'Your role was granted by the first approver: the second approval needs an independent administrator',
+          'One approver granted the other their role: the second approval needs an independent administrator',
           HttpStatus.CONFLICT,
           { code, firstApproverId: gate.firstApproverId },
         );
@@ -445,7 +451,7 @@ export class RegulatoryGatesService {
     });
 
     const admins = await this.prisma.user.findMany({
-      where: { globalRole: 'ADMIN', status: 'ACTIVE', deletedAt: null },
+      where: staffUserWhere(this.env, ['ADMIN']),
       select: { id: true },
     });
     const actorName = `${auth.firstName} ${auth.lastName}`.trim() || auth.email;

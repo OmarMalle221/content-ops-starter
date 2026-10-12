@@ -1,5 +1,4 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import * as argon2 from 'argon2';
 import type { Request } from 'express';
 import type { InvoiceStatus, QuoteStatus, TransactionStatus, TransferStatus } from '@dfn/database';
 import { LedgerService } from '@dfn/financial-ledger';
@@ -10,6 +9,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
+import { LoginAttemptsService } from '../auth/login-attempts.service';
 import { SessionService } from '../auth/session.service';
 import { LEDGER } from '../ledger/ledger.provider';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -63,6 +63,7 @@ export class AccountDeletionService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     private readonly sessions: SessionService,
+    private readonly loginAttempts: LoginAttemptsService,
     @Inject(LEDGER) private readonly ledger: LedgerService,
     @Inject(ENV) private readonly env: Env,
   ) {}
@@ -176,7 +177,8 @@ export class AccountDeletionService {
 
   async request(auth: AuthContext, input: DeleteAccountInput, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
-    if (!(await argon2.verify(user.passwordHash, input.password))) {
+    // Counted in the login lockout like every other password confirmation (423 once locked).
+    if (!(await this.loginAttempts.verifyPassword(user, input.password)).ok) {
       throw DomainError.validation('Current password is incorrect');
     }
     if (user.deletionRequestedAt) {

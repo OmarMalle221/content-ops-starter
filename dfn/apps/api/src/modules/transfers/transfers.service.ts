@@ -35,6 +35,7 @@ import { paginate } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { moneyDto } from '../../common/serialize';
+import { staffUserWhere } from '../../common/staff-recipients';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { MfaVerifierService } from '../auth/mfa-verifier.service';
@@ -334,7 +335,7 @@ export class TransfersService {
 
   private async notifyStaff(transfer: TransferWithRelations, title: string, body: string) {
     const staff = await this.prisma.user.findMany({
-      where: { status: 'ACTIVE', deletedAt: null, globalRole: { in: ['ADMIN', 'COMPLIANCE'] } },
+      where: staffUserWhere(this.env),
       select: { id: true },
     });
     await this.notifications.notifyMany(

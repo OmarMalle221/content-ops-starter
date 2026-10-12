@@ -24,11 +24,9 @@ import { RiskService } from '../risk/risk.service';
 import { SessionService } from './session.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import type { AuthContext } from '../../common/auth-context';
+import { LoginAttemptsService } from './login-attempts.service';
 import { MfaVerifierService } from './mfa-verifier.service';
 import { RecoveryCodesService } from './recovery-codes.service';
-
-const MAX_FAILED_LOGINS = 5;
-const LOCK_MINUTES = 15;
 
 @Injectable()
 export class AuthService {
@@ -41,6 +39,7 @@ export class AuthService {
     private readonly mfa: MfaVerifierService,
     private readonly recoveryCodes: RecoveryCodesService,
     private readonly notifications: NotificationsService,
+    private readonly loginAttempts: LoginAttemptsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -97,27 +96,13 @@ export class AuthService {
         .catch(() => false);
       throw genericError();
     }
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new DomainError(
-        ErrorCode.ACCOUNT_LOCKED,
-        'Account temporarily locked. Try again later.',
-        HttpStatus.LOCKED,
-      );
-    }
+    if (user.lockedUntil && user.lockedUntil > new Date()) throw this.loginAttempts.lockedError();
     if (user.status !== 'ACTIVE') {
       throw new DomainError(ErrorCode.FORBIDDEN, 'Account is not active', HttpStatus.FORBIDDEN);
     }
-    const ok = await argon2.verify(user.passwordHash, input.password);
-    if (!ok) {
-      const failed = user.failedLoginCount + 1;
-      const lock = failed >= MAX_FAILED_LOGINS;
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          failedLoginCount: lock ? 0 : failed,
-          lockedUntil: lock ? new Date(Date.now() + LOCK_MINUTES * 60_000) : null,
-        },
-      });
+    // Counted before the check (atomic reservation): parallel guesses cannot outrun the lockout.
+    const password = await this.loginAttempts.verifyPassword(user, input.password);
+    if (!password.ok) {
       await this.audit.log({
         actorUserId: user.id,
         action: 'auth.login_failed',
@@ -128,21 +113,12 @@ export class AuthService {
       await this.risk.evaluateAndRecord({
         event: 'auth.login_failed',
         userId: user.id,
-        failedLoginsLast15m: failed,
+        failedLoginsLast15m: password.failures,
       });
-      if (lock) {
-        throw new DomainError(
-          ErrorCode.ACCOUNT_LOCKED,
-          'Too many attempts. Account locked for 15 minutes.',
-          HttpStatus.LOCKED,
-        );
-      }
+      if (password.locked) throw this.loginAttempts.lockedError(true);
       throw genericError();
     }
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() },
-    });
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     const { token } = await this.sessions.create(user.id, req, { mfaVerified: !user.mfaEnabled });
     await this.audit.log({
       actorUserId: user.id,
@@ -185,7 +161,8 @@ export class AuthService {
    * Confirms the enrolment with a code of the freshly configured app and the current password,
    * enables MFA and returns the 10 recovery codes — shown once, stored hashed (ADR-0009).
    * - the password is required: a stolen session alone must not attach its own second factor
-   *   (it would lock the owner out and could then register a passkey with that factor);
+   *   (it would lock the owner out and could then register a passkey with that factor); wrong
+   *   passwords count into the login lockout;
    * - the confirmation code is burnt like any other code (no replay as a login proof);
    * - the account's other sessions are revoked: they were opened without the new factor.
    */
@@ -193,16 +170,17 @@ export class AuthService {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     if (user.mfaEnabled) throw DomainError.conflict('MFA is already enabled');
     if (!user.mfaSecretEnc) throw DomainError.validation('Run MFA setup first');
-    const passwordOk = await argon2.verify(user.passwordHash, input.currentPassword).catch(() => false);
-    if (!passwordOk) {
+    const password = await this.loginAttempts.verifyPassword(user, input.currentPassword);
+    if (!password.ok) {
       await this.audit.log({
         actorUserId: user.id,
         action: 'auth.mfa_enable_refused',
         entityType: 'User',
         entityId: user.id,
-        metadata: { reason: 'password_invalid' },
+        metadata: { reason: 'password_invalid', locked: password.locked },
         ...requestMeta(req),
       });
+      if (password.locked) throw this.loginAttempts.lockedError(true);
       throw new DomainError(
         ErrorCode.STEP_UP_REQUIRED,
         'Confirm your current password to enable two-factor authentication',
@@ -393,10 +371,14 @@ export class AuthService {
     return { recoveryCodes };
   }
 
+  /** The current password is checked like a sign-in (login lockout, see LoginAttemptsService). */
   async changePassword(auth: AuthContext, currentPassword: string, newPassword: string, req: Request) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
-    if (!(await argon2.verify(user.passwordHash, currentPassword)))
+    const password = await this.loginAttempts.verifyPassword(user, currentPassword);
+    if (!password.ok) {
+      if (password.locked) throw this.loginAttempts.lockedError(true);
       throw DomainError.validation('Current password is incorrect');
+    }
     await this.prisma.user.update({
       where: { id: user.id },
       data: { passwordHash: await this.hashPassword(newPassword) },

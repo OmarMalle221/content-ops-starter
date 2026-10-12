@@ -76,6 +76,7 @@ export class DocumentsService {
     if (meta.transactionId) {
       const { tx, role } = await this.access.loadFor(auth, meta.transactionId);
       if (role === 'STAFF') throw DomainError.forbidden('Staff cannot upload documents on behalf of parties');
+      this.access.assertPartyPermission(auth, tx, role, Permission.DOCUMENT_UPLOAD, 'BUYER', 'SELLER');
       if (['SETTLED', 'REFUNDED', 'CANCELLED', 'EXPIRED'].includes(tx.status))
         throw DomainError.invalidTransition('Transaction is closed');
       organizationId =

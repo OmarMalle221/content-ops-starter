@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sha256Hex } from '../src/common/crypto';
 import { ENV, type Env } from '../src/config/env';
 import {
   assertSafeWebhookUrl,
@@ -32,6 +33,8 @@ beforeAll(async () => {
   ctx = await bootTestApp();
 });
 beforeEach(async () => {
+  // E-mail link requests are resolved after the response: let the previous test's settle first.
+  await ctx.app.get(CounterpartiesService).whenIdle();
   await resetDatabase(ctx.prisma);
   await ctx.app.get(ReferenceDataService).ensure();
 });
@@ -271,7 +274,8 @@ describe('Tenancy — staff are read-only by default', () => {
     await staffClient('compliance-peer-ten@example.com', 'COMPLIANCE');
     expect((await invite('compliance-peer-ten@example.com', 'VIEWER')).status).toBe(403);
     expect((await invite('new-colleague-ten@example.com', 'ADMIN')).status).toBe(403);
-    const supportInvite = await invite('new-colleague-ten@example.com', 'MEMBER');
+    expect((await invite('new-colleague-ten@example.com', 'MEMBER')).status).toBe(403);
+    const supportInvite = await invite('new-colleague-ten@example.com', 'VIEWER');
     expect(supportInvite.status, JSON.stringify(supportInvite.body)).toBe(201);
     expect(supportInvite.body).toMatchObject({ token: null, acceptUrl: null });
     const members = (await a.owner.get(`/v1/organizations/${biz}`)).body.members as Array<{
@@ -290,6 +294,102 @@ describe('Tenancy — staff are read-only by default', () => {
     expect(await ctx.prisma.organizationMember.count({ where: { organizationId: biz, role: 'OWNER' } })).toBe(
       1,
     );
+  });
+
+  it('never lets a support invitation open money movement, even to an ordinary account the agent controls', async () => {
+    const admin = await staffClient('admin-puppet-ten@example.com', 'ADMIN');
+    const adminUser = await ctx.prisma.user.findUniqueOrThrow({
+      where: { email: 'admin-puppet-ten@example.com' },
+    });
+    const biz = a.businessOrgId;
+    // An ordinary (non-staff) account the support agent controls
+    const puppetEmail = 'puppet-ten@example.com';
+    const { client: puppet, user: puppetUser } = await registerUser(ctx, puppetEmail);
+    const invite = (role: string) =>
+      raw(admin, 'post', `/v1/organizations/${biz}/members/invite`, { email: puppetEmail, role });
+
+    // Only a read-only role: MEMBER (TRANSACTION_MANAGE, TRANSFER_CREATE…) and ADMIN are refused
+    for (const role of ['ADMIN', 'MEMBER']) {
+      const refused = await invite(role);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body.message).toContain('VIEWER');
+    }
+    expect(
+      (await raw(admin, 'post', `/v1/organizations/${biz}/members/invite`, { email: puppetEmail })).status,
+    ).toBe(403); // the schema default (MEMBER) too
+    const sent = await invite('VIEWER');
+    expect(sent.status, JSON.stringify(sent.body)).toBe(201);
+    expect(sent.body).toMatchObject({ token: null, acceptUrl: null });
+
+    // The owner (not the VIEWER member) is told, and the invitation is audited as a support action
+    const notices = await ctx.prisma.notification.findMany({
+      where: { type: 'organization.support_invitation' },
+    });
+    expect(notices.map((n) => n.userId)).toEqual([a.ownerUser.id]);
+    expect(notices[0]!.body).toContain(puppetEmail);
+    expect(notices[0]!.body).toContain(SUPPORT_REASON);
+    expect(notices[0]!.data).toMatchObject({
+      organizationId: biz,
+      invitationId: sent.body.invitationId,
+      role: 'VIEWER',
+    });
+    const audit = await ctx.prisma.auditLog.findFirstOrThrow({
+      where: { action: 'organization.member_invited', entityId: sent.body.invitationId },
+    });
+    expect(audit.actorUserId).toBe(adminUser.id);
+    expect(audit.metadata).toMatchObject({ role: 'VIEWER', support: true, supportReason: SUPPORT_REASON });
+    // support.write is recorded before the action runs: every attempt, refused ones included
+    expect(
+      await ctx.prisma.auditLog.count({ where: { action: 'support.write', actorUserId: adminUser.id } }),
+    ).toBe(4);
+
+    // The puppet joins as VIEWER: it reads the organisation's Protect transaction but moves nothing
+    const token = (
+      await ctx.prisma.notification.findFirstOrThrow({
+        where: { userId: puppetUser.id, type: 'organization.invited' },
+      })
+    ).data as { invitationToken: string };
+    const joined = await puppet.post('/v1/organizations/invitations/accept', {
+      token: token.invitationToken,
+    });
+    expect(joined.status, JSON.stringify(joined.body)).toBe(201);
+    expect(joined.body.role).toBe('VIEWER');
+    const protect = await a.owner.post('/v1/transactions', { ...VEHICLE_TX, organizationId: biz });
+    expect(protect.status, JSON.stringify(protect.body)).toBe(201);
+    expect((await puppet.get(`/v1/transactions/${protect.body.id}`)).status).toBe(200);
+    const cancel = await puppet.post(`/v1/transactions/${protect.body.id}/cancel`, { reason: 'Annulation' });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(403);
+
+    // Support cannot raise the puppet afterwards either
+    const member = await ctx.prisma.organizationMember.findFirstOrThrow({
+      where: { organizationId: biz, userId: puppetUser.id },
+    });
+    for (const role of ['MEMBER', 'ADMIN']) {
+      const raised = await raw(admin, 'patch', `/v1/organizations/${biz}/members/${member.id}`, { role });
+      expect(raised.status, JSON.stringify(raised.body)).toBe(403);
+    }
+    expect((await ctx.prisma.organizationMember.findUniqueOrThrow({ where: { id: member.id } })).role).toBe(
+      'VIEWER',
+    );
+
+    // A support invitation with a wider role still pending (sent before this rule) cannot be accepted
+    const legacyToken = 'legacy-support-invitation-token-ten';
+    await ctx.prisma.organizationInvitation.create({
+      data: {
+        organizationId: biz,
+        email: 'legacy-puppet-ten@example.com',
+        role: 'MEMBER',
+        tokenHash: sha256Hex(legacyToken),
+        invitedByUserId: adminUser.id,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    const { client: legacy } = await registerUser(ctx, 'legacy-puppet-ten@example.com');
+    const legacyJoin = await legacy.post('/v1/organizations/invitations/accept', { token: legacyToken });
+    expect(legacyJoin.status, JSON.stringify(legacyJoin.body)).toBe(403);
+    expect(
+      await ctx.prisma.organizationMember.count({ where: { organizationId: biz, role: 'MEMBER' } }),
+    ).toBe(0);
   });
 
   it('keeps the organisation role of staff users who are real members', async () => {
@@ -419,6 +519,7 @@ describe('Tenancy — counterparty link consent', () => {
       name: 'Jean Tremblay',
       email: 'wallet-outsider-lnk@example.com',
     });
+    await ctx.app.get(CounterpartiesService).whenIdle();
     const inv = await a.owner.post(
       '/v1/invoices',
       invoiceInput(a.businessOrgId, {
@@ -662,6 +763,7 @@ describe('Tenancy — counterparty link consent', () => {
     const base = `/v1/organizations/${a.businessOrgId}/counterparties`;
     const target = `/v1/organizations/${a.outsiderOrgId}/link-requests`;
     const cp = await a.owner.post(base, { name: 'Jean', email: 'wallet-outsider-lnk@example.com' });
+    await ctx.app.get(CounterpartiesService).whenIdle();
     expect((await a.outsider.post(`${target}/${cp.body.id}/accept`)).status).toBe(200);
 
     // The target withdraws its consent (server action REVOKE on accepted links).

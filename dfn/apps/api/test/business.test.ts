@@ -1,5 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MaintenanceService } from '../src/modules/jobs/maintenance.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import { CounterpartiesService } from '../src/modules/organizations/counterparties.service';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import { Client, bootTestApp, registerUser, resetDatabase, type TestContext } from './helpers/app';
 import { createActors, fundTransaction, uploadEvidence } from './helpers/protect';
@@ -10,6 +12,8 @@ beforeAll(async () => {
   ctx = await bootTestApp();
 });
 beforeEach(async () => {
+  // E-mail link requests are resolved after the response: let the previous test's settle first.
+  await ctx.app.get(CounterpartiesService).whenIdle();
   await resetDatabase(ctx.prisma);
   await ctx.app.get(ReferenceDataService).ensure();
 });
@@ -323,11 +327,12 @@ describe('Diaspora Business — invoices', () => {
     });
     expect(linked.status, JSON.stringify(linked.body)).toBe(201);
     // Consent workflow: nothing is linked until the target accepts, and the requester is not told
-    // whether the e-mail matched an account.
+    // whether the e-mail matched an account. The account lookup runs after the response.
     expect(linked.body.linkedOrganizationId).toBeNull();
     expect(linked.body.linkRequest).toBe('SENT_IF_ELIGIBLE');
     expect(linked.body.link.status).toBe('REQUESTED');
     expect(JSON.stringify(linked.body)).not.toContain(a.outsiderOrgId);
+    await ctx.app.get(CounterpartiesService).whenIdle();
     const row = await ctx.prisma.counterparty.findUniqueOrThrow({ where: { id: linked.body.id } });
     expect(row.linkStatus).toBe('PENDING');
     expect(row.linkRequestedOrganizationId).toBe(a.outsiderOrgId);
@@ -461,6 +466,74 @@ describe('Diaspora Business — invoices', () => {
     const audit = await ctx.prisma.auditLog.findFirst({ where: { action: 'invoice.paid_from_wallet' } });
     expect(audit?.organizationId).toBe(a.outsiderOrgId);
   });
+
+  it('emits invoice.paid (partner webhook) even when the payment notifications fail', async () => {
+    const hook = await a.owner.post('/v1/webhooks', {
+      organizationId: a.businessOrgId,
+      url: 'http://127.0.0.1:9/invoice-paid',
+      events: ['invoice.paid'],
+    });
+    expect(hook.status, JSON.stringify(hook.body)).toBe(201);
+    const subscriptionId = hook.body.webhook.id as string;
+    // Customer linked to the outsider's workspace (set directly: the consent flow is covered above).
+    const cp = await a.owner.post(`/v1/organizations/${a.businessOrgId}/counterparties`, {
+      name: 'Jean Tremblay',
+      country: 'CA',
+    });
+    expect(cp.status, JSON.stringify(cp.body)).toBe(201);
+    await ctx.prisma.counterparty.update({
+      where: { id: cp.body.id },
+      data: { linkStatus: 'ACCEPTED', linkedOrganizationId: a.outsiderOrgId },
+    });
+    const byWallet = await createInvoice(a.owner, a.businessOrgId, {
+      counterpartyId: cp.body.id,
+      taxBps: 0,
+      lines: [{ description: 'Service', quantity: 1, unitPrice: '120.00' }],
+    });
+    const recorded = await createInvoice(a.owner, a.businessOrgId, {
+      taxBps: 0,
+      lines: [{ description: 'Conseil', quantity: 1, unitPrice: '80.00' }],
+    });
+    for (const inv of [byWallet, recorded]) {
+      expect((await a.owner.post(`/v1/invoices/${inv.id}/send`)).status).toBe(200);
+    }
+    expect((await selfDeposit(a.outsider, a.outsiderOrgId, 'CAD', '200.00')).status).toBe(200);
+
+    const notifyMany = vi
+      .spyOn(ctx.app.get(NotificationsService), 'notifyMany')
+      .mockRejectedValue(new Error('notification store unavailable'));
+    try {
+      const walletPayment = await a.outsider.post(`/v1/invoices/${byWallet.id}/payments`, {
+        amount: '120.00',
+        method: 'WALLET_SIMULATED',
+      });
+      expect(walletPayment.status, JSON.stringify(walletPayment.body)).toBe(201);
+      expect(walletPayment.body.status).toBe('PAID');
+      // Committed payments never turn a notification failure into an error (no retry → no double booking).
+      const externalPayment = await a.owner.post(`/v1/invoices/${recorded.id}/payments`, {
+        amount: '80.00',
+        method: 'EXTERNAL_RECORDED',
+      });
+      expect(externalPayment.status, JSON.stringify(externalPayment.body)).toBe(201);
+      expect(externalPayment.body.status).toBe('PAID');
+      expect(notifyMany).toHaveBeenCalledTimes(2);
+    } finally {
+      notifyMany.mockRestore();
+    }
+
+    // The domain event went out anyway: one invoice.paid delivery per paid invoice.
+    let deliveries: Array<{ payload: unknown }> = [];
+    for (let i = 0; i < 50 && deliveries.length < 2; i++) {
+      await sleep(100);
+      deliveries = await ctx.prisma.webhookDelivery.findMany({
+        where: { subscriptionId, eventType: 'invoice.paid' },
+      });
+    }
+    expect(
+      deliveries.map((d) => (d.payload as { data: { invoiceId: string } }).data.invoiceId).sort(),
+    ).toEqual([byWallet.id, recorded.id].sort());
+    expect(await ctx.prisma.notification.count({ where: { type: 'invoice.paid' } })).toBe(0);
+  });
 });
 
 describe('Diaspora Business — quotes', () => {
@@ -492,6 +565,7 @@ describe('Diaspora Business — quotes', () => {
       email: 'wallet-outsider-quo@example.com',
     });
     expect(cp.status, JSON.stringify(cp.body)).toBe(201);
+    await ctx.app.get(CounterpartiesService).whenIdle();
     expect(
       (await a.outsider.post(`/v1/organizations/${a.outsiderOrgId}/link-requests/${cp.body.id}/accept`))
         .status,

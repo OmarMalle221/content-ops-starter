@@ -1,6 +1,7 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { MaintenanceJobName } from '@dfn/shared';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { isEligibleStaff, staffUserWhere } from '../../common/staff-recipients';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { JobRegistry, type JobResult } from '../jobs/job-registry';
@@ -22,7 +23,8 @@ interface ReviewSlaContext {
  *  1. backfills `dueAt` (createdAt + REVIEW_SLA_HOURS_<SEVERITY>) on open alerts created without one;
  *  2. marks `slaBreachedAt` on open alerts (OPEN, REVIEWING, CONTESTED) past their deadline and
  *     notifies the assignee — or every active COMPLIANCE / ADMIN user when the alert is unassigned
- *     or its assignee is no longer active staff.
+ *     or its assignee is no longer active staff (under REQUIRE_STAFF_MFA, staff without two-factor
+ *     authentication count as non-staff on both sides).
  *
  * Idempotent: the breach marker is claimed with a conditional update (`slaBreachedAt IS NULL`), so
  * one breach is notified once, even with concurrent runs. Batch-bounded (MAX_BATCHES × BATCH_SIZE
@@ -72,7 +74,7 @@ export class ReviewSlaService implements OnModuleInit {
     const staffIds = async () => {
       staff ??= (
         await this.prisma.user.findMany({
-          where: { status: 'ACTIVE', deletedAt: null, globalRole: { in: ['COMPLIANCE', 'ADMIN'] } },
+          where: staffUserWhere(this.env),
           select: { id: true },
         })
       ).map((u) => u.id);
@@ -93,7 +95,9 @@ export class ReviewSlaService implements OnModuleInit {
           status: true,
           dueAt: true,
           organizationId: true,
-          assignedTo: { select: { id: true, status: true, globalRole: true, deletedAt: true } },
+          assignedTo: {
+            select: { id: true, status: true, globalRole: true, deletedAt: true, mfaEnabled: true },
+          },
         },
         orderBy: { dueAt: 'asc' },
         take: BATCH_SIZE,
@@ -106,11 +110,7 @@ export class ReviewSlaService implements OnModuleInit {
         if (claimed.count !== 1) continue;
         breached++;
         const a = alert.assignedTo;
-        const assigneeActive =
-          a &&
-          a.status === 'ACTIVE' &&
-          !a.deletedAt &&
-          (a.globalRole === 'COMPLIANCE' || a.globalRole === 'ADMIN');
+        const assigneeActive = a && isEligibleStaff(this.env, a);
         const recipients = assigneeActive ? [a.id] : await staffIds();
         if (assigneeActive) notifiedAssignee++;
         else notifiedStaff++;

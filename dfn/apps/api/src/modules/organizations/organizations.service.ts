@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import type { OrgRole, Prisma, PrismaTransactionClient, User } from '@dfn/database';
 import {
   ErrorCode,
+  ORG_ROLE_PERMISSIONS,
   Permission,
   SUPPORT_REASON_HEADER,
   globalRoleHas,
@@ -266,9 +267,14 @@ export class OrganizationsService {
       action: 'organization.member_invited',
       entityType: 'OrganizationInvitation',
       entityId: invitation.id,
-      metadata: { role: input.role },
+      metadata: {
+        role: input.role,
+        support,
+        ...(support ? { supportReason: access.supportReason } : {}),
+      },
       ...requestMeta(req),
     });
+    if (support) await this.notifySupportInvitation(organizationId, input, invitation.id, access);
     // The token is returned once so the inviter can share the link (sandbox email transport is
     // log-only) — except to support staff: the invitee alone receives it.
     if (support) return { invitationId: invitation.id, token: null, acceptUrl: null };
@@ -282,7 +288,10 @@ export class OrganizationsService {
   /**
    * A support write manages members for the organisation, never for the staff member: no
    * invitation of oneself or of another staff account (which would turn read-only staff into a
-   * tenant member able to move money or decide link consent), and no OWNER / ADMIN role.
+   * tenant member), and only a read-only role (SUPPORT_GRANTABLE_ROLES, i.e. VIEWER) — an ordinary
+   * account the agent controls must not gain money movement, credentials or link consent either.
+   * The invitation model has no owner-approval state, so the owners are told instead
+   * (`notifySupportInvitation`) and can remove the member.
    */
   private async assertSupportInvite(auth: AuthContext, email: string, role: OrgRole) {
     if (!SUPPORT_GRANTABLE_ROLES.has(role)) throw supportMembershipRefusal();
@@ -292,6 +301,40 @@ export class OrganizationsService {
       select: { globalRole: true },
     });
     if (invitee && isStaffRole(invitee.globalRole)) throw supportMembershipRefusal();
+  }
+
+  /** Every support-initiated invitation is reported to the members who manage members (OWNER / ADMIN). */
+  private async notifySupportInvitation(
+    organizationId: string,
+    input: InviteMemberInput,
+    invitationId: string,
+    access: TenantAccess,
+  ) {
+    const managers = await this.prisma.organizationMember.findMany({
+      where: { organizationId, role: { in: ['OWNER', 'ADMIN'] } },
+      select: { userId: true },
+    });
+    await this.notifications.notifyMany(
+      managers.map((m) => m.userId),
+      {
+        type: 'organization.support_invitation',
+        title: `Invitation envoyée par le support — ${access.organizationName ?? organizationId}`,
+        body: `Le support a invité ${input.email} avec le rôle ${input.role} (lecture seule). Motif : ${access.supportReason ?? '—'}. Si vous ne l'attendiez pas, retirez ce membre après son arrivée et contactez le support.`,
+        data: { organizationId, invitationId, email: input.email, role: input.role },
+      },
+    );
+  }
+
+  /** Support-initiated: the inviter is staff without a membership of the organisation. */
+  private async sentBySupport(invitation: { organizationId: string; invitedByUserId: string }) {
+    const inviter = await this.prisma.user.findUnique({
+      where: { id: invitation.invitedByUserId },
+      select: {
+        globalRole: true,
+        memberships: { where: { organizationId: invitation.organizationId }, select: { id: true } },
+      },
+    });
+    return Boolean(inviter && isStaffRole(inviter.globalRole) && inviter.memberships.length === 0);
   }
 
   async acceptMemberInvitation(auth: AuthContext, token: string, req: Request) {
@@ -307,6 +350,11 @@ export class OrganizationsService {
     }
     if (invitation.email.toLowerCase() !== auth.email.toLowerCase()) {
       throw DomainError.forbidden('This invitation was sent to another email address');
+    }
+    // Same rule on acceptance, so an invitation sent by support with a wider role (e.g. one pending
+    // from before support grants were limited) can never open money movement either.
+    if (!SUPPORT_GRANTABLE_ROLES.has(invitation.role) && (await this.sentBySupport(invitation))) {
+      throw supportMembershipRefusal();
     }
     await this.prisma.$transaction(async (tx) => {
       await tx.organizationMember.upsert({
@@ -345,7 +393,7 @@ export class OrganizationsService {
       where: { id: memberId, organizationId },
     });
     if (!member) throw DomainError.notFound('Member');
-    // Support may lower a member's role, never grant OWNER / ADMIN nor touch an owner.
+    // Support may only set a read-only role (SUPPORT_GRANTABLE_ROLES), never touch an owner.
     if (actor.via === 'STAFF_SUPPORT' && (!SUPPORT_GRANTABLE_ROLES.has(role) || member.role === 'OWNER')) {
       throw supportMembershipRefusal();
     }
@@ -475,12 +523,24 @@ const SUPPORT_WRITABLE: ReadonlySet<Permission> = new Set<Permission>([
   Permission.ORG_MANAGE_SETTINGS,
 ]);
 
-/** Roles a support write may grant: OWNER and ADMIN carry money movement, credentials and consent. */
-const SUPPORT_GRANTABLE_ROLES: ReadonlySet<OrgRole> = new Set<OrgRole>(['MEMBER', 'VIEWER']);
+/**
+ * Roles a support write may grant (invitation or role change): read-only roles only, i.e. every
+ * permission of the role is a READ_PERMISSIONS entry — today VIEWER alone. OWNER and ADMIN carry
+ * credentials, member management and link consent; OWNER, ADMIN and MEMBER all move money
+ * (TRANSACTION_MANAGE funds and releases Protect escrow; TRANSFER_CREATE pays invoices from the
+ * wallet). An account a support agent controls can therefore never obtain money movement from a
+ * support invitation.
+ * Derived from the RBAC matrix so a write permission added to a role removes it from this set.
+ */
+const SUPPORT_GRANTABLE_ROLES: ReadonlySet<OrgRole> = new Set<OrgRole>(
+  (Object.keys(ORG_ROLE_PERMISSIONS) as OrgRole[]).filter((role) =>
+    ORG_ROLE_PERMISSIONS[role].every((permission) => READ_PERMISSIONS.has(permission)),
+  ),
+);
 
 function supportMembershipRefusal(): DomainError {
   return DomainError.forbidden(
-    'Support cannot invite itself or other staff, grant the OWNER or ADMIN role, or change an owner',
+    `Support cannot invite itself or other staff, grant a role other than ${[...SUPPORT_GRANTABLE_ROLES].join(' / ')} (read-only), or change an owner`,
   );
 }
 

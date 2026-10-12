@@ -78,6 +78,13 @@ export const passkeysPart = definePart(
         codeHint: 'Code à 6 chiffres de votre application, ou un code de secours.',
         usePasskey: 'Autoriser avec une clé d’accès',
       },
+      /** REQUIRE_STAFF_MFA: a staff account keeps USER rights until it enables TOTP (app shell notice). */
+      staffMfa: {
+        title: 'Outils du personnel désactivés : double authentification requise',
+        body: 'Votre compte a un rôle de conformité ou d’administration, mais ces droits restent désactivés tant que l’authentification à deux facteurs (TOTP) n’est pas activée. En attendant, vous gardez l’accès d’un utilisateur standard.',
+        action: 'Activer la double authentification',
+        onSettings: 'Activez-la ci-dessous, dans la carte « Authentification à deux facteurs (TOTP) ».',
+      },
       /** API error codes (packages/shared/src/errors.ts) → interface wording; see localizedApiError. */
       errors: {
         MFA_REQUIRED: 'Code de vérification invalide ou manquant.',
@@ -92,6 +99,8 @@ export const passkeysPart = definePart(
         ACCOUNT_LOCKED:
           'Trop de tentatives erronées : l’accès est temporairement bloqué. Réessayez plus tard.',
         RATE_LIMITED: 'Trop de tentatives rapprochées. Patientez un instant puis réessayez.',
+        STAFF_MFA_REQUIRED:
+          'Activez l’authentification à deux facteurs (TOTP) dans vos paramètres pour utiliser les outils du personnel.',
       },
     },
   },
@@ -165,6 +174,12 @@ export const passkeysPart = definePart(
         codeHint: '6-digit code from your app, or a recovery code.',
         usePasskey: 'Authorise with a passkey',
       },
+      staffMfa: {
+        title: 'Staff tools disabled: two-factor authentication required',
+        body: 'Your account has a compliance or administrator role, but those rights stay disabled until two-factor authentication (TOTP) is enabled. Meanwhile, you keep standard user access.',
+        action: 'Enable two-factor authentication',
+        onSettings: 'Enable it below, in the “Two-factor authentication (TOTP)” card.',
+      },
       errors: {
         MFA_REQUIRED: 'Invalid or missing verification code.',
         MFA_CODE_REUSED:
@@ -177,6 +192,7 @@ export const passkeysPart = definePart(
         CHALLENGE_EXPIRED: 'The passkey request expired or was already used. Start again.',
         ACCOUNT_LOCKED: 'Too many failed attempts: access is temporarily blocked. Try again later.',
         RATE_LIMITED: 'Too many attempts in a short time. Wait a moment and try again.',
+        STAFF_MFA_REQUIRED: 'Enable two-factor authentication (TOTP) in your settings to use staff tools.',
       },
     },
   },

@@ -1,5 +1,4 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import * as argon2 from 'argon2';
 import type { Request } from 'express';
 import type { WebAuthnCredential } from '@dfn/database';
 import {
@@ -17,12 +16,11 @@ import { requestMeta } from '../../common/request-meta';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RiskService } from '../risk/risk.service';
+import { LoginAttemptsService } from './login-attempts.service';
 import { MfaVerifierService } from './mfa-verifier.service';
 import { SessionService } from './session.service';
 import { AssertionFailure, WebAuthnService, isUuid } from './webauthn.service';
 
-const MAX_FAILED_LOGINS = 5;
-const LOCK_MINUTES = 15;
 /** Upper bound of active passkeys per account (keeps excludeCredentials and listings small). */
 const MAX_PASSKEYS_PER_USER = 20;
 
@@ -69,6 +67,7 @@ export class PasskeysService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     private readonly risk: RiskService,
+    private readonly loginAttempts: LoginAttemptsService,
   ) {}
 
   private activeFor(userId: string) {
@@ -87,8 +86,9 @@ export class PasskeysService {
 
   /**
    * Registration challenge, issued only after a fresh proof (ADR-0009): second factor when MFA is
-   * enabled, otherwise the current password or an assertion of an existing passkey. The proof is
-   * checked here, before the ceremony; the challenge is then bound to this user and session.
+   * enabled, otherwise the current password (counted into the login lockout) or an assertion of
+   * an existing passkey. The proof is checked here, before the ceremony; the challenge is then
+   * bound to this user and session.
    */
   async registrationOptions(auth: AuthContext, proof: PasskeyRegistrationOptionsInput, req: Request) {
     assertBrowserSession(auth);
@@ -109,25 +109,25 @@ export class PasskeysService {
         req,
       );
     } else {
-      const ok = proof.currentPassword
-        ? await argon2.verify(user.passwordHash, proof.currentPassword).catch(() => false)
-        : false;
-      if (!ok) {
-        if (proof.currentPassword) {
-          await this.audit.log({
-            actorUserId: user.id,
-            action: 'auth.passkey_registration_refused',
-            entityType: 'User',
-            entityId: user.id,
-            metadata: { reason: 'password_invalid' },
-            ...requestMeta(req),
-          });
-        }
-        throw new DomainError(
+      const refused = () =>
+        new DomainError(
           ErrorCode.STEP_UP_REQUIRED,
           'Confirm your current password to add a passkey',
           HttpStatus.UNAUTHORIZED,
         );
+      if (!proof.currentPassword) throw refused();
+      const password = await this.loginAttempts.verifyPassword(user, proof.currentPassword);
+      if (!password.ok) {
+        await this.audit.log({
+          actorUserId: user.id,
+          action: 'auth.passkey_registration_refused',
+          entityType: 'User',
+          entityId: user.id,
+          metadata: { reason: 'password_invalid', locked: password.locked },
+          ...requestMeta(req),
+        });
+        if (password.locked) throw this.loginAttempts.lockedError(true);
+        throw refused();
       }
     }
     return this.webauthn.registrationOptions(user, auth.sessionId, existing);
@@ -309,9 +309,9 @@ export class PasskeysService {
 
   /**
    * Passwordless login. Mirrors the password login (AuthService.login): lock and status checks,
-   * failed attempts counted towards the 15-minute lock with the same audit + risk evaluation,
-   * then a session flagged mfaVerified — a user-verifying passkey is a phishing-resistant
-   * multi-factor credential on its own.
+   * failed attempts counted (reserved before the check) towards the same 15-minute lock with the
+   * same audit + risk evaluation, then a session flagged mfaVerified — a user-verifying passkey is
+   * a phishing-resistant multi-factor credential on its own.
    */
   async authenticationVerify(response: WebAuthnAssertionInput, req: Request) {
     const meta = requestMeta(req);
@@ -338,29 +338,18 @@ export class PasskeysService {
       });
       throw this.loginRefused();
     }
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new DomainError(
-        ErrorCode.ACCOUNT_LOCKED,
-        'Account temporarily locked. Try again later.',
-        HttpStatus.LOCKED,
-      );
-    }
+    if (user.lockedUntil && user.lockedUntil > new Date()) throw this.loginAttempts.lockedError();
     if (user.status !== 'ACTIVE') {
       throw new DomainError(ErrorCode.FORBIDDEN, 'Account is not active', HttpStatus.FORBIDDEN);
     }
+    const attempt = await this.loginAttempts.reserve(user.id);
     try {
       await this.webauthn.verifyAssertion(response, challenge, credential);
     } catch (err) {
-      if (!(err instanceof AssertionFailure)) throw err;
-      const failed = user.failedLoginCount + 1;
-      const lock = failed >= MAX_FAILED_LOGINS;
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          failedLoginCount: lock ? 0 : failed,
-          lockedUntil: lock ? new Date(Date.now() + LOCK_MINUTES * 60_000) : null,
-        },
-      });
+      if (!(err instanceof AssertionFailure)) {
+        await this.loginAttempts.release(attempt);
+        throw err;
+      }
       await this.audit.log({
         actorUserId: user.id,
         action: 'auth.login_failed',
@@ -372,7 +361,7 @@ export class PasskeysService {
       await this.risk.evaluateAndRecord({
         event: 'auth.login_failed',
         userId: user.id,
-        failedLoginsLast15m: failed,
+        failedLoginsLast15m: attempt.attempt,
       });
       if (err.reason === 'counter_regression') {
         // A valid signature with a counter that went backwards: the authenticator was probably
@@ -388,19 +377,11 @@ export class PasskeysService {
           data: { passkeyId: credential.id },
         });
       }
-      if (lock) {
-        throw new DomainError(
-          ErrorCode.ACCOUNT_LOCKED,
-          'Too many attempts. Account locked for 15 minutes.',
-          HttpStatus.LOCKED,
-        );
-      }
+      if (attempt.lockedUntil) throw this.loginAttempts.lockedError(true);
       throw this.loginRefused();
     }
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() },
-    });
+    await this.loginAttempts.succeeded(attempt);
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     const { token, session } = await this.sessions.create(user.id, req, { mfaVerified: true });
     await this.audit.log({
       actorUserId: user.id,

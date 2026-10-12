@@ -464,6 +464,12 @@ export class InvoicesService implements OnModuleInit {
     return { status: target, paidMinor, totalMinor: BigInt(locked.totalMinor), previous: locked.status };
   }
 
+  /**
+   * Post-commit effects of a payment (wallet, external or Protect release). The payment is already
+   * booked, so this never throws: the `invoice.paid` domain event (partner webhooks) is emitted
+   * first, and a notification failure is only logged — it can neither cancel the event nor turn
+   * into an error for the caller (who would retry and book a second payment).
+   */
   private async afterPayment(
     invoice: InvoiceWithRelations,
     result: { status: InvoiceStatus; paidMinor: bigint },
@@ -471,20 +477,6 @@ export class InvoicesService implements OnModuleInit {
     actorUserId: string | null,
   ) {
     const ccy = invoice.currencyCode;
-    const amount = minorToDecimalString(payment.amountMinor, ccy);
-    const title =
-      result.status === 'PAID'
-        ? `Facture ${invoice.number} payée (fictif)`
-        : `Paiement partiel sur ${invoice.number} (fictif)`;
-    const body = `${amount} ${ccy} fictifs enregistrés (${payment.method}) sur la facture ${invoice.number}. Solde dû : ${minorToDecimalString(clampNonNegative(invoice.totalMinor - result.paidMinor), ccy)} ${ccy}. ${BUSINESS_DISCLAIMER_FR}.`;
-    const recipients = await this.orgMemberUserIds(invoice.organizationId);
-    recipients.push(...(await this.customerRecipients(invoice)));
-    await this.notifications.notifyMany(recipients, {
-      type: result.status === 'PAID' ? 'invoice.paid' : 'invoice.payment_recorded',
-      title,
-      body,
-      data: { invoiceId: invoice.id, paymentId: payment.id, organizationId: invoice.organizationId },
-    });
     if (result.status === 'PAID') {
       const organizationIds = [invoice.organizationId];
       const customerOrganizationId = acceptedLinkedOrganizationId(invoice.counterparty);
@@ -507,6 +499,26 @@ export class InvoicesService implements OnModuleInit {
           simulated: true,
         },
       });
+    }
+    try {
+      const amount = minorToDecimalString(payment.amountMinor, ccy);
+      const title =
+        result.status === 'PAID'
+          ? `Facture ${invoice.number} payée (fictif)`
+          : `Paiement partiel sur ${invoice.number} (fictif)`;
+      const body = `${amount} ${ccy} fictifs enregistrés (${payment.method}) sur la facture ${invoice.number}. Solde dû : ${minorToDecimalString(clampNonNegative(invoice.totalMinor - result.paidMinor), ccy)} ${ccy}. ${BUSINESS_DISCLAIMER_FR}.`;
+      const recipients = await this.orgMemberUserIds(invoice.organizationId);
+      recipients.push(...(await this.customerRecipients(invoice)));
+      await this.notifications.notifyMany(recipients, {
+        type: result.status === 'PAID' ? 'invoice.paid' : 'invoice.payment_recorded',
+        title,
+        body,
+        data: { invoiceId: invoice.id, paymentId: payment.id, organizationId: invoice.organizationId },
+      });
+    } catch (err) {
+      this.logger.error(
+        `notifications after payment ${payment.id} (${payment.method}) on invoice ${invoice.id} failed: ${String(err)}`,
+      );
     }
   }
 
@@ -675,21 +687,18 @@ export class InvoicesService implements OnModuleInit {
     } catch (err) {
       this.logger.error(`payer notification after wallet payment ${paymentId} failed: ${String(err)}`);
     }
-    try {
-      await this.afterPayment(
-        invoice,
-        result,
-        {
-          id: paymentId,
-          amountMinor,
-          method: 'WALLET_SIMULATED',
-          ledgerTransactionId: result.ledgerTransactionId,
-        },
-        auth.userId,
-      );
-    } catch (err) {
-      this.logger.error(`notifications after wallet payment ${paymentId} failed: ${String(err)}`);
-    }
+    // Never throws: emits invoice.paid, then notifies (a notification failure is logged).
+    await this.afterPayment(
+      invoice,
+      result,
+      {
+        id: paymentId,
+        amountMinor,
+        method: 'WALLET_SIMULATED',
+        ledgerTransactionId: result.ledgerTransactionId,
+      },
+      auth.userId,
+    );
     // Post-commit AML evaluation (structuring across wallet payments). The payment is already
     // booked: an evaluation failure is logged, never turned into an error for the payer.
     try {

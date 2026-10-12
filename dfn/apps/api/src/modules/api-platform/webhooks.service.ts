@@ -257,24 +257,40 @@ export class WebhooksService {
     return paginate(items.map(toWebhookDeliveryDto), total, query.page, query.pageSize);
   }
 
-  /** Manual retry of a failed / exhausted delivery, regardless of its scheduled attempt time. */
+  /**
+   * Manual retry of a failed / exhausted delivery, regardless of its scheduled attempt time. A
+   * delivery being sent right now (retry job, another manual retry) is refused with 409 CONFLICT
+   * instead of being sent a second time concurrently.
+   */
   async retryDelivery(auth: AuthContext, id: string, deliveryId: string, req: Request) {
     const subscription = await this.load(auth, id);
     const delivery = await this.prisma.webhookDelivery.findFirst({
       where: { id: deliveryId, subscriptionId: subscription.id },
     });
     if (!delivery) throw DomainError.notFound('Webhook delivery');
-    if (delivery.status !== 'FAILED' && delivery.status !== 'EXHAUSTED') {
-      throw DomainError.invalidTransition(
-        `Only FAILED or EXHAUSTED deliveries can be retried (current: ${delivery.status})`,
-        {
-          entity: 'WebhookDelivery',
-          from: delivery.status,
-          to: 'PENDING',
-        },
-      );
+    const assertRetryable = (status: string) => {
+      if (status !== 'FAILED' && status !== 'EXHAUSTED') {
+        throw DomainError.invalidTransition(
+          `Only FAILED or EXHAUSTED deliveries can be retried (current: ${status})`,
+          {
+            entity: 'WebhookDelivery',
+            from: status,
+            to: 'PENDING',
+          },
+        );
+      }
+    };
+    assertRetryable(delivery.status);
+    // The dispatcher claims the row atomically: it sends nothing when another attempt holds it.
+    const { delivery: result, attempted } = await this.dispatcher.attempt(delivery.id, 'manual');
+    if (!attempted) {
+      assertRetryable(result.status);
+      throw DomainError.conflict('This delivery is being sent by another attempt; retry once it completes', {
+        deliveryId: result.id,
+        status: result.status,
+        claimedUntil: result.claimedUntil,
+      });
     }
-    const result = await this.dispatcher.deliver(delivery.id, 'manual');
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId: subscription.organizationId,

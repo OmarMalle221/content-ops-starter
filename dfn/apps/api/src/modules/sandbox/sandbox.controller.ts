@@ -53,6 +53,8 @@ export class SandboxController {
     if (!funding) throw DomainError.notFound('Funding request');
     const tx = await this.access.load(funding.transactionId);
     const role = this.access.roleFor(auth, tx);
+    // The buyer confirms its own funding — as an organisation member allowed to manage it (not VIEWER).
+    if (role === 'BUYER') this.access.assertPartyCan(auth, tx, role, 'BUYER');
     if (role !== 'BUYER') {
       // Only the buyer, or staff holding the sandbox simulation permission (ADMIN), may trigger it.
       if (!isStaff(auth)) throw DomainError.notFound('Funding request');

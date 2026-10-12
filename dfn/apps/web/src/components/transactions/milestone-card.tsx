@@ -16,11 +16,15 @@ export function MilestoneCard({ tx, milestone, documents }: { tx: any; milestone
   const [selected, setSelected] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [changes, setChanges] = useState('');
+  // Server-driven: a party whose organisation role lacks TRANSACTION_MANAGE (VIEWER) gets neither.
+  const actions: string[] = tx.nextActions ?? [];
   const canSubmit =
     tx.myRole === 'SELLER' &&
+    actions.includes('SUBMIT_MILESTONE') &&
     ['PENDING', 'CHANGES_REQUESTED'].includes(milestone.status) &&
     ['FUNDED', 'IN_PROGRESS', 'DISPUTED'].includes(tx.status);
-  const canReview = tx.myRole === 'BUYER' && milestone.status === 'SUBMITTED';
+  const canReview =
+    tx.myRole === 'BUYER' && actions.includes('REQUEST_CHANGES') && milestone.status === 'SUBMITTED';
   const frozen = tx.releaseFrozen || tx.status === 'DISPUTED';
   const sellerDocs = documents.filter((d) => d.transactionId === tx.id);
   const requiredKinds: string[] = milestone.requiredEvidence ?? [];

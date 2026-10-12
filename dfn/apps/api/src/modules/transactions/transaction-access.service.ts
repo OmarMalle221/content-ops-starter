@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma, PrismaTransactionClient } from '@dfn/database';
+import type { OrgRole, Prisma, PrismaTransactionClient } from '@dfn/database';
+import { Permission, orgRoleHas } from '@dfn/shared';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -71,6 +72,50 @@ export class TransactionAccessService {
 
   assertRole(role: ViewerRole | null, ...allowed: ViewerRole[]) {
     if (!role || !allowed.includes(role)) throw DomainError.forbidden();
+  }
+
+  /**
+   * Organisation role the caller holds on its side of the transaction: its membership of the buyer
+   * organisation (BUYER) or of the seller organisation (SELLER). Null for staff and for a seller who
+   * is not (or no longer) a member of the organisation the transaction is attached to.
+   */
+  partyOrgRole(auth: AuthContext, tx: TransactionWithRelations, role: ViewerRole | null): OrgRole | null {
+    const organizationId =
+      role === 'BUYER' ? tx.buyerOrganizationId : role === 'SELLER' ? tx.sellerOrganizationId : null;
+    return (organizationId && membershipFor(auth, organizationId)?.role) || null;
+  }
+
+  /**
+   * `assertRole` for a state-changing party action (terms, funding, milestone submission / review /
+   * approval — which releases escrow —, cancellation, invitation resend): the caller acts for its
+   * organisation, so its organisation role must also grant TRANSACTION_MANAGE. A VIEWER of either
+   * side keeps read access only. Staff never pass (no party role).
+   */
+  assertPartyCan(
+    auth: AuthContext,
+    tx: TransactionWithRelations,
+    role: ViewerRole | null,
+    ...allowed: Array<'BUYER' | 'SELLER'>
+  ) {
+    this.assertPartyPermission(auth, tx, role, Permission.TRANSACTION_MANAGE, ...allowed);
+  }
+
+  /**
+   * Same rule for party actions guarded by another organisation permission (DISPUTE_OPEN for
+   * disputes, DOCUMENT_UPLOAD for transaction documents).
+   */
+  assertPartyPermission(
+    auth: AuthContext,
+    tx: TransactionWithRelations,
+    role: ViewerRole | null,
+    permission: Permission,
+    ...allowed: Array<'BUYER' | 'SELLER'>
+  ) {
+    this.assertRole(role, ...allowed);
+    const orgRole = this.partyOrgRole(auth, tx, role);
+    if (!orgRole || !orgRoleHas(orgRole, permission)) {
+      throw DomainError.forbidden(orgRole ? `Your role (${orgRole}) does not allow this action` : undefined);
+    }
   }
 
   /** User ids to notify for one side of the transaction. */

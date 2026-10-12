@@ -21,6 +21,7 @@ import { AllowPreMfa, Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthContext } from '../../common/auth-context';
 import { zodBody } from '../../common/pipes/zod-validation.pipe';
+import { SkipIdempotency } from '../api-platform/skip-idempotency.decorator';
 import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
 import { UsersService } from '../users/users.service';
@@ -85,19 +86,35 @@ export class AuthController {
     return { loggedOut: true };
   }
 
+  /**
+   * `user.globalRole` is the effective role of this session, not the stored one: with
+   * REQUIRE_STAFF_MFA a staff account without MFA acts as USER (`staffMfaRequired: true`) and must
+   * not be offered a staff console the API would refuse.
+   */
   @AllowPreMfa()
   @Get('me')
   async me(@CurrentUser() auth: AuthContext) {
     if (auth.mfaEnabled && !auth.mfaVerified)
       return { mfaRequired: true, user: { id: auth.userId, email: auth.email } };
-    return { mfaRequired: false, user: await this.users.me(auth.userId) };
+    return {
+      mfaRequired: false,
+      user: {
+        ...(await this.users.me(auth.userId)),
+        globalRole: auth.globalRole,
+        staffMfaRequired: auth.staffMfaRequired === true,
+      },
+    };
   }
 
+  // The TOTP secret and the recovery codes are shown once: never kept by the Idempotency-Key store.
+  @SkipIdempotency()
   @Post('mfa/setup')
   mfaSetup(@CurrentUser() auth: AuthContext) {
     return this.auth.mfaSetup(auth);
   }
 
+  @SkipIdempotency()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('mfa/enable')
   mfaEnable(
     @CurrentUser() auth: AuthContext,
@@ -142,6 +159,7 @@ export class AuthController {
     return this.auth.recoveryCodesSummary(auth);
   }
 
+  @SkipIdempotency()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @Post('mfa/recovery-codes/regenerate')
@@ -153,6 +171,7 @@ export class AuthController {
     return this.auth.regenerateRecoveryCodes(auth, body, req);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('password')
   changePassword(
     @CurrentUser() auth: AuthContext,

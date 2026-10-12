@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
-import { bootTestApp, resetDatabase, type TestContext } from './helpers/app';
+import { Client, PDF_BYTES, bootTestApp, registerUser, resetDatabase, type TestContext } from './helpers/app';
 import { VEHICLE_TX, createActors, fundTransaction, uploadEvidence } from './helpers/protect';
 
 let ctx: TestContext;
@@ -261,5 +261,177 @@ describe('Scenario 1 — Diaspora Protect end-to-end (sandbox)', () => {
     const tx = await actors.buyer.get(`/v1/transactions/${created.body.id}`);
     expect(tx.body.status).toBe('CANCELLED');
     expect(tx.body.seller.status).toBe('DECLINED');
+  });
+});
+
+/** Party actions that need TRANSACTION_MANAGE in the party's organisation. */
+const MANAGE_ACTIONS = [
+  'RESEND_INVITATION',
+  'CANCEL',
+  'ACCEPT_TERMS',
+  'REQUEST_FUNDING',
+  'SIMULATE_PARTNER_CONFIRMATION',
+  'SUBMIT_MILESTONE',
+  'APPROVE_MILESTONE',
+  'REQUEST_CHANGES',
+];
+
+/** Invites `email` into the organisation with `role`, registers it and accepts: returns its client. */
+async function joinOrganization(
+  owner: Client,
+  organizationId: string,
+  email: string,
+  role: 'ADMIN' | 'MEMBER' | 'VIEWER',
+) {
+  const invite = await owner.post(`/v1/organizations/${organizationId}/members/invite`, { email, role });
+  expect(invite.status, JSON.stringify(invite.body)).toBe(201);
+  const { client } = await registerUser(ctx, email);
+  const joined = await client.post('/v1/organizations/invitations/accept', { token: invite.body.token });
+  expect(joined.status, JSON.stringify(joined.body)).toBe(201);
+  return client;
+}
+
+describe('Protect — party actions follow the organisation role (TRANSACTION_MANAGE)', () => {
+  it('keeps VIEWERs of either side read-only while OWNER / ADMIN / MEMBER fund, release and cancel', async () => {
+    const actors = await createActors(ctx);
+    const org = await actors.buyer.post('/v1/organizations', { name: 'Ndiaye Import', country: 'CA' });
+    expect(org.status, JSON.stringify(org.body)).toBe(201);
+    const bizId = org.body.id as string;
+    const buyerViewer = await joinOrganization(actors.buyer, bizId, 'buyer-viewer@example.com', 'VIEWER');
+    const buyerMember = await joinOrganization(actors.buyer, bizId, 'buyer-member@example.com', 'MEMBER');
+    const buyerAdmin = await joinOrganization(actors.buyer, bizId, 'buyer-admin@example.com', 'ADMIN');
+    const sellerOrgId = actors.sellerUser.organizations[0].id as string;
+    const sellerViewer = await joinOrganization(
+      actors.seller,
+      sellerOrgId,
+      'seller-viewer@example.com',
+      'VIEWER',
+    );
+    const created = await actors.buyer.post('/v1/transactions', { ...VEHICLE_TX, organizationId: bizId });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const txId = created.body.id as string;
+    const url = (path = '') => `/v1/transactions/${txId}${path}`;
+    const refused = async (res: PromiseLike<{ status: number; body: any }>) => {
+      const r = await res;
+      expect(r.status, JSON.stringify(r.body)).toBe(403);
+      expect(r.body.code).toBe('FORBIDDEN');
+    };
+    /** State changes offered to the caller (reads, disputes and uploads are not part of them). */
+    const offered = (body: { nextActions: string[] }) =>
+      body.nextActions.filter((a) => MANAGE_ACTIONS.includes(a));
+
+    // A buyer-side VIEWER reads the transaction, is offered no state change and cannot make one
+    const seen = await buyerViewer.get(url());
+    expect(seen.status).toBe(200);
+    expect(seen.body.myRole).toBe('BUYER');
+    expect(offered(seen.body)).toEqual([]);
+    expect(offered((await actors.buyer.get(url())).body)).toEqual([
+      'RESEND_INVITATION',
+      'CANCEL',
+      'ACCEPT_TERMS',
+    ]);
+    expect((await buyerViewer.get(url('/events'))).status).toBe(200);
+    await refused(buyerViewer.post(url('/invitation/resend')));
+    await refused(buyerViewer.post(url('/cancel'), { reason: 'Annulation par un lecteur' }));
+
+    // Terms: VIEWERs of both sides are refused, an ADMIN accepts for the buyer organisation
+    const accepted = await actors.seller.post('/v1/invitations/accept', {
+      token: created.body.invitation.token,
+    });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    const contractVersionId = accepted.body.contract.currentVersion.id as string;
+    const sellerSeen = await sellerViewer.get(url());
+    expect(sellerSeen.body.myRole).toBe('SELLER');
+    expect(offered(sellerSeen.body)).toEqual([]);
+    await refused(buyerViewer.post(url('/accept-terms'), { contractVersionId, accept: true }));
+    await refused(sellerViewer.post(url('/accept-terms'), { contractVersionId, accept: true }));
+    expect((await buyerAdmin.post(url('/accept-terms'), { contractVersionId, accept: true })).status).toBe(
+      200,
+    );
+    const bothAccepted = await actors.seller.post(url('/accept-terms'), { contractVersionId, accept: true });
+    expect(bothAccepted.body.contract.status).toBe('ACCEPTED');
+    for (const c of [actors.buyer, actors.seller]) {
+      await c.post('/v1/verifications/identity', { documentType: 'PASSPORT', issuingCountry: 'CA' });
+    }
+
+    // Funding: refused to the VIEWER (cancellation too), requested by the ADMIN
+    const fundingInput = { method: 'BANK_TRANSFER_SIMULATED' };
+    await refused(buyerViewer.post(url('/funding/request'), fundingInput));
+    await refused(buyerViewer.post(url('/cancel'), { reason: 'Annulation par un lecteur' }));
+    await refused(sellerViewer.post(url('/cancel'), { reason: 'Annulation par un lecteur' }));
+    expect(await ctx.prisma.fundingRequest.count({ where: { transactionId: txId } })).toBe(0);
+    const funding = await buyerAdmin.post(url('/funding/request'), fundingInput);
+    expect(funding.status, JSON.stringify(funding.body)).toBe(200);
+    expect(funding.body.status).toBe('AWAITING_FUNDING');
+    // The simulated partner confirmation is the buyer's own action: a VIEWER cannot trigger it
+    const confirmation = { fundingReference: funding.body.funding.reference, outcome: 'CONFIRMED' };
+    await refused(buyerViewer.post('/v1/sandbox/partner/funding-events', confirmation));
+    const confirmed = await actors.buyer.post('/v1/sandbox/partner/funding-events', confirmation);
+    expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
+
+    // Funds held: a VIEWER can neither upload a transaction document nor open a dispute (which would
+    // freeze releases); DOCUMENT_UPLOAD / DISPUTE_OPEN come with the organisation role, not the side
+    await refused(
+      buyerViewer.upload(
+        url('/documents'),
+        { kind: 'PHOTO', title: 'Photo' },
+        { name: 'photo.pdf', buffer: PDF_BYTES, type: 'application/pdf' },
+      ),
+    );
+    await refused(
+      buyerViewer.post(url('/disputes'), {
+        reason: 'NOT_AS_DESCRIBED',
+        description: 'Ouverture tentée par un simple lecteur de l’organisation acheteuse.',
+      }),
+    );
+    expect(await ctx.prisma.dispute.count({ where: { transactionId: txId } })).toBe(0);
+    expect(await ctx.prisma.document.count({ where: { transactionId: txId } })).toBe(0);
+    const viewerActions = (await buyerViewer.get(url())).body.nextActions as string[];
+    expect(viewerActions).not.toEqual(expect.arrayContaining(['OPEN_DISPUTE']));
+    expect(viewerActions).not.toEqual(expect.arrayContaining(['UPLOAD_DOCUMENT']));
+    expect((await actors.buyer.get(url())).body.nextActions).toEqual(
+      expect.arrayContaining(['OPEN_DISPUTE', 'REQUEST_REFUND', 'UPLOAD_DOCUMENT']),
+    );
+
+    // Milestone 1: the seller-side VIEWER cannot submit; the buyer-side VIEWER cannot release
+    const [m1, m2] = funding.body.milestones as Array<{ id: string }>;
+    const bol = await uploadEvidence(actors.seller, txId, 'BILL_OF_LADING', 'bol.pdf');
+    await refused(sellerViewer.post(url(`/milestones/${m1!.id}/submit`), { documentIds: [bol] }));
+    expect(
+      (await actors.seller.post(url(`/milestones/${m1!.id}/submit`), { documentIds: [bol] })).status,
+    ).toBe(200);
+    const pendingRelease = await buyerViewer.get(url());
+    expect(offered(pendingRelease.body)).toEqual([]);
+    await refused(buyerViewer.post(url(`/milestones/${m1!.id}/approve`), { note: 'OK' }));
+    await refused(buyerViewer.post(url(`/milestones/${m1!.id}/request-changes`), { note: 'Illisible' }));
+    let tx = (await actors.buyer.get(url())).body;
+    expect(tx.milestones[0].status).toBe('SUBMITTED');
+    expect(tx.escrowBalance.decimal).toBe('18500.00');
+    expect(tx.nextActions).toEqual(expect.arrayContaining(['APPROVE_MILESTONE', 'REQUEST_CHANGES']));
+    expect(await ctx.prisma.ledgerTransaction.count({ where: { reference: txId, kind: 'RELEASE' } })).toBe(0);
+    const released = await buyerAdmin.post(url(`/milestones/${m1!.id}/approve`), { note: 'OK' });
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect(released.body.milestones[0].status).toBe('RELEASED');
+
+    // Milestone 2: a MEMBER holds TRANSACTION_MANAGE and releases (the VIEWER still cannot)
+    const pos = await uploadEvidence(actors.seller, txId, 'PROOF_OF_SHIPMENT', 'delivery.pdf');
+    expect(
+      (await actors.seller.post(url(`/milestones/${m2!.id}/submit`), { documentIds: [pos] })).status,
+    ).toBe(200);
+    await refused(buyerViewer.post(url(`/milestones/${m2!.id}/approve`), {}));
+    const settled = await buyerMember.post(url(`/milestones/${m2!.id}/approve`), {});
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
+    tx = settled.body;
+    expect(tx.status).toBe('SETTLED');
+    expect(tx.releasedTotal.decimal).toBe('18500.00');
+
+    // Cancellation of another transaction: refused to the VIEWER, done by the ADMIN
+    const other = await actors.buyer.post('/v1/transactions', { ...VEHICLE_TX, organizationId: bizId });
+    expect(other.status, JSON.stringify(other.body)).toBe(201);
+    const otherUrl = `/v1/transactions/${other.body.id}/cancel`;
+    await refused(buyerViewer.post(otherUrl, { reason: 'Annulation par un lecteur' }));
+    const cancelled = await buyerAdmin.post(otherUrl, { reason: 'Commande annulée par le client' });
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+    expect(cancelled.body.status).toBe('CANCELLED');
   });
 });

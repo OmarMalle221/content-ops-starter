@@ -23,12 +23,44 @@ const STALE_PENDING_BATCH = 100;
  */
 export const STALE_PENDING_AFTER_MS = 5 * 60_000;
 /**
- * Every attempt first claims its row (compare-and-set, `nextAttemptAt` = now + this delay), so two
- * workers never send the same delivery at the same time. A claim older than this belongs to an
- * attempt that died in flight (crash, lost result write): the row is attempted again — delivery is
- * at-least-once and receivers deduplicate on `X-DFN-Delivery`. Far above WEBHOOK_TIMEOUT_MS (≤ 30 s).
+ * Every attempt first claims its row: a fresh `claimToken` and `claimedUntil` = now + this delay,
+ * set only when no live claim exists, so two workers never send the same delivery at the same time
+ * (whatever state they read it in). The back-off schedule (`nextAttemptAt`) is left untouched. A
+ * claim older than this belongs to an attempt that died in flight (crash, lost result write): the
+ * row is attempted again — delivery is at-least-once and receivers deduplicate on `X-DFN-Delivery`.
+ * Far above WEBHOOK_TIMEOUT_MS (≤ 30 s).
  */
 export const DELIVERY_CLAIM_MS = 5 * 60_000;
+
+export type DeliverySource = 'event' | 'retry' | 'manual' | 'test';
+
+export interface DeliveryAttempt {
+  /** The row after the attempt, or as found when it was not attempted. */
+  delivery: WebhookDelivery;
+  /** false when the row could not be claimed (being sent by another attempt, final or not due): nothing was sent. */
+  attempted: boolean;
+}
+
+/** No live claim on the row: never claimed, released by the last attempt, or expired. */
+function claimFree(now: Date): Prisma.WebhookDeliveryWhereInput {
+  return { OR: [{ claimedUntil: null }, { claimedUntil: { lt: now } }] };
+}
+
+/** Rows an attempt from `source` may send (checked atomically with the claim). */
+function sendableBy(source: DeliverySource, now: Date): Prisma.WebhookDeliveryWhereInput {
+  switch (source) {
+    case 'event':
+    case 'test':
+      // first attempt, right after the row was created
+      return { status: 'PENDING' };
+    case 'retry':
+      // never attempted (stale sweep), or failed and due — not one retried since it was listed
+      return { OR: [{ status: 'PENDING' }, { status: 'FAILED', nextAttemptAt: { lte: now } }] };
+    case 'manual':
+      // regardless of the back-off schedule
+      return { status: { in: ['FAILED', 'EXHAUSTED'] } };
+  }
+}
 
 export interface WebhookEnvelope {
   id: string;
@@ -151,31 +183,40 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Performs one attempt for a delivery and persists the outcome. Returns the updated row.
-   * `source` only feeds debug logs.
+   * Performs one attempt for a delivery and persists the outcome. Returns the updated row (as found
+   * when it was not attempted, see attempt()). `source` decides which rows may be sent.
    */
-  async deliver(deliveryId: string, source: 'event' | 'retry' | 'manual' | 'test'): Promise<WebhookDelivery> {
-    const delivery = await this.prisma.webhookDelivery.findUnique({
+  async deliver(deliveryId: string, source: DeliverySource): Promise<WebhookDelivery> {
+    return (await this.attempt(deliveryId, source)).delivery;
+  }
+
+  /**
+   * One attempt for a delivery. The row is claimed first — atomically, only if no live claim exists
+   * and it is still sendable by `source` — so that a concurrent reader (retry job on another
+   * instance, stale sweep, manual retry) never sends it a second time while this attempt is in
+   * flight, whatever state it read the row in. Only the holder of the claim token writes the
+   * outcome and releases the claim: an attempt whose claim expired and was taken over writes nothing.
+   */
+  async attempt(deliveryId: string, source: DeliverySource): Promise<DeliveryAttempt> {
+    const claimedAt = new Date();
+    const claimToken = randomUUID();
+    const claimed = await this.prisma.webhookDelivery.updateMany({
+      where: { id: deliveryId, AND: [claimFree(claimedAt), sendableBy(source, claimedAt)] },
+      data: { claimedUntil: new Date(claimedAt.getTime() + DELIVERY_CLAIM_MS), claimToken },
+    });
+    if (claimed.count !== 1) {
+      const current = await this.prisma.webhookDelivery.findUnique({ where: { id: deliveryId } });
+      if (!current) throw new Error(`webhook delivery ${deliveryId} not found`);
+      this.logger.debug(
+        `delivery ${deliveryId} (${source}) not attempted: ${current.status}, being sent by another attempt or not due`,
+      );
+      return { delivery: current, attempted: false };
+    }
+    // Read under the claim: no other attempt writes this row until the claim is released or expires.
+    const delivery = await this.prisma.webhookDelivery.findUniqueOrThrow({
       where: { id: deliveryId },
       include: { subscription: true },
     });
-    if (!delivery) throw new Error(`webhook delivery ${deliveryId} not found`);
-    if (delivery.status === 'DELIVERED') return delivery;
-    // Claim the row on the state just read: a concurrent attempt (retry job, manual retry, stale
-    // sweep) that read the same state loses the compare-and-set and does not send anything.
-    const claimed = await this.prisma.webhookDelivery.updateMany({
-      where: {
-        id: delivery.id,
-        status: delivery.status,
-        attempts: delivery.attempts,
-        nextAttemptAt: delivery.nextAttemptAt,
-      },
-      data: { nextAttemptAt: new Date(Date.now() + DELIVERY_CLAIM_MS) },
-    });
-    if (claimed.count !== 1) {
-      this.logger.debug(`delivery ${delivery.id} (${source}) already claimed by another attempt`);
-      return this.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
-    }
     const { subscription } = delivery;
     const rawBody = JSON.stringify(delivery.payload);
     const timestamp = Math.floor(Date.now() / 1000);
@@ -224,9 +265,11 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     const delivered = error === null;
     const exhausted = !delivered && attempts >= this.env.WEBHOOK_MAX_ATTEMPTS;
+    let deactivated = false;
     const updated = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.webhookDelivery.update({
-        where: { id: delivery.id },
+      // Written only while this attempt still holds the claim, which the write releases.
+      const written = await tx.webhookDelivery.updateMany({
+        where: { id: delivery.id, claimToken },
         data: {
           attempts,
           signature,
@@ -236,44 +279,62 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
           deliveredAt: delivered ? now : null,
           nextAttemptAt:
             delivered || exhausted ? null : new Date(now.getTime() + nextAttemptDelayMs(attempts)),
+          claimedUntil: null,
+          claimToken: null,
         },
       });
+      if (written.count !== 1) return null;
       if (delivered) {
         await tx.webhookSubscription.update({
           where: { id: subscription.id },
           data: { failureCount: 0, lastDeliveryAt: now },
         });
       } else {
-        const failureCount = subscription.failureCount + 1;
+        // Incremented in place: concurrent attempts on other deliveries of the subscription all count.
         await tx.webhookSubscription.update({
           where: { id: subscription.id },
-          data: {
-            failureCount,
-            lastDeliveryAt: now,
-            ...(failureCount >= AUTO_DISABLE_AFTER_FAILURES && subscription.isActive
-              ? { isActive: false }
-              : {}),
-          },
+          data: { failureCount: { increment: 1 }, lastDeliveryAt: now },
         });
+        const disabled = await tx.webhookSubscription.updateMany({
+          where: {
+            id: subscription.id,
+            isActive: true,
+            failureCount: { gte: AUTO_DISABLE_AFTER_FAILURES },
+          },
+          data: { isActive: false },
+        });
+        deactivated = disabled.count === 1;
       }
-      return row;
+      return tx.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
     });
+    if (!updated) {
+      // The claim expired during the attempt and another attempt took the row over: its outcome
+      // stands (the receiver may have seen both requests — at-least-once, same X-DFN-Delivery).
+      this.logger.warn(
+        `delivery ${delivery.id} (${source}): claim lost before the outcome was written, result discarded`,
+      );
+      return {
+        delivery: await this.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } }),
+        attempted: true,
+      };
+    }
     this.logger.debug(
       `delivery ${delivery.id} (${source}) → ${updated.status} status=${statusCode ?? 'n/a'} attempt=${attempts}`,
     );
-    if (!delivered && subscription.failureCount + 1 === AUTO_DISABLE_AFTER_FAILURES) {
+    if (deactivated) {
       this.logger.warn(
         `webhook subscription ${subscription.id} deactivated after ${AUTO_DISABLE_AFTER_FAILURES} consecutive failures`,
       );
     }
-    return updated;
+    return { delivery: updated, attempted: true };
   }
 
   /**
    * WEBHOOK_RETRY job: attempts the deliveries stuck in PENDING for more than 5 minutes (never
    * attempted: crash between creation and first POST), replays the due FAILED ones, and purges
-   * expired idempotency records. Batch-bounded; stops between deliveries when `signal` aborts
-   * (job lease lost) — whatever is left is picked up by the next run.
+   * expired idempotency records. Rows being sent (live claim) are left alone; a row claimed by
+   * another attempt between the listing and its turn is skipped. Batch-bounded; stops between
+   * deliveries when `signal` aborts (job lease lost) — whatever is left is picked up by the next run.
    */
   async retryDue(now = new Date(), signal?: AbortSignal): Promise<JobResult> {
     const activeSubscription = { isActive: true, revokedAt: null };
@@ -284,9 +345,9 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
         subscription: activeSubscription,
         OR: [
           // never claimed: crash between the insert and the first attempt
-          { nextAttemptAt: null, createdAt: { lte: new Date(now.getTime() - STALE_PENDING_AFTER_MS) } },
+          { claimedUntil: null, createdAt: { lte: new Date(now.getTime() - STALE_PENDING_AFTER_MS) } },
           // claimed, but the claim expired: the first attempt died in flight
-          { nextAttemptAt: { lte: now } },
+          { claimedUntil: { lt: now } },
         ],
       },
       orderBy: { createdAt: 'asc' },
@@ -298,6 +359,7 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
         status: 'FAILED',
         nextAttemptAt: { lte: now },
         subscription: activeSubscription,
+        ...claimFree(now),
       },
       orderBy: { nextAttemptAt: 'asc' },
       take: RETRY_BATCH - stalePending.length,
@@ -307,15 +369,21 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
     let failed = 0;
     let exhausted = 0;
     let attempted = 0;
+    let skipped = 0;
     for (const { id } of [...stalePending, ...due]) {
       if (signal?.aborted) break;
-      attempted++;
       try {
-        const result = await this.deliver(id, 'retry');
-        if (result.status === 'DELIVERED') delivered++;
-        else if (result.status === 'EXHAUSTED') exhausted++;
+        const result = await this.attempt(id, 'retry');
+        if (!result.attempted) {
+          skipped++;
+          continue;
+        }
+        attempted++;
+        if (result.delivery.status === 'DELIVERED') delivered++;
+        else if (result.delivery.status === 'EXHAUSTED') exhausted++;
         else failed++;
       } catch (err) {
+        attempted++;
         failed++;
         this.logger.error(
           `retry of delivery ${id} crashed: ${err instanceof Error ? err.message : String(err)}`,
@@ -329,6 +397,7 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
         due: due.length,
         stalePending: stalePending.length,
         attempted,
+        skipped,
         delivered,
         failed,
         exhausted,

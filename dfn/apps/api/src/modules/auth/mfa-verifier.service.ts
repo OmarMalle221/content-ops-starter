@@ -17,6 +17,7 @@ import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AttemptLockout } from './attempt-lockout';
 import { RecoveryCodesService } from './recovery-codes.service';
 import { AssertionFailure, WebAuthnService, isUuid } from './webauthn.service';
 
@@ -59,12 +60,15 @@ export interface ProofFailure {
  * - single-use recovery codes (wherever a TOTP code is accepted);
  * - passkey assertions answering a STEP_UP challenge bound to the same user AND session.
  *
- * Wrong codes are counted per account (not per IP, which a client may influence): after
+ * Wrong codes are counted per account (not per IP, which a client may influence), each attempt
+ * BEFORE its code is checked (AttemptLockout), so parallel guesses cannot outrun the count: after
  * MAX_MFA_FAILURES consecutive failures, code attempts are refused (423 ACCOUNT_LOCKED) for
  * MFA_LOCK_MINUTES, the account's pre-MFA sessions are revoked and the owner is notified.
  */
 @Injectable()
 export class MfaVerifierService {
+  private readonly codeAttempts: AttemptLockout;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -72,7 +76,14 @@ export class MfaVerifierService {
     private readonly webauthn: WebAuthnService,
     private readonly notifications: NotificationsService,
     @Inject(ENV) private readonly env: Env,
-  ) {}
+  ) {
+    this.codeAttempts = new AttemptLockout(prisma, {
+      count: 'mfaFailedCount',
+      lockedUntil: 'mfaLockedUntil',
+      max: MAX_MFA_FAILURES,
+      lockMinutes: MFA_LOCK_MINUTES,
+    });
+  }
 
   private lockedError() {
     return new DomainError(
@@ -82,62 +93,38 @@ export class MfaVerifierService {
     );
   }
 
-  /** Refuses code attempts while the account's second-factor lock is active (no code oracle). */
-  async assertCodesNotLocked(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { mfaLockedUntil: true },
-    });
-    if (user?.mfaLockedUntil && user.mfaLockedUntil > new Date()) throw this.lockedError();
-  }
-
   /**
-   * Counts a wrong code. The request that reaches the threshold sets the lock (compare-and-set on
-   * the counter, so concurrent failures lock once), revokes the pre-MFA sessions, audits and
-   * notifies; it then throws 423 instead of the original error.
+   * The last allowed code of the window was wrong: the lock its reservation placed stands. Revokes
+   * the pre-MFA sessions, audits and notifies — once per lock, only that attempt carries it.
    */
-  private async recordCodeFailure(userId: string, purpose: string, req?: Request) {
-    const counted = await this.prisma.user.update({
-      where: { id: userId },
-      data: { mfaFailedCount: { increment: 1 } },
-      select: { mfaFailedCount: true },
+  private async onCodesLocked(userId: string, until: Date, purpose: string, req?: Request) {
+    const revoked = await this.prisma.session.updateMany({
+      where: { userId, mfaVerified: false, revokedAt: null },
+      data: { revokedAt: new Date() },
     });
-    if (counted.mfaFailedCount < MAX_MFA_FAILURES) return;
-    const until = new Date(Date.now() + MFA_LOCK_MINUTES * 60_000);
-    const locked = await this.prisma.user.updateMany({
-      where: { id: userId, mfaFailedCount: { gte: MAX_MFA_FAILURES } },
-      data: { mfaFailedCount: 0, mfaLockedUntil: until },
+    await this.audit.log({
+      actorUserId: userId,
+      action: 'auth.mfa_locked',
+      entityType: 'User',
+      entityId: userId,
+      metadata: {
+        purpose,
+        failures: MAX_MFA_FAILURES,
+        lockedUntil: until.toISOString(),
+        preMfaSessionsRevoked: revoked.count,
+      },
+      ...(req ? requestMeta(req) : {}),
     });
-    if (locked.count === 1) {
-      const revoked = await this.prisma.session.updateMany({
-        where: { userId, mfaVerified: false, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
-      await this.audit.log({
-        actorUserId: userId,
-        action: 'auth.mfa_locked',
-        entityType: 'User',
-        entityId: userId,
-        metadata: {
-          purpose,
-          failures: MAX_MFA_FAILURES,
-          lockedUntil: until.toISOString(),
-          preMfaSessionsRevoked: revoked.count,
-        },
-        ...(req ? requestMeta(req) : {}),
-      });
-      await this.notifications.notify({
-        userId,
-        type: 'auth.mfa_locked',
-        title: 'Second facteur temporairement bloqué',
-        body:
-          `Plusieurs codes de vérification erronés ont été saisis sur votre compte. Les codes sont ` +
-          `refusés pendant ${MFA_LOCK_MINUTES} minutes. Si vous n'êtes pas à l'origine de ces ` +
-          `tentatives, votre mot de passe est probablement connu d'un tiers : changez-le immédiatement.`,
-        data: { purpose, lockedUntil: until.toISOString() },
-      });
-    }
-    throw this.lockedError();
+    await this.notifications.notify({
+      userId,
+      type: 'auth.mfa_locked',
+      title: 'Second facteur temporairement bloqué',
+      body:
+        `Plusieurs codes de vérification erronés ont été saisis sur votre compte. Les codes sont ` +
+        `refusés pendant ${MFA_LOCK_MINUTES} minutes. Si vous n'êtes pas à l'origine de ces ` +
+        `tentatives, votre mot de passe est probablement connu d'un tiers : changez-le immédiatement.`,
+      data: { purpose, lockedUntil: until.toISOString() },
+    });
   }
 
   /**
@@ -224,7 +211,7 @@ export class MfaVerifierService {
    * otherwise `mfaCode` (6 digits → TOTP with anti-replay, anything else → recovery code).
    * Throws `failure` (401 MFA_REQUIRED by default) when no proof is given or the TOTP code is
    * wrong; MFA_CODE_REUSED, RECOVERY_CODE_INVALID, PASSKEY_VERIFICATION_FAILED and
-   * CHALLENGE_EXPIRED are specific.
+   * CHALLENGE_EXPIRED are specific, and codes answer 423 ACCOUNT_LOCKED while locked.
    */
   async assertFreshProof(
     auth: Pick<AuthContext, 'userId' | 'sessionId' | 'apiCredential'>,
@@ -251,7 +238,9 @@ export class MfaVerifierService {
       select: { mfaEnabled: true },
     });
     if (!user?.mfaEnabled) throw fail();
-    await this.assertCodesNotLocked(auth.userId);
+    // Counted before the code is checked; while locked, no code is checked at all (no oracle).
+    const attempt = await this.codeAttempts.reserve(auth.userId);
+    if (!attempt) throw this.lockedError();
     let wrongTotp = false;
     let method: MfaProofMethod;
     try {
@@ -267,15 +256,18 @@ export class MfaVerifierService {
         method = 'recovery_code';
       }
     } catch (err) {
-      // A replayed valid code (MFA_CODE_REUSED) is not a guess; wrong codes are.
+      // A replayed valid code (MFA_CODE_REUSED) is not a guess: its attempt is given back. A wrong
+      // code keeps it; the one that reached the threshold answers 423 instead of its own error.
       const guess = wrongTotp || (err instanceof DomainError && err.code === ErrorCode.RECOVERY_CODE_INVALID);
-      if (guess) await this.recordCodeFailure(auth.userId, purpose, req);
+      if (!guess) {
+        await this.codeAttempts.release(attempt);
+      } else if (attempt.lockedUntil) {
+        await this.onCodesLocked(auth.userId, attempt.lockedUntil, purpose, req);
+        throw this.lockedError();
+      }
       throw err;
     }
-    await this.prisma.user.updateMany({
-      where: { id: auth.userId, mfaFailedCount: { gt: 0 } },
-      data: { mfaFailedCount: 0 },
-    });
+    await this.codeAttempts.succeeded(attempt);
     return method;
   }
 }

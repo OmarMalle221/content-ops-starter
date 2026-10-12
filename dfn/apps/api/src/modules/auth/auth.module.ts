@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { AuthCleanupService } from './auth-cleanup.service';
+import { LoginAttemptsService } from './login-attempts.service';
 import { MfaVerifierService } from './mfa-verifier.service';
 import { PasskeysController } from './passkeys.controller';
 import { PasskeysService } from './passkeys.service';
@@ -15,7 +16,8 @@ import { OrganizationsModule } from '../organizations/organizations.module';
  * AuthModule — sessions, password login, TOTP MFA with anti-replay and recovery codes, passkeys
  * (WebAuthn: registration, passwordless login, step-up) and the AUTH_CLEANUP maintenance job.
  * Global: `MfaVerifierService` is the single second-factor check used by every step-up protected
- * operation (transfer authorisation, security preferences, passkey revocation, MFA disable).
+ * operation (transfer authorisation, security preferences, passkey revocation, MFA disable), and
+ * `LoginAttemptsService` the login lockout every password check counts into.
  */
 @Global()
 @Module({
@@ -24,12 +26,13 @@ import { OrganizationsModule } from '../organizations/organizations.module';
   providers: [
     AuthService,
     SessionService,
+    LoginAttemptsService,
     WebAuthnService,
     RecoveryCodesService,
     MfaVerifierService,
     PasskeysService,
     AuthCleanupService,
   ],
-  exports: [AuthService, SessionService, MfaVerifierService],
+  exports: [AuthService, SessionService, MfaVerifierService, LoginAttemptsService],
 })
 export class AuthModule {}

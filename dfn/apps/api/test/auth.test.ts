@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authenticator } from 'otplib';
 import {
   Client,
@@ -9,6 +10,7 @@ import {
   resetDatabase,
   type TestContext,
 } from './helpers/app';
+import { MfaVerifierService, acceptedTotpStep } from '../src/modules/auth/mfa-verifier.service';
 import { generateRecoveryCode } from '../src/modules/auth/recovery-codes.service';
 import { enableMfa, waitForFreshTotpStep, waitForNextTotpStep } from './helpers/webauthn';
 
@@ -25,6 +27,17 @@ beforeEach(async () => {
 afterAll(async () => {
   await ctx.close();
 });
+
+/** `count` 6-digit codes that are not valid for `secret` around now (previous, current, next step). */
+function wrongTotpCodes(secret: string, count: number): string[] {
+  const now = Date.now();
+  const codes: string[] = [];
+  for (let n = 100000; codes.length < count; n += 7) {
+    const code = String(n);
+    if ([-30_000, 0, 30_000].every((d) => acceptedTotpStep(secret, code, now + d) === null)) codes.push(code);
+  }
+  return codes;
+}
 
 describe('auth & sessions', () => {
   it('serves health and tags every response as sandbox', async () => {
@@ -241,6 +254,128 @@ describe('auth — MFA hardening (phase 6)', () => {
     const after = await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(after.mfaFailedCount).toBe(0);
   });
+
+  it('counts each code attempt before checking it: a parallel burst gets at most 5 codes checked', async () => {
+    const { client, user } = await registerUser(ctx, 'mfa-burst@example.com');
+    const { secret, recoveryCodes } = await enableMfa(client);
+    const wrongCodes = wrongTotpCodes(secret, 12);
+    const checked = vi.spyOn(ctx.app.get(MfaVerifierService), 'verifyTotp');
+    try {
+      // Step-ups of the verified session: it outlives the lock (pre-MFA sessions are revoked).
+      const burst = await Promise.all(
+        wrongCodes.map((mfaCode) => client.post('/v1/auth/mfa/recovery-codes/regenerate', { mfaCode })),
+      );
+      expect(checked).toHaveBeenCalledTimes(5);
+      const statuses = burst.map((r) => r.status);
+      expect(statuses.filter((s) => s === 401)).toHaveLength(4);
+      expect(statuses.filter((s) => s === 423)).toHaveLength(8);
+      for (const r of burst)
+        expect(r.body.code).toBe(r.status === 401 ? 'STEP_UP_REQUIRED' : 'ACCOUNT_LOCKED');
+      expect(
+        await ctx.prisma.auditLog.count({ where: { action: 'auth.mfa_locked', entityId: user.id } }),
+      ).toBe(1);
+
+      // While locked, right codes are refused without being checked (nor burnt).
+      const totp = await client.post('/v1/auth/mfa/recovery-codes/regenerate', {
+        mfaCode: authenticator.generate(secret),
+      });
+      expect(totp.status).toBe(423);
+      const recovery = await client.post('/v1/auth/mfa/recovery-codes/regenerate', {
+        mfaCode: recoveryCodes[0],
+      });
+      expect(recovery.status).toBe(423);
+      expect(checked).toHaveBeenCalledTimes(5);
+      expect((await client.get('/v1/auth/mfa/recovery-codes')).body.remaining).toBe(10);
+    } finally {
+      checked.mockRestore();
+    }
+  });
+
+  it('never keeps the TOTP secret or recovery codes in the Idempotency-Key store', async () => {
+    const { client, user } = await registerUser(ctx, 'mfa-idempotency@example.com');
+    const cookie = (client as unknown as { cookie: string }).cookie;
+    const post = (url: string, key: string, body: object = {}) =>
+      ctx.http().post(url).set('Cookie', cookie).set('Idempotency-Key', key).send(body);
+    const stored = (idempotencyKey: string) =>
+      ctx.prisma.idempotencyRecord.count({ where: { scopeKey: user.id, idempotencyKey } });
+
+    // Control: an ordinary session request with a key is kept for replay.
+    expect((await post('/v1/auth/sessions/revoke-others', 'idem-auth-control')).status).toBe(200);
+    expect(await stored('idem-auth-control')).toBe(1);
+
+    const setup = await post('/v1/auth/mfa/setup', 'idem-auth-setup');
+    expect(setup.status).toBe(201);
+    expect(setup.body.secret).toBeTruthy();
+    expect(await stored('idem-auth-setup')).toBe(0);
+    if (authenticator.timeRemaining() < 3) await sleep(authenticator.timeRemaining() * 1000 + 250);
+    const enabled = await post('/v1/auth/mfa/enable', 'idem-auth-enable', {
+      code: authenticator.generate(setup.body.secret),
+      currentPassword: PASSWORD,
+    });
+    expect(enabled.status, JSON.stringify(enabled.body)).toBe(201);
+    expect(enabled.body.recoveryCodes).toHaveLength(10);
+    expect(await stored('idem-auth-enable')).toBe(0);
+    const regenerated = await post('/v1/auth/mfa/recovery-codes/regenerate', 'idem-auth-regenerate', {
+      mfaCode: enabled.body.recoveryCodes[0],
+    });
+    expect(regenerated.status, JSON.stringify(regenerated.body)).toBe(200);
+    expect(await stored('idem-auth-regenerate')).toBe(0);
+    expect(await ctx.prisma.idempotencyRecord.count({ where: { scopeKey: user.id } })).toBe(1);
+  });
+});
+
+describe('auth — password confirmations share the login lockout', () => {
+  it('counts wrong current passwords per account, locks sign-in with them and resets on success', async () => {
+    const email = 'confirm-lock@example.com';
+    const { client, user } = await registerUser(ctx, email);
+    const setup = await client.post('/v1/auth/mfa/setup');
+    expect(setup.status).toBe(201);
+    const [code] = wrongTotpCodes(setup.body.secret, 1);
+    const enable = (currentPassword: string) => client.post('/v1/auth/mfa/enable', { code, currentPassword });
+    const failures = async () =>
+      (await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).failedLoginCount;
+
+    for (let i = 0; i < 2; i++) {
+      const wrong = await enable('NotThePassword123');
+      expect(wrong.status).toBe(401);
+      expect(wrong.body.code).toBe('STEP_UP_REQUIRED');
+    }
+    expect(await failures()).toBe(2);
+    // The right password resets the counter (the code is checked next, and refused).
+    expect((await enable(PASSWORD)).status).toBe(400);
+    expect(await failures()).toBe(0);
+
+    // A parallel burst gets 5 passwords checked: the 5th locks, the others are refused unchecked.
+    const burst = await Promise.all(Array.from({ length: 8 }, () => enable('NotThePassword123')));
+    const statuses = burst.map((r) => r.status);
+    expect(statuses.filter((s) => s === 401)).toHaveLength(4);
+    expect(statuses.filter((s) => s === 423)).toHaveLength(4);
+    for (const r of burst) expect(r.body.code).toBe(r.status === 401 ? 'STEP_UP_REQUIRED' : 'ACCOUNT_LOCKED');
+
+    // It is the login lock: sign-in and every password confirmation are refused, even right ones.
+    const login = await new Client(ctx).post('/v1/auth/login', { email, password: PASSWORD });
+    expect(login.status).toBe(423);
+    expect(login.body.code).toBe('ACCOUNT_LOCKED');
+    expect((await enable(PASSWORD)).status).toBe(423);
+    const change = await client.post('/v1/auth/password', {
+      currentPassword: PASSWORD,
+      newPassword: 'AnotherHorse42Battery',
+    });
+    expect(change.status).toBe(423);
+    const passkey = await client.post('/v1/auth/passkeys/registration/options', {
+      currentPassword: PASSWORD,
+    });
+    expect(passkey.status).toBe(423);
+    expect(await ctx.prisma.authChallenge.count()).toBe(0);
+
+    // Once the lock has expired, the right password signs in again and resets the counter.
+    await ctx.prisma.user.update({
+      where: { id: user.id },
+      data: { lockedUntil: new Date(Date.now() - 1000) },
+    });
+    expect((await new Client(ctx).post('/v1/auth/login', { email, password: PASSWORD })).status).toBe(200);
+    expect(await failures()).toBe(0);
+  });
 });
 
 describe('auth — REQUIRE_STAFF_MFA', () => {
@@ -276,5 +411,30 @@ describe('auth — REQUIRE_STAFF_MFA', () => {
     expect((await again.get('/v1/admin/risk-alerts')).status).toBe(401);
     expect((await again.post('/v1/auth/mfa/verify', { code: recoveryCodes[0] })).status).toBe(200);
     expect((await again.get('/v1/admin/risk-alerts')).status).toBe(200);
+  });
+
+  it('reports the effective role on /v1/auth/me (USER + staffMfaRequired until staff MFA is on)', async () => {
+    const { client } = await registerUser(strict, 'staff-me@example.com');
+    await promote(strict, 'staff-me@example.com', 'ADMIN');
+    const downgraded = await client.get('/v1/auth/me');
+    expect(downgraded.status).toBe(200);
+    expect(downgraded.body.user).toMatchObject({ globalRole: 'USER', staffMfaRequired: true });
+    await enableMfa(client);
+    expect((await client.get('/v1/auth/me')).body.user).toMatchObject({
+      globalRole: 'ADMIN',
+      staffMfaRequired: false,
+    });
+    // Customers, and staff when REQUIRE_STAFF_MFA is off: the stored role, nothing required.
+    const { client: customer } = await registerUser(strict, 'customer-me@example.com');
+    expect((await customer.get('/v1/auth/me')).body.user).toMatchObject({
+      globalRole: 'USER',
+      staffMfaRequired: false,
+    });
+    const { client: lax } = await registerUser(ctx, 'staff-lax-me@example.com');
+    await promote(ctx, 'staff-lax-me@example.com', 'COMPLIANCE');
+    expect((await lax.get('/v1/auth/me')).body.user).toMatchObject({
+      globalRole: 'COMPLIANCE',
+      staffMfaRequired: false,
+    });
   });
 });

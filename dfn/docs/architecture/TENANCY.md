@@ -50,10 +50,17 @@ tenant.
 Garde-fous ajoutés après la revue adversariale de la phase 6 :
 
 - **Membres** : une écriture de support (`via: 'STAFF_SUPPORT'`) n'invite ni son auteur ni un autre compte du
-  personnel, n'accorde jamais les rôles `OWNER` / `ADMIN` (seulement `MEMBER` / `VIEWER`), ne modifie ni ne
-  retire un propriétaire, et la réponse d'une invitation de support ne contient pas le lien (seul l'invité le
-  reçoit). Sans cela, un ADMIN pouvait devenir membre de plein droit d'un tenant et déplacer de l'argent.
-- **Transactions Protect** : seules les parties les annulent ; le personnel n'a aucune écriture.
+  personnel, n'accorde **que** le rôle `VIEWER` (lecture seule : `MEMBER` finance et libère le séquestre,
+  paie des factures — rôles dérivés de la matrice de permissions), ne modifie ni ne retire un propriétaire,
+  et la réponse d'une invitation de support ne contient pas le lien (seul l'invité le reçoit). Chaque
+  invitation de support est notifiée aux OWNER / ADMIN de l'organisation et auditée avec son motif ; une
+  invitation plus large émise par du personnel non membre est refusée à l'acceptation. Sans cela, un ADMIN
+  pouvait faire entrer un compte « prête-nom » et déplacer de l'argent.
+- **Transactions Protect** : seules les parties les annulent ; le personnel n'a aucune écriture. Une action
+  de partie exige en plus la permission de son rôle dans l'organisation : `TRANSACTION_MANAGE` (conditions,
+  financement et sa confirmation simulée, soumission / validation de jalon — libération du séquestre —,
+  annulation, relance), `DISPUTE_OPEN` (litiges, messages, appel), `DOCUMENT_UPLOAD` (documents de la
+  transaction). Un `VIEWER` de l'un ou l'autre côté lit, sans rien modifier.
 - **Documents** : supprimer le document d'un autre utilisateur exige `ADMIN_SUPPORT_WRITE`, le motif
   `X-Support-Reason` et l'audit `support.write` (permission `document:delete`), même pour un ADMIN membre ;
   un appelant qui ne voit pas le document reçoit `404`.
@@ -108,8 +115,14 @@ touchées.
 - Le délai de 24 h après un refus ou une fin de liaison vaut pour **le couple demandeur / cible**, quelle
   que soit la fiche : créer une nouvelle fiche avec le même e-mail ne rouvre pas la décision. La demande
   n'est alors simplement pas envoyée, avec la même réponse que pour toute autre adresse.
-- La notification de la cible part **après** la réponse : le temps de réponse ne dépend presque plus de
-  l'existence d'un compte, et une panne de notification ne produit plus d'erreur sur ce seul cas.
+- Phase 7 — **résolution après la réponse** : pour un e-mail, la requête ne fait que vérifier le quota,
+  enregistrer la fiche (`linkRequestedAt`, `linkResolvedAt` vide) et son audit, travail identique qu'un
+  compte corresponde ou non. La recherche du compte, le délai de 24 h, le passage en `PENDING`, l'audit
+  côté cible et la notification ont lieu **après** la réponse (`resolveLinkRequest`, transaction à
+  comparaison-échange sur `linkResolvedAt` : une demande retirée ou renouvelée entre-temps n'est jamais
+  résolue). Une demande restée non résolue (arrêt du processus entre les deux) est reprise une minute plus
+  tard par n'importe quelle réplique. Une cible explicite (organisation dont l'appelant est membre) est
+  résolue immédiatement : elle ne révèle rien.
 
 ### Points d'API
 

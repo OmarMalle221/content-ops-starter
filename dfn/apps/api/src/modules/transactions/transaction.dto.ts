@@ -1,6 +1,25 @@
-import { computeFeeMinor, minorToDecimalString } from '@dfn/shared';
+import type { OrgRole } from '@dfn/database';
+import { Permission, computeFeeMinor, minorToDecimalString, orgRoleHas } from '@dfn/shared';
 import { moneyDto } from '../../common/serialize';
 import type { TransactionWithRelations, ViewerRole } from './transaction-access.service';
+
+/**
+ * Party actions offered only when the party's organisation role grants TRANSACTION_MANAGE — the
+ * rule `TransactionAccessService.assertPartyCan` enforces. SIMULATE_PARTNER_CONFIRMATION is the
+ * sandbox stand-in for the funding confirmation, so it follows REQUEST_FUNDING.
+ */
+const MANAGE_ACTIONS: ReadonlySet<string> = new Set([
+  'RESEND_INVITATION',
+  'CANCEL',
+  'ACCEPT_TERMS',
+  'REQUEST_FUNDING',
+  'SIMULATE_PARTNER_CONFIRMATION',
+  'SUBMIT_MILESTONE',
+  'APPROVE_MILESTONE',
+  'REQUEST_CHANGES',
+]);
+/** Dispute actions: DISPUTE_OPEN (`DisputesService.open`). */
+const DISPUTE_ACTIONS: ReadonlySet<string> = new Set(['OPEN_DISPUTE', 'REQUEST_REFUND']);
 
 export interface VerificationSnapshot {
   buyerIdentity: string;
@@ -17,6 +36,8 @@ export function nextActionsFor(
   userId: string,
   /** Staff may only simulate the partner when they hold SANDBOX_PARTNER_SIMULATE (ADMIN). */
   canSimulatePartner = false,
+  /** The party's role in its own organisation (see `TransactionAccessService.partyOrgRole`). */
+  partyOrgRole: OrgRole | null = null,
 ): string[] {
   const actions: string[] = [];
   const buyerParty = tx.parties.find((p) => p.role === 'BUYER');
@@ -62,7 +83,16 @@ export function nextActionsFor(
   if (!['SETTLED', 'REFUNDED', 'CANCELLED', 'EXPIRED'].includes(tx.status) && role !== 'STAFF')
     actions.push('UPLOAD_DOCUMENT');
   void userId;
-  return actions;
+  // A party acts for its organisation: each action is offered only when its organisation role
+  // grants the permission the API checks (a VIEWER is offered none).
+  if (role === 'STAFF') return actions;
+  const can = (permission: Permission) => Boolean(partyOrgRole && orgRoleHas(partyOrgRole, permission));
+  return actions.filter((action) => {
+    if (MANAGE_ACTIONS.has(action)) return can(Permission.TRANSACTION_MANAGE);
+    if (DISPUTE_ACTIONS.has(action)) return can(Permission.DISPUTE_OPEN);
+    if (action === 'UPLOAD_DOCUMENT') return can(Permission.DOCUMENT_UPLOAD);
+    return true;
+  });
 }
 
 export function toTransactionDto(
@@ -73,6 +103,7 @@ export function toTransactionDto(
     verification: VerificationSnapshot;
     userId: string;
     canSimulatePartner?: boolean;
+    partyOrgRole?: OrgRole | null;
   },
 ) {
   const ccy = tx.currencyCode;
@@ -185,6 +216,7 @@ export function toTransactionDto(
       extras.verification,
       extras.userId,
       extras.canSimulatePartner ?? false,
+      extras.partyOrgRole ?? null,
     ),
     acceptedAt: tx.acceptedAt,
     fundedAt: tx.fundedAt,

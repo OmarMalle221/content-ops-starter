@@ -358,6 +358,7 @@ export class TransactionsService {
       verification,
       userId: auth.userId,
       canSimulatePartner: globalRoleHas(auth.globalRole, Permission.SANDBOX_PARTNER_SIMULATE),
+      partyOrgRole: this.access.partyOrgRole(auth, tx, role),
     });
   }
 
@@ -569,7 +570,7 @@ export class TransactionsService {
 
   async resendInvitation(auth: AuthContext, id: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER');
     const seller = tx.parties.find((p) => p.role === 'SELLER');
     if (!seller || seller.status !== 'INVITED')
       throw DomainError.invalidTransition('The seller has already responded');
@@ -622,7 +623,7 @@ export class TransactionsService {
 
   async acceptTerms(auth: AuthContext, id: string, contractVersionId: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER', 'SELLER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER', 'SELLER');
     const version = tx.contract?.currentVersion;
     if (!version || version.id !== contractVersionId)
       throw DomainError.conflict('Contract version is not current');
@@ -693,7 +694,7 @@ export class TransactionsService {
     req: Request,
   ) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER');
     const verification = await this.verificationSnapshot(tx);
     if (!verification.fundingAllowed) {
       throw new DomainError(
@@ -711,8 +712,9 @@ export class TransactionsService {
 
   async cancel(auth: AuthContext, id: string, reason: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    // Only the parties cancel: staff are read-only on Protect transactions (no support write).
-    this.access.assertRole(role, 'BUYER', 'SELLER');
+    // Only the parties cancel (with TRANSACTION_MANAGE): staff are read-only on Protect transactions
+    // (no support write).
+    this.access.assertPartyCan(auth, tx, role, 'BUYER', 'SELLER');
     if (!CANCELLABLE_TRANSACTION_STATES.includes(tx.status)) {
       throw DomainError.invalidTransition(
         `A ${tx.status} transaction cannot be cancelled; open a dispute instead`,

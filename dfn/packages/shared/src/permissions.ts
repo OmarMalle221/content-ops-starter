@@ -8,6 +8,11 @@ import { GlobalRole, OrgRole } from './enums';
 export const Permission = {
   TRANSACTION_CREATE: 'transaction:create',
   TRANSACTION_READ: 'transaction:read',
+  /**
+   * Every state-changing action of a Protect party, buyer or seller side: join a transaction, accept
+   * its terms, request the escrow funding, submit / review / approve a milestone (approval releases
+   * escrow), resend the invitation, cancel. Being a member of a party organisation is not enough.
+   */
   TRANSACTION_MANAGE: 'transaction:manage',
   DOCUMENT_UPLOAD: 'document:upload',
   DISPUTE_OPEN: 'dispute:open',
@@ -78,6 +83,11 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.API_MANAGE,
     Permission.ORG_LINK_DECIDE,
   ],
+  /**
+   * Day-to-day operator — it moves money: runs Protect transactions (funding and escrow release
+   * included), pays invoices from the wallet and drafts transfers (authorising them stays with
+   * OWNER / ADMIN).
+   */
   MEMBER: [
     Permission.TRANSACTION_CREATE,
     Permission.TRANSACTION_READ,
@@ -88,6 +98,7 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
     Permission.TRANSFER_CREATE,
     Permission.INVOICE_MANAGE,
   ],
+  /** Read-only: the only role a staff support write may grant (no money movement). */
   VIEWER: [Permission.TRANSACTION_READ, Permission.WALLET_READ, Permission.ORG_VIEW_REPORTS],
 };
 

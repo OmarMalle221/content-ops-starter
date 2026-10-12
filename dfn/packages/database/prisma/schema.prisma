@@ -272,6 +272,8 @@ model Counterparty {
   linkStatus                  CounterpartyLinkStatus @default(NONE)
   linkRequestedOrganizationId String?                @db.Uuid
   linkRequestedAt             DateTime?
+  /// E-mail requests are resolved after the response (phase 7): null while the target lookup is due.
+  linkResolvedAt              DateTime?
   linkDecidedAt               DateTime?
   linkDecidedByUserId         String?                @db.Uuid
   createdAt                   DateTime               @default(now())
@@ -1479,7 +1481,12 @@ model WebhookDelivery {
   signature      String
   status         WebhookDeliveryStatus @default(PENDING)
   attempts       Int                   @default(0)
+  /// Back-off schedule only: when the next automatic attempt is due (FAILED rows).
   nextAttemptAt  DateTime?
+  /// Send in progress: the attempt holding `claimToken` owns the row until this instant. Only that
+  /// attempt may write the outcome; an expired claim (attempt died in flight) can be taken over.
+  claimedUntil   DateTime?
+  claimToken     String?               @db.Uuid
   lastStatusCode Int?
   lastError      String?
   deliveredAt    DateTime?

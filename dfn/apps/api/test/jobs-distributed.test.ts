@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { INestApplication } from '@nestjs/common';
+import type { WebhookDelivery } from '@dfn/database';
 import { getStorageToken } from '@nestjs/throttler';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
@@ -9,6 +10,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/bootstrap';
 import { DomainError } from '../src/common/domain-error';
+import { DomainEventsBus } from '../src/common/events/domain-events';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import { RedisThrottlerStorage } from '../src/common/throttler';
 import { ENV, type Env } from '../src/config/env';
@@ -412,22 +414,81 @@ describe('WEBHOOK_RETRY sweep of stale PENDING deliveries', () => {
   let server: Server;
   let port = 0;
   const received: Array<{ path: string; headers: IncomingMessage['headers'] }> = [];
+  /** When set, requests arriving now are held (send in flight) and answered with the status it resolves to. */
+  let hold: Promise<number> | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
       req.resume();
       req.on('end', () => {
         received.push({ path: req.url ?? '/', headers: req.headers });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end('{"ok":true}');
+        void (hold ?? Promise.resolve(200)).then((status) => {
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end('{"ok":true}');
+        });
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
     port = (server.address() as AddressInfo).port;
   });
+  beforeEach(() => {
+    hold = undefined;
+  });
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+
+  async function subscribe(email: string) {
+    const { client } = await registerUser(ctx, email);
+    const created = await client.post('/v1/webhooks', {
+      url: `http://127.0.0.1:${port}/hook`,
+      events: ['transaction.created'],
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    received.length = 0;
+    return { client, subscriptionId: created.body.webhook.id as string };
+  }
+
+  function insertDelivery(
+    subscriptionId: string,
+    data: Partial<
+      Pick<WebhookDelivery, 'status' | 'attempts' | 'nextAttemptAt' | 'claimedUntil' | 'createdAt'>
+    >,
+  ) {
+    const eventId = randomUUID();
+    return ctx.prisma.webhookDelivery.create({
+      data: {
+        subscriptionId,
+        eventType: 'transaction.created',
+        eventId,
+        payload: {
+          id: eventId,
+          type: 'transaction.created',
+          createdAt: new Date().toISOString(),
+          sandbox: true,
+          data: {},
+        },
+        signature: '',
+        ...data,
+      },
+    });
+  }
+
+  /** Starts a send whose HTTP request is held at the receiver until `release` is called. */
+  async function holdSend<T>(send: () => Promise<T>) {
+    const response = deferred<number>();
+    hold = response.promise;
+    const before = received.length;
+    const pending = send();
+    await waitFor(async () => received.length > before);
+    hold = undefined;
+    return {
+      release: async (status: number) => {
+        response.resolve(status);
+        return pending;
+      },
+    };
+  }
 
   it('attempts deliveries left PENDING for more than 5 minutes, and only those', async () => {
     const { client: owner } = await registerUser(ctx, 'dev@example.com');
@@ -490,7 +551,7 @@ describe('WEBHOOK_RETRY sweep of stale PENDING deliveries', () => {
     expect(created.status, JSON.stringify(created.body)).toBe(201);
     const subscriptionId = created.body.webhook.id as string;
     received.length = 0;
-    const delivery = (createdAt: Date, nextAttemptAt: Date | null = null) => {
+    const delivery = (createdAt: Date, claimedUntil: Date | null = null) => {
       const eventId = randomUUID();
       return ctx.prisma.webhookDelivery.create({
         data: {
@@ -507,7 +568,7 @@ describe('WEBHOOK_RETRY sweep of stale PENDING deliveries', () => {
           signature: '',
           status: 'PENDING',
           createdAt,
-          nextAttemptAt,
+          claimedUntil,
         },
       });
     };
@@ -540,6 +601,125 @@ describe('WEBHOOK_RETRY sweep of stale PENDING deliveries', () => {
       status: 'PENDING',
       attempts: 0,
     });
+  });
+
+  it('sends a due row once when two dispatchers read it, including after the first one claimed it', async () => {
+    const { subscriptionId } = await subscribe('dev-replicas@example.com');
+    // Two API replicas: their own dispatchers on the same database.
+    const replica = () =>
+      new WebhookDispatcherService(ctx.prisma, new DomainEventsBus(), new JobRegistry(), baseEnv);
+    const [a, b] = [replica(), replica()];
+    const backoff = new Date(Date.now() - 1_000);
+    const due = await insertDelivery(subscriptionId, {
+      status: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: backoff,
+    });
+
+    // Replica A claims the row and its POST is in flight; replica B reads the row only now.
+    const inFlight = await holdSend(() => a.attempt(due.id, 'retry'));
+    const claimed = await ctx.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: due.id } });
+    expect(claimed.claimToken).not.toBeNull();
+    expect(claimed.claimedUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(claimed.nextAttemptAt).toEqual(backoff); // the claim leaves the back-off schedule alone
+    const late = await b.attempt(due.id, 'retry');
+    expect(late).toMatchObject({ attempted: false, delivery: { status: 'FAILED', attempts: 1 } });
+    expect((await b.retryDue()).summary).toMatchObject({ due: 0, stalePending: 0, attempted: 0 });
+    expect(received).toHaveLength(1);
+    expect(await inFlight.release(200)).toMatchObject({
+      attempted: true,
+      delivery: { status: 'DELIVERED', attempts: 2, claimedUntil: null, claimToken: null },
+    });
+    expect(received).toHaveLength(1);
+
+    // Both replicas list the same due row at the same time: one POST, the other run skips it.
+    received.length = 0;
+    const raced = await insertDelivery(subscriptionId, {
+      status: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: backoff,
+    });
+    const runs = await Promise.all([a.retryDue(), b.retryDue()]);
+    expect(received.map((r) => r.headers['x-dfn-delivery'])).toEqual([raced.id]);
+    const total = (key: string) => runs.reduce((sum, run) => sum + Number(run.summary[key]), 0);
+    expect(total('attempted')).toBe(1);
+    expect(total('delivered')).toBe(1);
+    expect(total('due')).toBe(1 + total('skipped'));
+    expect(await ctx.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: raced.id } })).toMatchObject({
+      status: 'DELIVERED',
+      attempts: 2,
+    });
+  });
+
+  it('refuses a manual retry (409) while the delivery is being sent, and accepts it afterwards', async () => {
+    const { client: owner, subscriptionId } = await subscribe('dev-manual@example.com');
+    const failing = await insertDelivery(subscriptionId, {
+      status: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: new Date(Date.now() - 1_000),
+    });
+    const job = await holdSend(() => ctx.app.get(MaintenanceService).run('WEBHOOK_RETRY', 'test'));
+
+    const retryUrl = `/v1/webhooks/${subscriptionId}/deliveries/${failing.id}/retry`;
+    const busy = await owner.post(retryUrl);
+    expect(busy.status, JSON.stringify(busy.body)).toBe(409);
+    expect(busy.body.code).toBe('CONFLICT');
+    const listed = await owner.get(`/v1/webhooks/${subscriptionId}/deliveries?status=FAILED`);
+    expect(listed.body.items[0].nextActions).toEqual([]);
+    expect(received).toHaveLength(1);
+    expect(await ctx.prisma.auditLog.count({ where: { action: 'webhook.delivery_retried' } })).toBe(0);
+
+    const run = await job.release(500);
+    expect(run.summary).toMatchObject({ due: 1, attempted: 1, failed: 1, skipped: 0 });
+    expect(await ctx.prisma.webhookDelivery.findUniqueOrThrow({ where: { id: failing.id } })).toMatchObject({
+      status: 'FAILED',
+      attempts: 2,
+      lastStatusCode: 500,
+      claimedUntil: null,
+    });
+    expect(
+      (await ctx.prisma.webhookSubscription.findUniqueOrThrow({ where: { id: subscriptionId } }))
+        .failureCount,
+    ).toBe(1);
+
+    // That attempt is over: the manual retry now sends it (once).
+    const manual = await owner.post(retryUrl);
+    expect(manual.status, JSON.stringify(manual.body)).toBe(200);
+    expect(manual.body).toMatchObject({ status: 'DELIVERED', attempts: 3 });
+    expect(received).toHaveLength(2);
+    expect(await ctx.prisma.auditLog.count({ where: { action: 'webhook.delivery_retried' } })).toBe(1);
+  });
+
+  it('takes over an expired claim; the attempt that lost it writes nothing', async () => {
+    const { subscriptionId } = await subscribe('dev-takeover@example.com');
+    const replica = new WebhookDispatcherService(
+      ctx.prisma,
+      new DomainEventsBus(),
+      new JobRegistry(),
+      baseEnv,
+    );
+    const row = await insertDelivery(subscriptionId, { createdAt: new Date(Date.now() - 60_000) });
+
+    // The first attempt stalls past its claim (claimedUntil in the past): the sweep takes the row over.
+    const stalled = await holdSend(() => replica.attempt(row.id, 'event'));
+    await ctx.prisma.webhookDelivery.update({
+      where: { id: row.id },
+      data: { claimedUntil: new Date(Date.now() - 1_000) },
+    });
+    const run = await ctx.app.get(MaintenanceService).run('WEBHOOK_RETRY', 'test');
+    expect(run.summary).toMatchObject({ stalePending: 1, attempted: 1, delivered: 1 });
+    expect(received.map((r) => r.headers['x-dfn-delivery'])).toEqual([row.id, row.id]);
+
+    // The stalled attempt finally fails: its outcome is discarded, the takeover's stands.
+    const late = await stalled.release(500);
+    expect(late).toMatchObject({
+      attempted: true,
+      delivery: { status: 'DELIVERED', attempts: 1, lastStatusCode: 200, claimToken: null },
+    });
+    expect(
+      (await ctx.prisma.webhookSubscription.findUniqueOrThrow({ where: { id: subscriptionId } }))
+        .failureCount,
+    ).toBe(0);
   });
 });
 

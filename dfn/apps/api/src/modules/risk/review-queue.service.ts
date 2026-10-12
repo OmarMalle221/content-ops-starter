@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Prisma, RiskAlertStatus, RiskSeverity } from '@dfn/database';
 import {
@@ -14,6 +14,8 @@ import type { AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
+import { staffUserWhere } from '../../common/staff-recipients';
+import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -69,6 +71,7 @@ export class ReviewQueueService {
     private readonly risk: RiskService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   // ───────────────────────────── DTO ─────────────────────────────
@@ -316,10 +319,13 @@ export class ReviewQueueService {
     };
   }
 
-  /** Staff who can be assigned an alert (ACTIVE COMPLIANCE or ADMIN users). */
+  /**
+   * Staff who can be assigned an alert (ACTIVE COMPLIANCE or ADMIN users, with two-factor
+   * authentication under REQUIRE_STAFF_MFA).
+   */
   async assignees() {
     const users = await this.prisma.user.findMany({
-      where: { status: 'ACTIVE', deletedAt: null, globalRole: { in: ['COMPLIANCE', 'ADMIN'] } },
+      where: staffUserWhere(this.env),
       select: { id: true, firstName: true, lastName: true, email: true, globalRole: true },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
       take: 200,
@@ -346,18 +352,15 @@ export class ReviewQueueService {
     let assignee: { id: string; firstName: string; lastName: string } | null = null;
     if (assigneeId) {
       assignee = await this.prisma.user.findFirst({
-        where: {
-          id: assigneeId,
-          status: 'ACTIVE',
-          deletedAt: null,
-          globalRole: { in: ['COMPLIANCE', 'ADMIN'] },
-        },
+        where: { id: assigneeId, ...staffUserWhere(this.env) },
         select: { id: true, firstName: true, lastName: true },
       });
       if (!assignee) {
         throw new DomainError(
           ErrorCode.ALERT_NOT_ASSIGNABLE,
-          'The assignee must be an active compliance or administrator user',
+          this.env.REQUIRE_STAFF_MFA
+            ? 'The assignee must be an active compliance or administrator user with two-factor authentication enabled'
+            : 'The assignee must be an active compliance or administrator user',
           HttpStatus.UNPROCESSABLE_ENTITY,
           { assigneeUserId: assigneeId },
         );

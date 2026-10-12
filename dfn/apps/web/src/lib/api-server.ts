@@ -69,7 +69,13 @@ export interface Me {
     lastName: string;
     locale: string;
     country: string | null;
+    /** Effective role: 'USER' for a staff account that still needs MFA (see `staffMfaRequired`). */
     globalRole: 'USER' | 'COMPLIANCE' | 'ADMIN';
+    /**
+     * REQUIRE_STAFF_MFA: the stored role is staff but the account has no second factor yet, so the
+     * API grants USER rights only. Absent otherwise.
+     */
+    staffMfaRequired?: boolean;
     mfaEnabled: boolean;
     identityVerification: { status: string; simulated: boolean; id?: string };
     organizations: Array<{
