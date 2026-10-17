@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { KeyRound } from 'lucide-react';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
+import type { StepUpOperation } from '@dfn/shared';
 import { Button, Input, Label } from '@dfn/ui';
 import { useI18n } from '@/lib/i18n-client';
 import { FormMessage } from '@/components/form-message';
@@ -17,11 +18,14 @@ import {
  * Fresh second-factor proof for a sensitive operation: a code field (TOTP or recovery code) and,
  * when this browser supports WebAuthn AND the account has a passkey, a "confirm with a passkey"
  * button that runs the STEP_UP ceremony and hands the assertion to `onPasskey` (the parent then
- * calls the protected endpoint with `passkeyAssertion`). Nothing is rendered for passkeys
- * otherwise — no dead button.
+ * calls the protected endpoint with `passkeyAssertion`). The challenge is requested for
+ * `operation` (+ `resourceId`): the assertion is only accepted by that action of the API. Nothing
+ * is rendered for passkeys otherwise — no dead button.
  */
 export function StepUpFields({
   id,
+  operation,
+  resourceId,
   code,
   onCodeChange,
   onPasskey,
@@ -30,6 +34,10 @@ export function StepUpFields({
   passkeyDisabled,
 }: {
   id: string;
+  /** Operation the passkey proof is requested for (must match the endpoint the parent calls). */
+  operation: StepUpOperation;
+  /** Resource of that operation, exactly as the API identifies it (transfer id, gate code…). */
+  resourceId?: string;
   code: string;
   onCodeChange: (value: string) => void;
   /** Receives the assertion and the enclosing form (to submit it), when the user picks a passkey. */
@@ -80,7 +88,7 @@ export function StepUpFields({
               setBusy(true);
               setError(null);
               try {
-                const assertion = await passkeyStepUpAssertion();
+                const assertion = await passkeyStepUpAssertion(operation, resourceId);
                 await onPasskey!(assertion, form);
               } catch (err) {
                 setError(webAuthnErrorMessage(err, t));

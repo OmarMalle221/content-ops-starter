@@ -62,6 +62,16 @@ export async function countByKeyId(db: PrismaService, spec: SealedColumn): Promi
   return new Map(rows.map((r) => [r.keyId, Number(r.count)]));
 }
 
+/** Number of values sealed with exactly `keyId` (never "legacy": use countByKeyId for that). */
+export async function countWithKeyId(db: PrismaService, spec: SealedColumn, keyId: string): Promise<number> {
+  const { table, column } = identifiers(spec);
+  const prefix = `k2.${spec.purpose}.${keyId}.`;
+  const rows = await db.$queryRaw<Array<{ count: number }>>`
+    SELECT count(*)::int AS "count" FROM ${table}
+    WHERE ${column} IS NOT NULL AND left(${column}, ${prefix.length}::int) = ${prefix}`;
+  return Number(rows[0]?.count ?? 0);
+}
+
 export async function countPending(
   db: PrismaService,
   spec: SealedColumn,

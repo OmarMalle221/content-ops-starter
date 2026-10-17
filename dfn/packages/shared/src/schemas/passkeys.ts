@@ -5,9 +5,11 @@
  * Step-up design (ADR-0009): an endpoint that needs a fresh second factor accepts, in its own
  * body, EITHER `mfaCode` (6-digit TOTP code or single-use recovery code) OR `passkeyAssertion`
  * (a WebAuthn assertion answering a STEP_UP challenge issued to the same session by
- * POST /v1/auth/passkeys/step-up/options). There is no intermediate step-up token.
+ * POST /v1/auth/passkeys/step-up/options for that operation and resource — phase 7). There is no
+ * intermediate step-up token.
  */
 import { z } from 'zod';
+import { StepUpOperation } from '../enums';
 import { emailSchema } from './common';
 
 /** base64url (RFC 4648 §5), optional padding tolerated, bounded length. */
@@ -143,6 +145,28 @@ export type PasskeyAuthenticationOptionsInput = z.infer<typeof passkeyAuthentica
 /** POST /v1/auth/passkeys/authentication/verify (public). */
 export const passkeyAuthenticationVerifySchema = z.object({ response: webAuthnAssertionSchema });
 export type PasskeyAuthenticationVerifyInput = z.infer<typeof passkeyAuthenticationVerifySchema>;
+
+/**
+ * Resource a step-up proof is bound to: a UUID (transfer, passkey) or a short code (gate code,
+ * managed key id). Starts with a letter or digit, so it can never be the "-" placeholder of
+ * "no resource" in the stored binding.
+ */
+export const stepUpResourceIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, 'Expected a resource id of at most 64 characters [A-Za-z0-9_-]');
+
+/**
+ * POST /v1/auth/passkeys/step-up/options — the STEP_UP challenge is bound to the operation (and,
+ * when relevant, the resource) the assertion will authorise. The protected endpoint refuses an
+ * assertion answering a challenge issued for anything else (403 STEP_UP_OPERATION_MISMATCH).
+ */
+export const passkeyStepUpOptionsSchema = z
+  .object({
+    operation: z.nativeEnum(StepUpOperation),
+    resourceId: stepUpResourceIdSchema.optional(),
+  })
+  .strict();
+export type PasskeyStepUpOptionsInput = z.infer<typeof passkeyStepUpOptionsSchema>;
 
 /**
  * DELETE /v1/auth/passkeys/:id — fresh proof required when the user has MFA enabled. The body is

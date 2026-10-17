@@ -7,6 +7,7 @@ import {
   WebAuthnChallengePurpose,
   isTotpCode,
   type MfaProofInput,
+  type StepUpOperation,
   type WebAuthnAssertionInput,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
@@ -19,7 +20,13 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AttemptLockout } from './attempt-lockout';
 import { RecoveryCodesService } from './recovery-codes.service';
-import { AssertionFailure, WebAuthnService, isUuid } from './webauthn.service';
+import {
+  AssertionFailure,
+  WebAuthnService,
+  isUuid,
+  stepUpOperationKey,
+  type StepUpBinding,
+} from './webauthn.service';
 
 export type MfaProofMethod = 'totp' | 'recovery_code' | 'passkey';
 
@@ -58,7 +65,9 @@ export interface ProofFailure {
  *   (`UPDATE "User" … WHERE mfaLastUsedStep IS NULL OR mfaLastUsedStep < step`), so a code is
  *   accepted at most once, even by concurrent requests (401 MFA_CODE_REUSED);
  * - single-use recovery codes (wherever a TOTP code is accepted);
- * - passkey assertions answering a STEP_UP challenge bound to the same user AND session.
+ * - passkey assertions answering a STEP_UP challenge bound to the same user AND session and
+ *   issued for the operation and resource the caller binds (phase 7): an assertion obtained for
+ *   one action cannot be spent on another (403 STEP_UP_OPERATION_MISMATCH).
  *
  * Wrong codes are counted per account (not per IP, which a client may influence), each attempt
  * BEFORE its code is checked (AttemptLockout), so parallel guesses cannot outrun the count: after
@@ -97,7 +106,7 @@ export class MfaVerifierService {
    * The last allowed code of the window was wrong: the lock its reservation placed stands. Revokes
    * the pre-MFA sessions, audits and notifies — once per lock, only that attempt carries it.
    */
-  private async onCodesLocked(userId: string, until: Date, purpose: string, req?: Request) {
+  private async onCodesLocked(userId: string, until: Date, purpose: StepUpOperation, req?: Request) {
     const revoked = await this.prisma.session.updateMany({
       where: { userId, mfaVerified: false, revokedAt: null },
       data: { revokedAt: new Date() },
@@ -161,13 +170,21 @@ export class MfaVerifierService {
     return { step };
   }
 
-  /** Passkey step-up: assertion for a STEP_UP challenge issued to this user and this session. */
+  /**
+   * Passkey step-up: assertion for a STEP_UP challenge issued to this user, this session and the
+   * operation and resource of `binding`. The binding is checked once the challenge is burnt and
+   * before the signature: a proof issued for another action — or a challenge from before the
+   * binding existed (`operation` null) — is refused without any effect (no counter update), and
+   * its challenge cannot be tried again for the right one.
+   */
   async verifyPasskeyStepUp(
     auth: Pick<AuthContext, 'userId' | 'sessionId' | 'apiCredential'>,
     assertion: WebAuthnAssertionInput,
-    purpose: string,
+    binding: StepUpBinding,
     req?: Request,
   ): Promise<{ credentialId: string }> {
+    // The audit trail names the operation the proof is spent on: the bound one, by construction.
+    const purpose = binding.operation;
     // Partner API keys have no browser session (sessionId "api:…"): no passkey ceremony there.
     if (auth.apiCredential || !isUuid(auth.sessionId)) throw new AssertionFailure('credential_unknown');
     const challenge = await this.webauthn.consumeChallenge(
@@ -179,6 +196,23 @@ export class MfaVerifierService {
       where: { credentialId: assertion.id.replace(/=+$/, '') },
     });
     const meta = req ? requestMeta(req) : {};
+    const expected = stepUpOperationKey(binding);
+    if (challenge.operation !== expected) {
+      await this.audit.log({
+        actorUserId: auth.userId,
+        action: 'auth.passkey_step_up_failed',
+        entityType: 'WebAuthnCredential',
+        entityId: credential?.userId === auth.userId ? credential.id : null,
+        metadata: { purpose, reason: 'operation_mismatch', expected, issuedFor: challenge.operation },
+        ...meta,
+      });
+      throw new DomainError(
+        ErrorCode.STEP_UP_OPERATION_MISMATCH,
+        'This passkey confirmation was issued for another operation. Confirm this action again.',
+        HttpStatus.FORBIDDEN,
+        { operation: binding.operation },
+      );
+    }
     try {
       if (!credential || credential.userId !== auth.userId) throw new AssertionFailure('credential_unknown');
       await this.webauthn.verifyAssertion(assertion, challenge, credential);
@@ -212,14 +246,22 @@ export class MfaVerifierService {
    * Throws `failure` (401 MFA_REQUIRED by default) when no proof is given or the TOTP code is
    * wrong; MFA_CODE_REUSED, RECOVERY_CODE_INVALID, PASSKEY_VERIFICATION_FAILED and
    * CHALLENGE_EXPIRED are specific, and codes answer 423 ACCOUNT_LOCKED while locked.
+   *
+   * `binding` (operation + optional resource id) names the action being authorised. It restricts
+   * a passkey assertion to the STEP_UP challenge issued for exactly that action (403
+   * STEP_UP_OPERATION_MISMATCH otherwise) and labels the audit trail, lockout notices and the
+   * recovery code consumed. Codes carry no binding: a TOTP step and a recovery code are single
+   * use whatever they authorise. The binding is mandatory, so no caller can accept any STEP_UP
+   * challenge of the session by omission, nor audit one operation while binding another.
    */
   async assertFreshProof(
     auth: Pick<AuthContext, 'userId' | 'sessionId' | 'apiCredential'>,
     proof: MfaProofInput | { mfaCode?: string | null; passkeyAssertion?: WebAuthnAssertionInput | null },
-    purpose: string,
+    binding: StepUpBinding,
     failure: ProofFailure,
     req?: Request,
   ): Promise<MfaProofMethod> {
+    const purpose = binding.operation;
     const fail = () =>
       new DomainError(
         failure.code ?? ErrorCode.MFA_REQUIRED,
@@ -227,7 +269,7 @@ export class MfaVerifierService {
         failure.status ?? HttpStatus.UNAUTHORIZED,
       );
     if (proof.passkeyAssertion) {
-      await this.verifyPasskeyStepUp(auth, proof.passkeyAssertion, purpose, req);
+      await this.verifyPasskeyStepUp(auth, proof.passkeyAssertion, binding, req);
       return 'passkey';
     }
     const code = proof.mfaCode?.trim();

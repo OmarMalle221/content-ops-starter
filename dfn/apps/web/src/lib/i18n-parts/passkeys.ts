@@ -96,6 +96,8 @@ export const passkeysPart = definePart(
         PASSKEY_VERIFICATION_FAILED: 'La clé d’accès n’a pas pu être vérifiée. Réessayez.',
         PASSKEY_NOT_FOUND: 'Clé d’accès introuvable ou déjà révoquée.',
         CHALLENGE_EXPIRED: 'La demande de clé d’accès a expiré ou a déjà servi. Recommencez.',
+        STEP_UP_OPERATION_MISMATCH:
+          'Cette confirmation par clé d’accès a été demandée pour une autre opération. Confirmez de nouveau cette action.',
         ACCOUNT_LOCKED:
           'Trop de tentatives erronées : l’accès est temporairement bloqué. Réessayez plus tard.',
         RATE_LIMITED: 'Trop de tentatives rapprochées. Patientez un instant puis réessayez.',
@@ -190,6 +192,8 @@ export const passkeysPart = definePart(
         PASSKEY_VERIFICATION_FAILED: 'The passkey could not be verified. Please try again.',
         PASSKEY_NOT_FOUND: 'Passkey not found or already revoked.',
         CHALLENGE_EXPIRED: 'The passkey request expired or was already used. Start again.',
+        STEP_UP_OPERATION_MISMATCH:
+          'This passkey confirmation was requested for another operation. Confirm this action again.',
         ACCOUNT_LOCKED: 'Too many failed attempts: access is temporarily blocked. Try again later.',
         RATE_LIMITED: 'Too many attempts in a short time. Wait a moment and try again.',
         STAFF_MFA_REQUIRED: 'Enable two-factor authentication (TOTP) in your settings to use staff tools.',

@@ -176,6 +176,28 @@ describe('key rotation (ENCRYPTION_KEY_ROTATION, /v1/admin/keys)', () => {
       expect(p.keys).toEqual([{ keyId: 'legacy', active: true, configured: true, legacy: true, count: 1 }]);
     }
     expect(legacyStatus.body.nextActions).toEqual([]);
+    // KMS_PROVIDER=none (phase 6 behaviour): no managed keys, nothing to generate.
+    expect(legacyStatus.body.kms).toMatchObject({ provider: 'none', keyRef: null, loadFailures: [] });
+    expect(legacyStatus.body.legacy).toEqual({
+      decryptEnabled: true,
+      values: 4,
+      deletedBlobs: 0,
+      safeToDisable: false,
+    });
+    expect(legacyStatus.body.recoveryCodes).toEqual({ secret: 'SESSION_SECRET', sessionSecretBound: 0 });
+    for (const p of legacyStatus.body.purposes) {
+      expect(p).toMatchObject({ managedKeys: [], legacy: { values: 1, deletedBlobs: 0 }, nextActions: [] });
+    }
+    const noKms = await adminClient.post('/v1/admin/keys/mfa/generate', {});
+    expect(noKms.status).toBe(409);
+    expect(noKms.body).toMatchObject({
+      code: 'KEY_LIFECYCLE_CONFLICT',
+      details: { reason: 'KMS_NOT_CONFIGURED' },
+    });
+    const lifecycle = await ctx.app.get(MaintenanceService).run('KEY_LIFECYCLE', 'scheduler');
+    expect(lifecycle.status).toBe('COMPLETED');
+    expect(lifecycle.summary).toMatchObject({ kmsProvider: 'none', activated: [], staged: [] });
+    await ctx.prisma.maintenanceRun.deleteMany({ where: { jobName: 'KEY_LIFECYCLE' } }); // run counts below
     await ctx.close();
     ctx = null;
 

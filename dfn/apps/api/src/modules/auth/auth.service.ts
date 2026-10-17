@@ -11,6 +11,7 @@ import {
   type RecoveryCodesRegenerateInput,
   type RegisterInput,
   KeyPurpose,
+  StepUpOperation,
 } from '@dfn/shared';
 import { DomainError } from '../../common/domain-error';
 import { sha256Hex } from '../../common/crypto';
@@ -233,7 +234,7 @@ export class AuthService {
       method = await this.mfa.assertFreshProof(
         auth,
         { mfaCode: input.code, passkeyAssertion: input.passkeyAssertion },
-        'auth.login_mfa',
+        { operation: StepUpOperation.LOGIN_MFA },
         { code: ErrorCode.MFA_REQUIRED, message: 'Invalid code' },
         req,
       );
@@ -267,7 +268,7 @@ export class AuthService {
     const method = await this.mfa.assertFreshProof(
       auth,
       { mfaCode: input.code, passkeyAssertion: input.passkeyAssertion },
-      'mfa.disable',
+      { operation: StepUpOperation.MFA_DISABLE },
       { code: ErrorCode.VALIDATION_FAILED, message: 'Invalid code', status: HttpStatus.BAD_REQUEST },
       req,
     );
@@ -334,7 +335,7 @@ export class AuthService {
     const method = await this.mfa.assertFreshProof(
       auth,
       proof,
-      'mfa.recovery_codes_regenerate',
+      { operation: StepUpOperation.RECOVERY_CODES_REGENERATE },
       {
         code: ErrorCode.STEP_UP_REQUIRED,
         message: 'A fresh second factor (code or passkey) is required to regenerate recovery codes',

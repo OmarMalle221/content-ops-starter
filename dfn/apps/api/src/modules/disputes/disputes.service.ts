@@ -30,6 +30,7 @@ import {
   type TransactionWithRelations,
 } from '../transactions/transaction-access.service';
 import { TransactionEventsService } from '../transactions/transaction-events.service';
+import { linkedDocumentDto } from '../../common/serialize';
 
 const APPEAL_WINDOW_DAYS = 7;
 
@@ -53,14 +54,38 @@ const disputeInclude = {
     orderBy: { createdAt: 'asc' as const },
     include: {
       author: { select: { id: true, firstName: true, lastName: true, globalRole: true } },
-      document: { select: { id: true, title: true, kind: true, fileName: true } },
+      document: {
+        select: {
+          id: true,
+          title: true,
+          kind: true,
+          fileName: true,
+          scanStatus: true,
+          scanEngine: true,
+          scannedAt: true,
+        },
+      },
     },
   },
   decisions: {
     orderBy: { createdAt: 'asc' as const },
     include: { decidedBy: { select: { id: true, firstName: true, lastName: true } } },
   },
-  evidences: { include: { document: { select: { id: true, title: true, kind: true, fileName: true } } } },
+  evidences: {
+    include: {
+      document: {
+        select: {
+          id: true,
+          title: true,
+          kind: true,
+          fileName: true,
+          scanStatus: true,
+          scanEngine: true,
+          scannedAt: true,
+        },
+      },
+    },
+  },
 } satisfies Prisma.DisputeInclude;
 
 @Injectable()
@@ -108,7 +133,7 @@ export class DisputesService {
             name: `${m.author.firstName} ${m.author.lastName}`,
             staff: m.author.globalRole !== 'USER',
           },
-          document: m.document,
+          document: m.document ? linkedDocumentDto(m.document) : null,
         })),
       decisions: d.decisions.map((x) => ({
         id: x.id,
@@ -125,7 +150,7 @@ export class DisputesService {
         id: e.id,
         note: e.note,
         createdAt: e.createdAt,
-        document: e.document,
+        document: linkedDocumentDto(e.document),
       })),
       nextStates: disputeMachine.nextStates(d.status),
     };

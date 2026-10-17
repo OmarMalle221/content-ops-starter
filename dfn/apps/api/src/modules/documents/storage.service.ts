@@ -76,7 +76,7 @@ export class DocumentStorageService {
   }
 
   /**
-   * Best-effort removal of a blob (soft delete, failed upload): failures are logged, not thrown.
+   * Best-effort removal of a blob (failed upload, rotation race): failures are logged, not thrown.
    * With the document id, a leftover key-rotation copy (`rotation-tmp/<id>`) is removed too.
    */
   async remove(ref: { id?: string; storageKey: string; storageDriver: string }): Promise<boolean> {
@@ -96,11 +96,34 @@ export class DocumentStorageService {
   /**
    * Decrypted, integrity-checked content of a document. Repairs a stale encryptionKeyId when the
    * blob header proves another (configured) key sealed it.
+   *
+   * A blob missing from its store is looked up once more from the row: the STORAGE_MIGRATION job
+   * may have moved it (local → s3) and deleted the local copy between the caller's row read and
+   * this blob read — the download then follows the row instead of failing.
    */
   async read(doc: StoredDocumentRef, actorUserId: string | null): Promise<Buffer> {
-    const { plaintext, keyId } = await this.openVerified(doc, actorUserId);
-    if (recordedKeyId(keyId) !== doc.encryptionKeyId) await this.repairKeyId(doc, keyId, actorUserId);
-    return plaintext;
+    let ref = doc;
+    let opened: { plaintext: Buffer; keyId: string };
+    try {
+      opened = await this.openVerified(ref, actorUserId);
+    } catch (err) {
+      if (!isStorageError(err, 'NOT_FOUND')) throw err;
+      const row = await this.prisma.document.findUnique({
+        where: { id: doc.id },
+        select: { storageDriver: true, storageKey: true, encryptionKeyId: true, blobPurgedAt: true },
+      });
+      const moved =
+        row &&
+        !row.blobPurgedAt &&
+        (row.storageDriver !== doc.storageDriver || row.storageKey !== doc.storageKey);
+      if (!moved) throw err;
+      ref = { ...doc, ...row };
+      opened = await this.openVerified(ref, actorUserId);
+    }
+    if (recordedKeyId(opened.keyId) !== ref.encryptionKeyId) {
+      await this.repairKeyId(ref, opened.keyId, actorUserId);
+    }
+    return opened.plaintext;
   }
 
   /**
@@ -113,6 +136,18 @@ export class DocumentStorageService {
     actorUserId: string | null,
   ): Promise<{ plaintext: Buffer; keyId: string; sealed: Buffer }> {
     const sealed = await this.stores.forDriver(doc.storageDriver).get(doc.storageKey);
+    return this.openSealed(doc, sealed, actorUserId);
+  }
+
+  /**
+   * Opens sealed bytes already read from storage, with the same checks and audit as
+   * `openVerified` (the storage migration verifies a blob this way before copying it).
+   */
+  async openSealed(
+    doc: StoredDocumentRef,
+    sealed: Buffer,
+    actorUserId: string | null,
+  ): Promise<{ plaintext: Buffer; keyId: string; sealed: Buffer }> {
     const recorded = doc.encryptionKeyId ?? LEGACY_KEY_ID;
     const candidates = [recorded];
     const fromHeader = this.ring.keyIdOfBuffer(sealed);
@@ -226,16 +261,26 @@ export class DocumentStorageService {
    *  3. swap: overwrite the original key (atomic per object on every driver) and verify it. On a
    *     failure the outcome is settled from what storage actually holds (`settleFailedSwap`) —
    *     the old-key blob is never written back blindly: a concurrent download may already have
-   *     moved the row to the new key id, and a concurrent deletion must not be undone;
-   *  4. delete the temporary copy, then record the new key id (compare-and-set on the old one).
+   *     moved the row to the new key id, and a concurrent purge must not be undone;
+   *  4. delete the temporary copy, then record the new key id (compare-and-set on the old one and
+   *     on the blob location, refused once the blob is purged). A document purged or migrated to
+   *     another driver meanwhile gets every copy written here removed again ('current').
    * A crash between 3 and 4 leaves a new blob with the old key id: reads and the next rotation
    * recognise the blob header and only fix the row ("repaired"). Never deletes the only copy.
+   * Soft-deleted documents may be re-sealed too: their blob is retained until the purge.
    */
   async reseal(doc: StoredDocumentRef): Promise<ResealOutcome> {
     const active = this.ring.activeKeyId(KeyPurpose.DOCUMENTS);
     const store = this.stores.forDriver(doc.storageDriver);
     const tempKey = rotationTempKey(doc.id);
-    const { plaintext, keyId: currentKeyId, sealed: original } = await this.openVerified(doc, null);
+    let opened: { plaintext: Buffer; keyId: string; sealed: Buffer };
+    try {
+      opened = await this.openVerified(doc, null);
+    } catch (err) {
+      if (isStorageError(err, 'NOT_FOUND') && (await this.recordMissingDeletedBlob(doc))) return 'current';
+      throw err;
+    }
+    const { plaintext, keyId: currentKeyId, sealed: original } = opened;
     if (currentKeyId === active) {
       // A copy left by a run that crashed after its swap is no longer needed.
       await store.delete(tempKey).catch(() => undefined);
@@ -277,24 +322,85 @@ export class DocumentStorageService {
     }
     await store.delete(tempKey).catch(() => undefined);
 
+    // Compare-and-set on the key id AND on where the blob lives: a soft-deleted document keeps
+    // its blob until the purge (retention), but a purged one — or one the storage migration moved
+    // to another driver meanwhile — must not get a blob written back at this location.
     const { count } = await this.prisma.document.updateMany({
-      where: { id: doc.id, encryptionKeyId: doc.encryptionKeyId, deletedAt: null },
+      where: {
+        id: doc.id,
+        encryptionKeyId: doc.encryptionKeyId,
+        storageDriver: doc.storageDriver,
+        storageKey: doc.storageKey,
+        blobPurgedAt: null,
+      },
       data: { encryptionKeyId: recordedKeyId(keyId) },
     });
     if (count === 0) {
-      // Soft-deleted while we were rotating: its blob must not be resurrected.
       const row = await this.prisma.document.findUnique({
         where: { id: doc.id },
-        select: { deletedAt: true },
+        select: { blobPurgedAt: true, storageDriver: true, storageKey: true },
       });
-      if (!row || row.deletedAt) await this.remove(doc);
+      if (!row || row.blobPurgedAt || !this.sameLocation(row, doc)) {
+        await this.remove(doc);
+        return 'current';
+      }
     }
     return 'rotated';
   }
 
   /**
+   * Documents deleted before the purge was deferred lost their blob on the spot: such a row has
+   * nothing left to retain and is stamped purged (compare-and-set) — it then stops pinning its key
+   * and failing every rotation, migration and purge run. They are recognised by their
+   * `document.deleted` audit record, which predates `blobRetained`. Any other missing blob (live
+   * document, retained blob, deletion by account anonymisation) is an anomaly — e.g. a store
+   * pointed at the wrong bucket — and is reported, never papered over.
+   */
+  async recordMissingDeletedBlob(
+    doc: Pick<StoredDocumentRef, 'id' | 'organizationId' | 'storageKey' | 'storageDriver'>,
+  ): Promise<boolean> {
+    const deletion = await this.prisma.auditLog.findFirst({
+      where: { action: 'document.deleted', entityType: 'Document', entityId: doc.id },
+      orderBy: { createdAt: 'desc' },
+      select: { metadata: true },
+    });
+    const retained = (deletion?.metadata as { blobRetained?: unknown } | null)?.blobRetained === true;
+    if (!deletion || retained) return false;
+    const { count } = await this.prisma.document.updateMany({
+      where: {
+        id: doc.id,
+        deletedAt: { not: null },
+        blobPurgedAt: null,
+        storageDriver: doc.storageDriver,
+        storageKey: doc.storageKey,
+      },
+      data: { blobPurgedAt: new Date() },
+    });
+    if (count === 0) return false;
+    this.logger.warn(`document ${doc.id}: deleted and its blob is missing; recorded as purged`);
+    await this.audit.log({
+      actorUserId: null,
+      organizationId: doc.organizationId,
+      action: 'document.blob_missing',
+      entityType: 'Document',
+      entityId: doc.id,
+      metadata: { storageDriver: doc.storageDriver, recordedAsPurged: true },
+    });
+    return true;
+  }
+
+  private sameLocation(
+    row: { storageDriver: string; storageKey: string },
+    doc: { storageDriver: string; storageKey: string },
+  ): boolean {
+    return row.storageDriver === doc.storageDriver && row.storageKey === doc.storageKey;
+  }
+
+  /**
    * Decides what a failed swap left behind, from storage itself:
-   * - the document was deleted meanwhile → every copy is removed ('deleted');
+   * - the blob was purged meanwhile (or the row is gone, or the storage migration moved the
+   *   document elsewhere) → every copy at this location is removed ('deleted'); a merely
+   *   soft-deleted document keeps its blob until the purge and is settled like a live one;
    * - the main object holds the new blob (the verification read failed) → 'swapped';
    * - it still holds the old blob → the temp copy is dropped and the row is moved back to the
    *   old key id if a concurrent download had already repaired it to the new one ('kept');
@@ -312,9 +418,9 @@ export class DocumentStorageService {
     const store = this.stores.forDriver(doc.storageDriver);
     const row = await this.prisma.document.findUnique({
       where: { id: doc.id },
-      select: { deletedAt: true },
+      select: { blobPurgedAt: true, storageDriver: true, storageKey: true },
     });
-    if (!row || row.deletedAt) {
+    if (!row || row.blobPurgedAt || !this.sameLocation(row, doc)) {
       await this.remove(doc);
       return 'deleted';
     }

@@ -34,7 +34,9 @@ Monorepo pnpm : **Next.js 15** (web) · **NestJS 11** (API REST + OpenAPI) · **
 
 - **Phase 6 — durcissement** : **passkeys** (connexion sans mot de passe, vérification renforcée), anti-rejeu TOTP et **codes de secours**, **trousseau de clés** par usage avec rotation, **stockage chiffré local ou compatible S3**, **tâches distribuées** (baux, BullMQ) et limites de débit Redis, **files de revue conformité** (échéances, assignation, export) et détection du **fractionnement**, **registre des portes réglementaires** (suivi uniquement, quatre yeux), **adaptateurs partenaires de référence** jamais activables en sandbox, personnel en lecture seule dans les espaces clients, **liens clients soumis à acceptation**, **build compilé**, conteneurs durcis, **sauvegarde/restauration testées**, tests de charge et 9 parcours Playwright.
 
-Non livré (voir ROADMAP, phase 7) : contrats et intégration de fournisseurs agréés, KMS, audit de sécurité indépendant, observabilité, essai contre un vrai service S3 et surtout la **relecture juridique des checklists de conformité** (tâche humaine).
+- **Phase 7 — volet technique (livré en sandbox)** : **clés gérées par un KMS** (enveloppe, `local` simulé ou AWS KMS, cycle de vie et rotation planifiée, retrait de la clé historique), **observabilité** (`/metrics` Prometheus, traces `traceparent`, alertes et tableau de bord, profil compose), **antivirus** avant stockage (`sandbox` = simulation EICAR, `clamd`), **purge différée** alignée sur la rétention, **migration local → S3** vérifiée et tests live S3/KMS contre un émulateur AWS, **step-up lié à l'opération**, verrouillage atomique des tentatives, rôles d'organisation appliqués aux actions Protect, adresse client fixée par le web.
+
+Non livré (voir ROADMAP, phase 7) : contrats et intégration de fournisseurs agréés, audit de sécurité indépendant, essai contre un vrai service S3 et un vrai KMS, et surtout la **relecture juridique des checklists de conformité** (tâche humaine).
 
 ## Démarrage rapide
 
@@ -135,7 +137,7 @@ Parcours suggérés : `moussa@demo.dfn` → _Portefeuille_ (soldes, filtres, rel
 | `pnpm --filter @dfn/api openapi:export`         | régénère `docs/api/openapi.json`                                                                                                                                                                                      |
 | `pnpm format` / `pnpm format:check`             | Prettier                                                                                                                                                                                                              |
 
-Tests exécutés à la fin de la phase 6 : 156 tests unitaires de paquets, 230 tests d'intégration API, 9 parcours Playwright, exercice de restauration et tests de charge — tous verts (rapport de livraison dans `ROADMAP.md` §13).
+Tests exécutés à la fin du volet technique de la phase 7 : 156 tests unitaires de paquets, 322 tests d'intégration API (tests live S3 et KMS contre moto inclus), 4 tests unitaires du web, 9 parcours Playwright, démarrage de fumée, exercice de restauration et tests de charge — tous verts (rapport de livraison dans `ROADMAP.md` §14).
 
 ## Déploiement sandbox
 

@@ -1,6 +1,22 @@
 import Link from 'next/link';
 import { FileText } from 'lucide-react';
-import { EmptyState, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@dfn/ui';
+import { DocumentPurgeState, type DocumentPurgeDto } from '@dfn/shared';
+import {
+  Badge,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  EmptyState,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@dfn/ui';
+import { ScanBadge } from '@/components/documents/scan-badge';
 import { PageHeader } from '@/components/shell/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { UploadDocumentDialog } from '@/components/transactions/upload-dialog';
@@ -11,13 +27,18 @@ import { getT } from '@/lib/i18n-server';
 export const metadata = { title: 'Documents' };
 
 export default async function DocumentsPage() {
-  const [{ t, locale }, session, docs] = await Promise.all([
+  const [{ t, locale }, session, docs, deleted] = await Promise.all([
     getT(),
     getSession(),
     apiFetch<any[]>('/v1/documents'),
+    apiFetch<any[]>('/v1/documents/deleted'),
   ]);
   const personal =
     session!.user.organizations.find((o) => o.type === 'PERSONAL') ?? session!.user.organizations[0];
+  const purgeLabel = (purge: DocumentPurgeDto) =>
+    purge.state === DocumentPurgeState.PURGED
+      ? t('documentStorage.purge.PURGED').replace('{date}', formatDate(purge.purgedAt, locale))
+      : t('documentStorage.purge.RETAINED').replace('{date}', formatDate(purge.purgeAfter, locale));
   return (
     <>
       <PageHeader
@@ -35,6 +56,7 @@ export default async function DocumentsPage() {
               <TableHead>{t('docs.kind')}</TableHead>
               <TableHead>{t('docs.linkedTx')}</TableHead>
               <TableHead>{t('common.status')}</TableHead>
+              <TableHead>{t('documentStorage.scan.column')}</TableHead>
               <TableHead>{t('common.date')}</TableHead>
               <TableHead />
             </TableRow>
@@ -56,20 +78,68 @@ export default async function DocumentsPage() {
                 <TableCell>
                   <StatusBadge status={d.status} />
                 </TableCell>
+                <TableCell>
+                  <ScanBadge scan={d.scan} />
+                </TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(d.createdAt, locale)}</TableCell>
                 <TableCell className="text-right">
-                  <a
-                    className="text-sm text-primary hover:underline"
-                    href={`/api/v1/documents/${d.id}/download`}
-                  >
-                    {t('common.download')}
-                  </a>
+                  {d.downloadUrl ? (
+                    <a
+                      className="text-sm text-primary hover:underline"
+                      href={`/api/v1/documents/${d.id}/download`}
+                    >
+                      {t('common.download')}
+                    </a>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">{t('documentStorage.scan.blocked')}</span>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
+      {deleted.length > 0 ? (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>{t('documentStorage.deleted.title')}</CardTitle>
+            <CardDescription>{t('documentStorage.deleted.subtitle')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('tx.title')}</TableHead>
+                  <TableHead>{t('docs.kind')}</TableHead>
+                  <TableHead>{t('documentStorage.deleted.deletedAt')}</TableHead>
+                  <TableHead>{t('documentStorage.deleted.file')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {deleted.map((d) => (
+                  <TableRow key={d.id}>
+                    <TableCell className="font-medium">{d.title}</TableCell>
+                    <TableCell>{t(`docs.kinds.${d.kind}`)}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatDate(d.purge.deletedAt, locale)}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={d.purge.state === DocumentPurgeState.PURGED ? 'secondary' : 'muted'}>
+                          {purgeLabel(d.purge)}
+                        </Badge>
+                        {d.purge.heldAsEvidence && d.purge.state === DocumentPurgeState.RETAINED ? (
+                          <Badge variant="warning">{t('documentStorage.purge.held')}</Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      ) : null}
     </>
   );
 }

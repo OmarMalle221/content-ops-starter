@@ -81,7 +81,21 @@ jobs:
           SMOKE_LOG: ${{ github.workspace }}/dfn/api-smoke.log
         run: bash infra/ops/smoke-api.sh --boot --base-url http://127.0.0.1:4100
       - run: pnpm test:unit
+      - name: AWS emulator for the live S3 and KMS tests (moto, sandbox credentials)
+        run: |
+          python3 -m pip install --quiet 'moto[server]==5.1.4'
+          (python3 -m moto.server -H 127.0.0.1 -p 5055 > moto.log 2>&1 &)
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:5055/moto-api/ && break; sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:5055/moto-api/
       - run: pnpm test:api
+        env:
+          S3_TEST_ENDPOINT: http://127.0.0.1:5055
+          S3_TEST_BUCKET: dfn-ci-live
+          S3_TEST_ACCESS_KEY_ID: test
+          S3_TEST_SECRET_ACCESS_KEY: test
+          S3_TEST_REGION: us-east-1
+          KMS_TEST_ENDPOINT: http://127.0.0.1:5055
+          KMS_TEST_REGION: us-east-1
       # Blocking: high and critical advisories fail the build. Accepted exceptions (dev tooling only)
       # are listed in package.json pnpm.auditConfig.ignoreGhsas and justified in SECURITY.md.
       - run: pnpm audit --audit-level=high
@@ -89,7 +103,9 @@ jobs:
         if: failure()
         with:
           name: dfn-quality-logs
-          path: dfn/api-smoke.log
+          path: |
+            dfn/api-smoke.log
+            dfn/moto.log
           if-no-files-found: ignore
           retention-days: 7
 

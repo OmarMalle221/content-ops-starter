@@ -38,6 +38,7 @@ import { JobsModule } from './modules/jobs/jobs.module';
 import { GatesModule } from './modules/gates/gates.module';
 import { KeysModule } from './modules/keys/keys.module';
 import { ObservabilityModule } from './modules/observability/observability.module';
+import { traceLogFields } from './modules/observability/trace-context';
 
 export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> = {}) {
   const env = loadEnv(envOverrides);
@@ -64,7 +65,13 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
             ],
             censor: '[REDACTED]',
           },
-          autoLogging: env.NODE_ENV !== 'test',
+          // Prometheus scrapes (every 15 s) are not worth a line each; they are counted as metrics.
+          autoLogging: env.NODE_ENV !== 'test' && { ignore: (req) => req.url === '/metrics' },
+          // W3C trace context (modules/observability/trace-context.ts): trace_id / span_id become
+          // bindings of the request logger, so every line of the request — the completion line and
+          // what services log through nestjs-pino — carries them; the same ids are returned in the
+          // `traceparent` response header.
+          customProps: traceLogFields,
           genReqId: (req) => (req.headers['x-request-id'] as string) ?? crypto.randomUUID(),
         },
       }),

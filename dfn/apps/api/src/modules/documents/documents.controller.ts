@@ -73,6 +73,12 @@ export class DocumentsController {
     return this.documents.listMine(auth, organizationId || undefined);
   }
 
+  /** Deleted documents and the state of their blob (retained until purge, or purged). */
+  @Get('documents/deleted')
+  listDeleted(@CurrentUser() auth: AuthContext, @Query('organizationId') organizationId?: string) {
+    return this.documents.listDeleted(auth, organizationId || undefined);
+  }
+
   @Get('documents/:id/download')
   async download(
     @CurrentUser() auth: AuthContext,

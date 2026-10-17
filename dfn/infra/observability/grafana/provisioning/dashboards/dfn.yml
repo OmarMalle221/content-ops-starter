@@ -1,0 +1,17 @@
+# Grafana dashboard provisioning (profile "observability"): every JSON file of
+# infra/observability/grafana/dashboards (mounted read-only at /etc/grafana/dashboards) is loaded
+# into the "DFN sandbox" folder and re-read every minute; edits made in the UI are not persisted
+# (allowUiUpdates: false) — change the JSON in the repository instead.
+apiVersion: 1
+
+providers:
+  - name: dfn-sandbox
+    orgId: 1
+    folder: DFN sandbox
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

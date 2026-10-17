@@ -1,10 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { authenticator } from 'otplib';
+import { StepUpOperation } from '@dfn/shared';
 import { JobRegistry } from '../src/modules/jobs/job-registry';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import { acceptedTotpStep } from '../src/modules/auth/mfa-verifier.service';
 import { generateRecoveryCode } from '../src/modules/auth/recovery-codes.service';
-import { Client, PASSWORD, bootTestApp, registerUser, resetDatabase, type TestContext } from './helpers/app';
+import { stepUpOperationKey } from '../src/modules/auth/webauthn.service';
+import {
+  Client,
+  PASSWORD,
+  bootTestApp,
+  promote,
+  registerUser,
+  resetDatabase,
+  type TestContext,
+} from './helpers/app';
 import { createBeneficiary, createTransferActors, fundWallet, quoteAndCreate } from './helpers/transfers';
 import { put } from './helpers/wallet';
 import {
@@ -14,6 +24,7 @@ import {
   passkeyLogin,
   registerPasskey,
   stepUpAssertion,
+  stepUpOptions,
   waitForFreshTotpStep,
 } from './helpers/webauthn';
 
@@ -219,7 +230,7 @@ describe('passkeys — registration', () => {
     expect(viaTotp.status, JSON.stringify(viaTotp.body)).toBe(201);
     const third = new SoftwareAuthenticator();
     const viaPasskey = await registerPasskey(client, third, 'Via clé', {
-      passkeyAssertion: await stepUpAssertion(client, first),
+      passkeyAssertion: await stepUpAssertion(client, first, { operation: StepUpOperation.PASSKEY_REGISTER }),
     });
     expect(viaPasskey.status, JSON.stringify(viaPasskey.body)).toBe(201);
     expect((await client.get('/v1/auth/passkeys')).body.items).toHaveLength(3);
@@ -443,9 +454,10 @@ describe('passkeys — step-up', () => {
     expect(missing.status).toBe(401);
     expect(missing.body.code).toBe('MFA_REQUIRED');
 
-    // A step-up challenge issued to another session of the same user is refused.
-    const { client: otherSession } = await passwordLogin('xfer-owner@example.com');
-    const foreign = await stepUpAssertion(otherSession, device);
+    // A step-up challenge issued to another (fully signed-in) session of the same user is refused.
+    const { client: otherSession } = await passkeyLogin(ctx, device);
+    const forTransfer = { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: transfer.id };
+    const foreign = await stepUpAssertion(otherSession, device, forTransfer);
     const foreignRes = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {
       passkeyAssertion: foreign,
     });
@@ -460,7 +472,7 @@ describe('passkeys — step-up', () => {
     expect(wrongPurpose.status).toBe(401);
     expect(wrongPurpose.body.code).toBe('CHALLENGE_EXPIRED');
 
-    const assertion = await stepUpAssertion(a.owner, device);
+    const assertion = await stepUpAssertion(a.owner, device, forTransfer);
     const ok = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, { passkeyAssertion: assertion });
     expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     expect(ok.body.status).toBe('PROCESSING');
@@ -496,7 +508,9 @@ describe('passkeys — step-up', () => {
     const viaPasskey = await put(ctx, client, url, {
       ...strict,
       dailyTransferLimit: '2000.00',
-      passkeyAssertion: await stepUpAssertion(client, device),
+      passkeyAssertion: await stepUpAssertion(client, device, {
+        operation: StepUpOperation.SECURITY_PREFERENCES_LOWER,
+      }),
     });
     expect(viaPasskey.status, JSON.stringify(viaPasskey.body)).toBe(200);
     expect(viaPasskey.body.dailyTransferLimit).toBe('2000.00');
@@ -530,14 +544,14 @@ describe('passkeys — step-up', () => {
     expect(status.body).toMatchObject({ mfaEnabled: true, passkeyCount: 1, recoveryCodesRemaining: 10 });
     expect((await browser.get('/v1/transactions')).status).toBe(401);
     const verified = await browser.post('/v1/auth/mfa/verify', {
-      passkeyAssertion: await stepUpAssertion(browser, device),
+      passkeyAssertion: await stepUpAssertion(browser, device, { operation: StepUpOperation.LOGIN_MFA }),
     });
     expect(verified.status, JSON.stringify(verified.body)).toBe(200);
     expect(verified.body.method).toBe('passkey');
     expect((await browser.get('/v1/transactions')).status).toBe(200);
 
     const { client: noPasskey } = await registerUser(ctx, 'pk-none@example.com');
-    const none = await noPasskey.post('/v1/auth/passkeys/step-up/options');
+    const none = await stepUpOptions(noPasskey, { operation: StepUpOperation.PASSKEY_REGISTER });
     expect(none.status).toBe(404);
     expect(none.body.code).toBe('PASSKEY_NOT_FOUND');
   });
@@ -554,7 +568,10 @@ describe('passkeys — step-up', () => {
     expect(bare.status).toBe(401);
     expect(bare.body.code).toBe('STEP_UP_REQUIRED');
     const proven = await deleteWithBody(ctx, client, `/v1/auth/passkeys/${spareRow.body.id}`, {
-      passkeyAssertion: await stepUpAssertion(client, main),
+      passkeyAssertion: await stepUpAssertion(client, main, {
+        operation: StepUpOperation.PASSKEY_REVOKE,
+        resourceId: spareRow.body.id,
+      }),
     });
     expect(proven.status, JSON.stringify(proven.body)).toBe(200);
     expect((await client.get('/v1/auth/passkeys')).body.items.map((p: any) => p.name)).toEqual([
@@ -563,7 +580,7 @@ describe('passkeys — step-up', () => {
 
     // Disable MFA with a passkey assertion: recovery codes go away with the secret.
     const disabled = await client.post('/v1/auth/mfa/disable', {
-      passkeyAssertion: await stepUpAssertion(client, main),
+      passkeyAssertion: await stepUpAssertion(client, main, { operation: StepUpOperation.MFA_DISABLE }),
     });
     expect(disabled.status, JSON.stringify(disabled.body)).toBe(201);
     expect(disabled.body.enabled).toBe(false);
@@ -572,6 +589,234 @@ describe('passkeys — step-up', () => {
       where: { actorUserId: user.id, action: 'auth.mfa_disabled' },
     });
     expect((audit?.metadata as any).stepUp).toBe('passkey');
+  });
+});
+
+describe('passkeys — step-up bound to the operation', () => {
+  const GATE_PROGRESS = { status: 'IN_PROGRESS', note: 'Mandat signé', evidenceRef: 'VAULT-1' };
+  const GATE_APPROVE = { note: 'Avis juridique archivé', evidenceRef: 'VAULT-2' };
+
+  it('accepts an assertion only for the operation and resource it was issued for', async () => {
+    const a = await createTransferActors(ctx);
+    // The owner is also an ADMIN, so one session can try the same proof on a gate approval.
+    await promote(ctx, 'xfer-owner@example.com', 'ADMIN');
+    await fundWallet(ctx, a.orgId, 'CAD', '2000.00');
+    const beneficiary = await createBeneficiary(ctx, {
+      organizationId: a.orgId,
+      createdByUserId: a.ownerUser.id,
+    });
+    const device = new SoftwareAuthenticator();
+    expect((await registerPasskey(a.owner, device)).status).toBe(201);
+    const { secret } = await enableMfa(a.owner);
+    const { transfer: tA } = await quoteAndCreate(a.owner, beneficiary.id);
+    const { transfer: tB } = await quoteAndCreate(a.owner, beneficiary.id, { amount: '50.00' });
+    const forA = { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: tA.id };
+
+    // The challenge records what it was issued for.
+    const options = await stepUpOptions(a.owner, forA);
+    expect(options.status, JSON.stringify(options.body)).toBe(200);
+    const stored = await ctx.prisma.authChallenge.findUniqueOrThrow({
+      where: { challenge: options.body.challenge },
+    });
+    expect(stored).toMatchObject({
+      purpose: 'STEP_UP',
+      operation: `transfer.authorize:${tA.id}`,
+      userId: a.ownerUser.id,
+    });
+
+    // Issued for transfer A, presented for transfer B: refused, and the challenge stays burnt.
+    const assertionA = device.getAssertion(options.body);
+    const onB = await a.owner.post(`/v1/transfers/${tB.id}/authorize`, { passkeyAssertion: assertionA });
+    expect(onB.status).toBe(403);
+    expect(onB.body.code).toBe('STEP_UP_OPERATION_MISMATCH');
+    expect((await ctx.prisma.transfer.findUniqueOrThrow({ where: { id: tB.id } })).status).toBe(tB.status);
+    const burnt = await ctx.prisma.authChallenge.findUniqueOrThrow({ where: { id: stored.id } });
+    expect(burnt.usedAt).not.toBeNull();
+    const retried = await a.owner.post(`/v1/transfers/${tA.id}/authorize`, { passkeyAssertion: assertionA });
+    expect(retried.status).toBe(401);
+    expect(retried.body.code).toBe('CHALLENGE_EXPIRED');
+    const refusal = await ctx.prisma.auditLog.findFirstOrThrow({
+      where: { actorUserId: a.ownerUser.id, action: 'auth.passkey_step_up_failed' },
+    });
+    expect(refusal.metadata).toMatchObject({
+      purpose: 'transfer.authorize',
+      reason: 'operation_mismatch',
+      expected: `transfer.authorize:${tB.id}`,
+      issuedFor: `transfer.authorize:${tA.id}`,
+    });
+    // The refused proof had no effect on the credential (signature counter untouched).
+    const credential = await ctx.prisma.webAuthnCredential.findUniqueOrThrow({
+      where: { credentialId: device.id },
+    });
+    expect(credential.counter).toBe(0n);
+
+    // Issued for transfer A, presented for a gate approval: refused, the gate does not move.
+    expect((await a.owner.post('/v1/admin/gates/R1/progress', GATE_PROGRESS)).status).toBe(200);
+    const onGate = await a.owner.post('/v1/admin/gates/R1/approve', {
+      ...GATE_APPROVE,
+      passkeyAssertion: await stepUpAssertion(a.owner, device, forA),
+    });
+    expect(onGate.status).toBe(403);
+    expect(onGate.body.code).toBe('STEP_UP_OPERATION_MISMATCH');
+    // Neither is a revocation proof for this gate, nor an approval proof for another gate.
+    for (const binding of [
+      { operation: StepUpOperation.GATE_REVOKE, resourceId: 'R1' },
+      { operation: StepUpOperation.GATE_APPROVE, resourceId: 'R2' },
+      { operation: StepUpOperation.GATE_APPROVE },
+    ]) {
+      const res = await a.owner.post('/v1/admin/gates/R1/approve', {
+        ...GATE_APPROVE,
+        passkeyAssertion: await stepUpAssertion(a.owner, device, binding),
+      });
+      expect(res.status, JSON.stringify(binding)).toBe(403);
+      expect(res.body.code).toBe('STEP_UP_OPERATION_MISMATCH');
+    }
+    expect((await ctx.prisma.regulatoryGate.findUniqueOrThrow({ where: { code: 'R1' } })).status).toBe(
+      'IN_PROGRESS',
+    );
+    // The gate code is matched as the API normalises it (upper case).
+    const approved = await a.owner.post('/v1/admin/gates/r1/approve', {
+      ...GATE_APPROVE,
+      passkeyAssertion: await stepUpAssertion(a.owner, device, {
+        operation: StepUpOperation.GATE_APPROVE,
+        resourceId: 'R1',
+      }),
+    });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body.status).toBe('PENDING_SECOND_APPROVAL');
+
+    // Issued for transfer A, used for transfer A: authorised.
+    const ok = await a.owner.post(`/v1/transfers/${tA.id}/authorize`, {
+      passkeyAssertion: await stepUpAssertion(a.owner, device, forA),
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ok.body.status).toBe('PROCESSING');
+
+    // Codes carry no binding (single use already): a TOTP code still authorises transfer B.
+    await waitForFreshTotpStep();
+    const viaTotp = await a.owner.post(`/v1/transfers/${tB.id}/authorize`, {
+      mfaCode: authenticator.generate(secret),
+    });
+    expect(viaTotp.status, JSON.stringify(viaTotp.body)).toBe(200);
+    expect(viaTotp.body.status).toBe('PROCESSING');
+  });
+
+  it('rejects step-up options without a valid operation and keeps pre-MFA sessions to the login step', async () => {
+    const email = 'pk-bind-options@example.com';
+    const { client, user } = await registerUser(ctx, email);
+    const device = new SoftwareAuthenticator();
+    await registerPasskey(client, device);
+
+    for (const body of [
+      {},
+      { resourceId: 'R1' },
+      { operation: 'transfer.anything' },
+      { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: 'two words' },
+      { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: '-' },
+      { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: 'x'.repeat(65) },
+      { operation: StepUpOperation.MFA_DISABLE, amount: '10.00' },
+    ]) {
+      const res = await client.post('/v1/auth/passkeys/step-up/options', body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_FAILED');
+    }
+    expect(await ctx.prisma.authChallenge.count({ where: { purpose: 'STEP_UP' } })).toBe(0);
+    const noResource = await stepUpOptions(client, { operation: StepUpOperation.MFA_DISABLE });
+    expect(noResource.status).toBe(200);
+    const row = await ctx.prisma.authChallenge.findUniqueOrThrow({
+      where: { challenge: noResource.body.challenge },
+    });
+    expect(row.operation).toBe('mfa.disable:-');
+
+    // Before the login MFA step, only the login operation can be asked for.
+    await enableMfa(client);
+    const { client: browser, mfaRequired } = await passwordLogin(email);
+    expect(mfaRequired).toBe(true);
+    const early = await stepUpOptions(browser, { operation: StepUpOperation.SECURITY_PREFERENCES_LOWER });
+    expect(early.status).toBe(401);
+    expect(early.body.code).toBe('MFA_REQUIRED');
+    const login = await browser.post('/v1/auth/mfa/verify', {
+      passkeyAssertion: await stepUpAssertion(browser, device, { operation: StepUpOperation.LOGIN_MFA }),
+    });
+    expect(login.status, JSON.stringify(login.body)).toBe(200);
+
+    // A login proof does not disable MFA.
+    const disable = await browser.post('/v1/auth/mfa/disable', {
+      passkeyAssertion: await stepUpAssertion(browser, device, { operation: StepUpOperation.LOGIN_MFA }),
+    });
+    expect(disable.status).toBe(403);
+    expect(disable.body.code).toBe('STEP_UP_OPERATION_MISMATCH');
+    expect((await ctx.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).mfaEnabled).toBe(true);
+  });
+
+  it('refuses a challenge issued before the binding existed (operation null) on a bound endpoint', async () => {
+    const a = await createTransferActors(ctx);
+    await fundWallet(ctx, a.orgId, 'CAD', '2000.00');
+    const beneficiary = await createBeneficiary(ctx, {
+      organizationId: a.orgId,
+      createdByUserId: a.ownerUser.id,
+    });
+    const device = new SoftwareAuthenticator();
+    expect((await registerPasskey(a.owner, device)).status).toBe(201);
+    await enableMfa(a.owner);
+    const { transfer } = await quoteAndCreate(a.owner, beneficiary.id);
+    const forTransfer = { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: transfer.id };
+
+    // A STEP_UP challenge issued by the previous API version stays valid for up to 5 minutes
+    // after a deploy: it records no operation, so it answers no bound action — not even the one
+    // the browser meant it for.
+    const options = await stepUpOptions(a.owner, forTransfer);
+    expect(options.status, JSON.stringify(options.body)).toBe(200);
+    await ctx.prisma.authChallenge.update({
+      where: { challenge: options.body.challenge },
+      data: { operation: null },
+    });
+    const legacy = device.getAssertion(options.body);
+    const refused = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {
+      passkeyAssertion: legacy,
+    });
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('STEP_UP_OPERATION_MISMATCH');
+    expect((await ctx.prisma.transfer.findUniqueOrThrow({ where: { id: transfer.id } })).status).toBe(
+      transfer.status,
+    );
+    const refusal = await ctx.prisma.auditLog.findFirstOrThrow({
+      where: { actorUserId: a.ownerUser.id, action: 'auth.passkey_step_up_failed' },
+    });
+    expect(refusal.metadata).toMatchObject({
+      purpose: 'transfer.authorize',
+      reason: 'operation_mismatch',
+      expected: `transfer.authorize:${transfer.id}`,
+      issuedFor: null,
+    });
+    // Burnt by the refusal: the same assertion is not given a second chance.
+    const retried = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {
+      passkeyAssertion: legacy,
+    });
+    expect(retried.status).toBe(401);
+    expect(retried.body.code).toBe('CHALLENGE_EXPIRED');
+    // A challenge asked for this very transfer from the current API authorises it.
+    const ok = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {
+      passkeyAssertion: await stepUpAssertion(a.owner, device, forTransfer),
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ok.body.status).toBe('PROCESSING');
+  });
+
+  it('treats a server-side resource id no client could request as a programming error', () => {
+    const operation = StepUpOperation.TRANSFER_AUTHORIZE;
+    expect(stepUpOperationKey({ operation })).toBe('transfer.authorize:-');
+    expect(stepUpOperationKey({ operation, resourceId: 'R1' })).toBe('transfer.authorize:R1');
+    expect(stepUpOperationKey({ operation, resourceId: 'kms-20260101-0abc12' })).toBe(
+      'transfer.authorize:kms-20260101-0abc12',
+    );
+    // Ids outside stepUpResourceIdSchema would make every passkey confirmation of the action a
+    // 403 for every user: the mismatch is caught where the endpoint binds, not at the user's expense.
+    for (const resourceId of ['', '-', 'a:b', 'doc.pdf', 'two words', 'x'.repeat(65)]) {
+      expect(() => stepUpOperationKey({ operation, resourceId }), JSON.stringify(resourceId)).toThrow(
+        /stepUpResourceIdSchema/,
+      );
+    }
   });
 });
 

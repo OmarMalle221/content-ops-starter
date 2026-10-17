@@ -14,6 +14,9 @@ const TABLES = [
   'RegulatoryGateEvent',
   'RegulatoryGate',
   'JobLease',
+  // Managed data keys: a row left behind by a crashed run would make every later boot with
+  // KMS_PROVIDER=none fail on purpose, so the reset always clears them.
+  'EncryptionKey',
   'AuthChallenge',
   'MfaRecoveryCode',
   'WebAuthnCredential',

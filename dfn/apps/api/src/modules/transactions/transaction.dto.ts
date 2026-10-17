@@ -1,6 +1,6 @@
 import type { OrgRole } from '@dfn/database';
 import { Permission, computeFeeMinor, minorToDecimalString, orgRoleHas } from '@dfn/shared';
-import { moneyDto } from '../../common/serialize';
+import { linkedDocumentDto, moneyDto } from '../../common/serialize';
 import type { TransactionWithRelations, ViewerRole } from './transaction-access.service';
 
 /**
@@ -192,7 +192,7 @@ export function toTransactionDto(
         id: e.id,
         note: e.note,
         createdAt: e.createdAt,
-        document: e.document,
+        document: linkedDocumentDto(e.document),
       })),
     })),
     funding: latestFunding

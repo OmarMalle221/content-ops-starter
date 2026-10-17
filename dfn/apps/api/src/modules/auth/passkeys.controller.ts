@@ -21,12 +21,14 @@ import {
   passkeyRegistrationVerifySchema,
   passkeyRenameSchema,
   passkeyRevokeSchema,
+  passkeyStepUpOptionsSchema,
   type PasskeyAuthenticationOptionsInput,
   type PasskeyAuthenticationVerifyInput,
   type PasskeyRegistrationOptionsInput,
   type PasskeyRegistrationVerifyInput,
   type PasskeyRenameInput,
   type PasskeyRevokeInput,
+  type PasskeyStepUpOptionsInput,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -38,8 +40,8 @@ import { SessionService } from './session.service';
 
 /**
  * Passkeys (WebAuthn). Registration, listing, renaming and revocation need a fully verified
- * session; passwordless login is public and rate limited; the STEP_UP challenge is also available
- * before the login MFA step so a passkey can complete it.
+ * session; passwordless login is public and rate limited; the STEP_UP challenge, issued for one
+ * operation (and resource), is also available before the login MFA step so a passkey can complete it.
  */
 @ApiTags('auth')
 @Controller('v1/auth/passkeys')
@@ -104,8 +106,11 @@ export class PasskeysController {
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(200)
   @Post('step-up/options')
-  stepUpOptions(@CurrentUser() auth: AuthContext) {
-    return this.passkeys.stepUpOptions(auth);
+  stepUpOptions(
+    @CurrentUser() auth: AuthContext,
+    @Body(zodBody(passkeyStepUpOptionsSchema)) body: PasskeyStepUpOptionsInput,
+  ) {
+    return this.passkeys.stepUpOptions(auth, body);
   }
 
   @Patch(':id')

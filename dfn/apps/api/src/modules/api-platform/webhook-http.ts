@@ -2,6 +2,7 @@ import { lookup as dnsLookup, type LookupAddress, type LookupOptions } from 'nod
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { LookupFunction } from 'node:net';
+import { TRACEPARENT_HEADER, outgoingTraceparent } from '../observability/trace-context';
 import { isPrivateIpv4, isPrivateIpv6 } from './ssrf';
 
 /** Raised when the connection would reach a private address (checked at connect time). */
@@ -39,6 +40,8 @@ export const guardedLookup: LookupFunction = (hostname, options, callback) => {
  * discarded). Redirects are never followed. The whole exchange — connection, request and response
  * body — is bounded by `timeoutMs`; on expiry the request is destroyed with an `AbortError`.
  * `guardPrivate` (every environment but tests) checks the resolved addresses at connect time.
+ * Unless the caller set one, a `traceparent` header continues the current trace (a child span of
+ * the request that produced the event) or starts a new one (retries run by the scheduler).
  */
 export function postWebhook(
   url: string,
@@ -62,7 +65,11 @@ export function postWebhook(
       target,
       {
         method: 'POST',
-        headers: { ...headers, 'Content-Length': String(Buffer.byteLength(body)) },
+        headers: {
+          [TRACEPARENT_HEADER]: outgoingTraceparent(),
+          ...headers,
+          'Content-Length': String(Buffer.byteLength(body)),
+        },
         ...(guardPrivate ? { lookup: guardedLookup } : {}),
       },
       (res) => {

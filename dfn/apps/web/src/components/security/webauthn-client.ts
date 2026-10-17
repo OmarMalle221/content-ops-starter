@@ -6,7 +6,7 @@ import {
   startAuthentication,
   type AuthenticationResponseJSON,
 } from '@simplewebauthn/browser';
-import { isTotpCode, normalizeRecoveryCode } from '@dfn/shared';
+import { isTotpCode, normalizeRecoveryCode, type StepUpOperation } from '@dfn/shared';
 import { ClientApiError, api, localizedApiError } from '@/lib/api-client';
 
 /** Second factors of the signed-in account (GET /v1/auth/mfa/status, readable before the MFA step). */
@@ -55,9 +55,19 @@ export function useMfaFactors(enabled = true): MfaFactors | null {
   return factors;
 }
 
-/** STEP_UP ceremony: the API issues a challenge bound to this session, the authenticator signs it. */
-export async function passkeyStepUpAssertion(): Promise<AuthenticationResponseJSON> {
-  const optionsJSON = await api('/v1/auth/passkeys/step-up/options', { method: 'POST' });
+/**
+ * STEP_UP ceremony: the API issues a challenge bound to this session AND to the operation (and
+ * resource: transfer id, gate code…) the assertion will authorise, then the authenticator signs
+ * it. The API refuses the assertion for any other action (STEP_UP_OPERATION_MISMATCH).
+ */
+export async function passkeyStepUpAssertion(
+  operation: StepUpOperation,
+  resourceId?: string,
+): Promise<AuthenticationResponseJSON> {
+  const optionsJSON = await api('/v1/auth/passkeys/step-up/options', {
+    method: 'POST',
+    json: resourceId ? { operation, resourceId } : { operation },
+  });
   return startAuthentication({ optionsJSON });
 }
 

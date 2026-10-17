@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } fr
 import { setTimeout as sleep } from 'node:timers/promises';
 import { authenticator as totp } from 'otplib';
 import { isoBase64URL, isoCBOR } from '@simplewebauthn/server/helpers';
+import type { StepUpOperation } from '@dfn/shared';
 import { Client, PASSWORD, type TestContext } from './app';
 
 /** Defaults of the API env (WEBAUTHN_RP_ID / WEBAUTHN_ORIGINS) used by the test app. */
@@ -185,9 +186,28 @@ export async function passkeyLogin(ctx: TestContext, device: SoftwareAuthenticat
   return { client, res, options: options.body };
 }
 
-/** A passkey assertion answering a STEP_UP challenge of this client's session. */
-export async function stepUpAssertion(client: Client, device: SoftwareAuthenticator, overrides = {}) {
-  const options = await client.post('/v1/auth/passkeys/step-up/options');
+/** Operation (and resource) a STEP_UP challenge is requested for — body of the options call. */
+export interface StepUpFor {
+  operation: StepUpOperation;
+  resourceId?: string;
+}
+
+/** POST /v1/auth/passkeys/step-up/options for this client's session (raw response). */
+export function stepUpOptions(client: Client, binding: StepUpFor) {
+  return client.post('/v1/auth/passkeys/step-up/options', binding);
+}
+
+/**
+ * A passkey assertion answering a STEP_UP challenge of this client's session, issued for
+ * `binding` — the operation (and resource) the assertion is meant to authorise.
+ */
+export async function stepUpAssertion(
+  client: Client,
+  device: SoftwareAuthenticator,
+  binding: StepUpFor,
+  overrides = {},
+) {
+  const options = await stepUpOptions(client, binding);
   if (options.status !== 200) throw new Error(`step-up ${options.status} ${JSON.stringify(options.body)}`);
   return device.getAssertion(options.body, overrides);
 }

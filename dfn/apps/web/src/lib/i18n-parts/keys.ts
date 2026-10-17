@@ -1,6 +1,9 @@
 import { definePart } from './define';
 
-/** Phase 6 — key ring & storage. Only the `keysAdmin` namespace lives here; FR defines the shape, EN mirrors it. */
+/**
+ * Phase 6–7 — key ring & storage, KMS-managed keys (envelope encryption). Only the `keysAdmin` namespace
+ * lives here; FR defines the shape, EN mirrors it.
+ */
 export const keysAdminPart = definePart(
   {
     keysAdmin: {
@@ -31,7 +34,7 @@ export const keysAdminPart = definePart(
       error: 'Erreur',
       unreadableTitle: 'Valeurs illisibles',
       unreadableAlert:
-        'Des valeurs sont scellées avec une clé absente de ENCRYPTION_KEYRING : elles ne peuvent être ni lues ni re-chiffrées. Réintroduisez cette clé (en déchiffrement seul, après la clé active) avant de poursuivre.',
+        'Des valeurs sont scellées avec une clé absente du trousseau (entrée retirée de ENCRYPTION_KEYRING, clé historique désactivée, ou clé gérée non chargée par cette instance) : elles ne peuvent être ni lues ni re-chiffrées. Réintroduisez cette clé (en déchiffrement seul, après la clé active), réactivez ENCRYPTION_LEGACY_DECRYPT ou rétablissez l’accès au KMS avant de poursuivre.',
       procedureTitle: 'Ajouter une clé puis faire tourner',
       procedureIntro:
         'La première entrée d’un usage dans ENCRYPTION_KEYRING est sa clé active ; les entrées suivantes ne servent plus qu’au déchiffrement. Format : usage:identifiant:clé-hex-64.',
@@ -86,6 +89,126 @@ export const keysAdminPart = definePart(
       remaining: 'Restantes',
       repaired: 'Réparées',
       allPurposes: 'Tous les usages',
+      kms: {
+        title: 'Chiffrement d’enveloppe (KMS)',
+        description:
+          'Les clés de données gérées sont générées par l’API, chiffrées (« enveloppées ») par la clé maîtresse du KMS et stockées enveloppées en base ; chaque instance les déchiffre au démarrage puis les recharge périodiquement.',
+        provider: 'Fournisseur',
+        providers: {
+          none: 'Aucun',
+          local: 'KMS local du bac à sable',
+          aws: 'AWS KMS',
+        },
+        providerNotes: {
+          none: 'KMS_PROVIDER=none : aucune clé gérée, seules les clés de ENCRYPTION_KEYRING (et la clé historique) sont utilisées. Configurez KMS_PROVIDER=local ou aws pour générer des clés ici.',
+          local:
+            'KMS simulé du bac à sable : la clé maîtresse vit dans l’environnement (KMS_LOCAL_MASTER_KEY). Elle sépare les clés enveloppées (base, sauvegardes) de la clé qui les ouvre, mais ce n’est ni un HSM ni un KMS managé.',
+          aws: 'AWS KMS : enveloppement par Encrypt / Decrypt sur KMS_KEY_ID, avec le contexte de chiffrement { purpose, keyId } ; identifiants issus de la chaîne AWS par défaut.',
+        },
+        keyRef: 'Référence de la clé maîtresse',
+        activationDelay: 'Délai d’activation',
+        refresh: 'Rechargement des clés',
+        rotationInterval: 'Rotation planifiée',
+        rotationManual: 'manuelle uniquement (KEY_ROTATION_INTERVAL_DAYS=0)',
+        rotationEvery: 'tous les {days} jours',
+        seconds: '{n} s',
+        lastRefresh: 'Dernier rechargement (cette instance)',
+        never: 'jamais',
+        loadFailuresTitle: 'Clés gérées non chargées',
+        loadFailures:
+          'Cette instance n’a pas pu déchiffrer ces clés auprès du KMS : les valeurs scellées avec elles y sont illisibles. Les clés déjà chargées restent utilisées. Vérifiez la disponibilité et les droits du KMS.',
+        refreshErrorTitle: 'Rechargement impossible',
+        refreshError:
+          'Le dernier rechargement des clés gérées a échoué (base de données indisponible) : cette instance continue avec les clés déjà chargées.',
+        procedureTitle: 'Faire tourner une clé gérée',
+        procedure: {
+          step1:
+            'Générer une nouvelle clé pour l’usage : elle est créée « En attente », enveloppée par le KMS, et chaque instance la charge en déchiffrement seul.',
+          step2:
+            'Après le délai d’activation, la tâche KEY_LIFECYCLE l’active (l’ancienne passe en déchiffrement seul) puis lance la rotation ENCRYPTION_KEY_ROTATION.',
+          step3: 'Laisser la rotation progresser jusqu’à ce que « À re-chiffrer » atteigne 0 pour l’usage.',
+          step4:
+            'Retirer l’ancienne clé quand plus rien ne l’utilise (valeurs, documents, y compris les blobs de documents supprimés encore conservés). La clé enveloppée reste en base pour les restaurations : conservez la clé maîtresse du KMS tant que des sauvegardes en dépendent.',
+        },
+      },
+      managed: {
+        title: 'Clés gérées par le KMS',
+        empty: 'Aucune clé gérée pour cet usage.',
+        keyId: 'Clé',
+        status: 'Statut',
+        dates: 'Cycle de vie',
+        kms: 'KMS',
+        values: 'Valeurs',
+        action: 'Action',
+        loaded: 'chargée sur cette instance',
+        notLoaded: 'non chargée sur cette instance',
+        created: 'Créée',
+        scheduled: 'par la rotation planifiée',
+        activateAfter: 'Activable après',
+        activated: 'Activée',
+        deactivated: 'Désactivée',
+        retired: 'Retirée',
+        deletedBlobs: 'dont {n} blob(s) de document(s) supprimé(s) conservé(s)',
+        statuses: {
+          STAGED: 'En attente',
+          ACTIVE: 'Active',
+          DECRYPT_ONLY: 'Déchiffrement seul',
+          RETIRED: 'Retirée',
+        },
+      },
+      lifecycle: {
+        generate: 'Générer une nouvelle clé',
+        generateConfirm:
+          'Une clé de données aléatoire est générée et enveloppée par le KMS. Elle reste en attente pendant le délai d’activation (le temps que chaque instance la charge), puis la tâche KEY_LIFECYCLE l’active et re-chiffre les valeurs existantes.',
+        retire: 'Retirer',
+        retireConfirm:
+          'La clé ne sera plus chargée par les instances. Le retrait n’est accepté que si plus aucune valeur ni aucun document ne l’utilise.',
+        mfaHint:
+          'Code de votre application d’authentification ou code de secours — requis si la double authentification ou une clé d’accès est active sur votre compte.',
+        blockers: {
+          NOT_DECRYPT_ONLY: 'Seule une clé en déchiffrement seul peut être retirée.',
+          RECENTLY_DEACTIVATED:
+            'Retrait possible après le {date} (chaque instance doit d’abord cesser de l’utiliser).',
+          KEY_IN_USE:
+            'Encore utilisée : {values} valeur(s) scellée(s) avec elle, {pending} autre(s) document(s) à re-chiffrer.',
+        },
+        errors: {
+          STAGED_KEY_EXISTS: 'Une clé attend déjà son activation pour cet usage.',
+          KMS_NOT_CONFIGURED: 'Aucun KMS configuré (KMS_PROVIDER=none) : les clés gérées sont indisponibles.',
+          KEY_IN_USE:
+            'Des valeurs ou des documents utilisent encore cette clé : terminez la rotation (et la purge) d’abord.',
+          RECENTLY_DEACTIVATED: 'Clé désactivée trop récemment : réessayez dans quelques minutes.',
+          NOT_DECRYPT_ONLY: 'Seule une clé en déchiffrement seul peut être retirée.',
+          KEY_ID_COLLISION: 'Identifiant de clé déjà pris : réessayez.',
+          KMS_UNAVAILABLE: 'Le KMS est indisponible ou a refusé l’opération. Aucune clé n’a été créée.',
+          NOT_FOUND: 'Clé introuvable.',
+        },
+      },
+      legacyKey: {
+        title: 'Clé historique (DOCUMENT_ENCRYPTION_KEY)',
+        description:
+          'Valeurs scellées avant le trousseau de clés. Une fois qu’aucune n’en dépend et que chaque usage a une clé active, le déchiffrement historique peut être désactivé (ENCRYPTION_LEGACY_DECRYPT=false).',
+        decryptEnabled: 'Déchiffrement historique actif',
+        decryptDisabled: 'Déchiffrement historique désactivé',
+        values: 'Valeurs encore scellées avec elle',
+        deletedBlobs: 'dont blobs de documents supprimés conservés',
+        safe: 'Plus rien n’en dépend : ENCRYPTION_LEGACY_DECRYPT=false peut être appliqué.',
+        notSafe:
+          'Encore nécessaire : re-chiffrez ces valeurs (et donnez une clé active à chaque usage) avant de la désactiver.',
+        disabledWithValues:
+          'Le déchiffrement historique est désactivé alors que des valeurs en dépendent encore : elles sont illisibles. Réactivez-le (ENCRYPTION_LEGACY_DECRYPT=true), faites tourner, puis désactivez-le de nouveau.',
+        perPurpose: 'Clé historique : {n} valeur(s)',
+      },
+      recovery: {
+        title: 'Codes de secours MFA',
+        secretMfa:
+          'Les nouveaux codes sont protégés par MFA_RECOVERY_SECRET : changer SESSION_SECRET ne les invalide plus.',
+        secretSession:
+          'Les codes sont protégés par SESSION_SECRET : le changer invalide tous les codes de secours. Définissez MFA_RECOVERY_SECRET pour les en séparer.',
+        bound: 'Codes encore liés à SESSION_SECRET',
+        boundHint:
+          'codes non utilisés créés avant MFA_RECOVERY_SECRET : ils deviendront invalides si SESSION_SECRET change',
+      },
     },
   },
   {
@@ -116,7 +239,7 @@ export const keysAdminPart = definePart(
       error: 'Error',
       unreadableTitle: 'Unreadable values',
       unreadableAlert:
-        'Some values are sealed with a key missing from ENCRYPTION_KEYRING: they can be neither read nor re-encrypted. Put that key back (decrypt-only, after the active key) before going further.',
+        'Some values are sealed with a key missing from the key ring (entry removed from ENCRYPTION_KEYRING, legacy key disabled, or managed key not loaded by this instance): they can be neither read nor re-encrypted. Put that key back (decrypt-only, after the active key), re-enable ENCRYPTION_LEGACY_DECRYPT or restore access to the KMS before going further.',
       procedureTitle: 'Add a key, then rotate',
       procedureIntro:
         'The first entry of a purpose in ENCRYPTION_KEYRING is its active key; later entries are only used to decrypt. Format: purpose:keyId:hex-key-64.',
@@ -168,6 +291,124 @@ export const keysAdminPart = definePart(
       remaining: 'Remaining',
       repaired: 'Repaired',
       allPurposes: 'All purposes',
+      kms: {
+        title: 'Envelope encryption (KMS)',
+        description:
+          'Managed data keys are generated by the API, encrypted (“wrapped”) by the KMS master key and stored wrapped in the database; every instance unwraps them at startup and reloads them periodically.',
+        provider: 'Provider',
+        providers: {
+          none: 'None',
+          local: 'Sandbox local KMS',
+          aws: 'AWS KMS',
+        },
+        providerNotes: {
+          none: 'KMS_PROVIDER=none: no managed keys, only the ENCRYPTION_KEYRING keys (and the legacy key) are used. Set KMS_PROVIDER=local or aws to generate keys here.',
+          local:
+            'Simulated sandbox KMS: the master key lives in the environment (KMS_LOCAL_MASTER_KEY). It keeps the wrapped keys (database, backups) apart from the key that opens them, but it is neither an HSM nor a managed KMS.',
+          aws: 'AWS KMS: wrapping with Encrypt / Decrypt on KMS_KEY_ID, with the encryption context { purpose, keyId }; credentials from the default AWS chain.',
+        },
+        keyRef: 'Master key reference',
+        activationDelay: 'Activation delay',
+        refresh: 'Key reload',
+        rotationInterval: 'Scheduled rotation',
+        rotationManual: 'manual only (KEY_ROTATION_INTERVAL_DAYS=0)',
+        rotationEvery: 'every {days} days',
+        seconds: '{n} s',
+        lastRefresh: 'Last reload (this instance)',
+        never: 'never',
+        loadFailuresTitle: 'Managed keys not loaded',
+        loadFailures:
+          'This instance could not unwrap these keys with the KMS: values sealed with them are unreadable here. Keys already loaded stay in use. Check the KMS availability and permissions.',
+        refreshErrorTitle: 'Reload failed',
+        refreshError:
+          'The last reload of the managed keys failed (database unavailable): this instance keeps going with the keys already loaded.',
+        procedureTitle: 'Rotate a managed key',
+        procedure: {
+          step1:
+            'Generate a new key for the purpose: it is created “Staged”, wrapped by the KMS, and every instance loads it decrypt-only.',
+          step2:
+            'After the activation delay, the KEY_LIFECYCLE job activates it (the previous one becomes decrypt-only) and starts the ENCRYPTION_KEY_ROTATION job.',
+          step3: 'Let the rotation progress until “To re-encrypt” reaches 0 for the purpose.',
+          step4:
+            'Retire the old key once nothing uses it any more (values, documents, including blobs of deleted documents still retained). The wrapped key stays in the database for restores: keep the KMS master key as long as backups depend on it.',
+        },
+      },
+      managed: {
+        title: 'KMS-managed keys',
+        empty: 'No managed key for this purpose.',
+        keyId: 'Key',
+        status: 'Status',
+        dates: 'Lifecycle',
+        kms: 'KMS',
+        values: 'Values',
+        action: 'Action',
+        loaded: 'loaded on this instance',
+        notLoaded: 'not loaded on this instance',
+        created: 'Created',
+        scheduled: 'by the scheduled rotation',
+        activateAfter: 'Activatable after',
+        activated: 'Activated',
+        deactivated: 'Deactivated',
+        retired: 'Retired',
+        deletedBlobs: 'including {n} retained blob(s) of deleted document(s)',
+        statuses: {
+          STAGED: 'Staged',
+          ACTIVE: 'Active',
+          DECRYPT_ONLY: 'Decrypt only',
+          RETIRED: 'Retired',
+        },
+      },
+      lifecycle: {
+        generate: 'Generate a new key',
+        generateConfirm:
+          'A random data key is generated and wrapped by the KMS. It stays staged for the activation delay (so that every instance loads it), then the KEY_LIFECYCLE job activates it and re-encrypts the existing values.',
+        retire: 'Retire',
+        retireConfirm:
+          'Instances will no longer load the key. Retirement is only accepted once no value or document uses it any more.',
+        mfaHint:
+          'Code from your authenticator app or a recovery code — required when two-factor authentication or a passkey is active on your account.',
+        blockers: {
+          NOT_DECRYPT_ONLY: 'Only a decrypt-only key can be retired.',
+          RECENTLY_DEACTIVATED: 'Can be retired after {date} (every instance must stop using it first).',
+          KEY_IN_USE:
+            'Still in use: {values} value(s) sealed with it, {pending} other document(s) to re-encrypt.',
+        },
+        errors: {
+          STAGED_KEY_EXISTS: 'A key is already waiting for activation for this purpose.',
+          KMS_NOT_CONFIGURED: 'No KMS configured (KMS_PROVIDER=none): managed keys are unavailable.',
+          KEY_IN_USE: 'Values or documents still use this key: finish the rotation (and the purge) first.',
+          RECENTLY_DEACTIVATED: 'Key deactivated too recently: try again in a few minutes.',
+          NOT_DECRYPT_ONLY: 'Only a decrypt-only key can be retired.',
+          KEY_ID_COLLISION: 'Key id already taken: try again.',
+          KMS_UNAVAILABLE: 'The KMS is unavailable or refused the operation. No key was created.',
+          NOT_FOUND: 'Key not found.',
+        },
+      },
+      legacyKey: {
+        title: 'Legacy key (DOCUMENT_ENCRYPTION_KEY)',
+        description:
+          'Values sealed before the key ring. Once none depends on it and every purpose has an active key, legacy decryption can be switched off (ENCRYPTION_LEGACY_DECRYPT=false).',
+        decryptEnabled: 'Legacy decryption enabled',
+        decryptDisabled: 'Legacy decryption disabled',
+        values: 'Values still sealed with it',
+        deletedBlobs: 'of which retained blobs of deleted documents',
+        safe: 'Nothing depends on it any more: ENCRYPTION_LEGACY_DECRYPT=false can be applied.',
+        notSafe:
+          'Still needed: re-encrypt these values (and give every purpose an active key) before switching it off.',
+        disabledWithValues:
+          'Legacy decryption is disabled while values still depend on it: they are unreadable. Re-enable it (ENCRYPTION_LEGACY_DECRYPT=true), rotate, then disable it again.',
+        perPurpose: 'Legacy key: {n} value(s)',
+      },
+      recovery: {
+        title: 'MFA recovery codes',
+        secretMfa:
+          'New codes are protected by MFA_RECOVERY_SECRET: changing SESSION_SECRET no longer invalidates them.',
+        secretSession:
+          'Codes are protected by SESSION_SECRET: changing it invalidates every recovery code. Set MFA_RECOVERY_SECRET to separate them.',
+        bound: 'Codes still bound to SESSION_SECRET',
+        boundHint:
+          'unused codes created before MFA_RECOVERY_SECRET: they become invalid if SESSION_SECRET changes',
+      },
     },
   },
 );

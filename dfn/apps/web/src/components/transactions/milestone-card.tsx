@@ -9,6 +9,7 @@ import { useI18n } from '@/lib/i18n-client';
 import { StatusBadge } from '@/components/status-badge';
 import { ActionDialog } from './action-dialog';
 import { UploadDocumentDialog } from './upload-dialog';
+import { ScanBadge } from '@/components/documents/scan-badge';
 
 export function MilestoneCard({ tx, milestone, documents }: { tx: any; milestone: any; documents: any[] }) {
   const { t, locale } = useI18n();
@@ -64,17 +65,23 @@ export function MilestoneCard({ tx, milestone, documents }: { tx: any; milestone
       {milestone.evidences?.length ? (
         <ul className="mt-3 space-y-1">
           {milestone.evidences.map((e: any) => (
-            <li key={e.id} className="flex items-center gap-2 text-sm">
+            <li key={e.id} className="flex flex-wrap items-center gap-2 text-sm">
               <FileText className="size-4 text-muted-foreground" />
-              <a
-                className="text-primary hover:underline"
-                href={`/api/v1/documents/${e.document.id}/download`}
-              >
-                {e.document.title}
-              </a>
+              {e.document.downloadUrl ? (
+                <a className="text-primary hover:underline" href={e.document.downloadUrl}>
+                  {e.document.title}
+                </a>
+              ) : (
+                // An INFECTED document is never served: title only, no link.
+                <span className="text-muted-foreground line-through">{e.document.title}</span>
+              )}
               <span className="text-xs text-muted-foreground">
                 · {t(`docs.kinds.${e.document.kind}`)} · {formatDate(e.createdAt, locale)}
               </span>
+              <ScanBadge scan={e.document.scan} />
+              {e.document.downloadUrl ? null : (
+                <span className="text-xs text-destructive">{t('documentStorage.scan.blocked')}</span>
+              )}
               {e.note ? <span className="text-xs text-muted-foreground">— {e.note}</span> : null}
             </li>
           ))}

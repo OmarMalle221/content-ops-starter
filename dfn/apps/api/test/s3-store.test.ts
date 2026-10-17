@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import {
+  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
@@ -9,8 +13,12 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { mockClient } from 'aws-sdk-client-mock';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { KeyPurpose } from '@dfn/shared';
+import { sha256Hex } from '../src/common/crypto';
+import { KeyRing } from '../src/common/keyring';
 import {
+  BlobStoreRegistry,
   S3BlobStore,
   StorageError,
   createBlobStore,
@@ -18,6 +26,9 @@ import {
   s3FailureReason,
 } from '../src/common/storage';
 import { loadEnv } from '../src/config/env';
+import { MaintenanceService } from '../src/modules/jobs/maintenance.service';
+import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
+import { PDF_BYTES, bootTestApp, registerUser, resetDatabase, type TestContext } from './helpers/app';
 
 const s3 = mockClient(S3Client);
 const MAX = 1024;
@@ -234,28 +245,54 @@ describe('S3BlobStore (aws-sdk-client-mock)', () => {
 });
 
 /**
- * Live round trip against a real S3-compatible endpoint (MinIO, AWS…). Runs only when
+ * Live round trip against a real S3-compatible endpoint (MinIO, moto, AWS…). Runs only when
  * S3_TEST_ENDPOINT is set (with S3_TEST_BUCKET, S3_TEST_ACCESS_KEY_ID, S3_TEST_SECRET_ACCESS_KEY,
- * optional S3_TEST_REGION); otherwise the suite is explicitly skipped.
+ * optional S3_TEST_REGION; path-style addressing); otherwise the suites are explicitly skipped.
+ * The bucket is created when it does not exist yet.
  */
 const LIVE = Boolean(process.env.S3_TEST_ENDPOINT);
 if (!LIVE) {
   console.info('[s3-store.test] live S3 suite skipped: set S3_TEST_ENDPOINT (and S3_TEST_BUCKET…) to run it');
 }
+const LIVE_ENV = {
+  STORAGE_DRIVER: 's3',
+  S3_ENDPOINT: process.env.S3_TEST_ENDPOINT ?? '',
+  S3_BUCKET: process.env.S3_TEST_BUCKET ?? 'dfn-test',
+  S3_REGION: process.env.S3_TEST_REGION ?? 'us-east-1',
+  S3_ACCESS_KEY_ID: process.env.S3_TEST_ACCESS_KEY_ID ?? '',
+  S3_SECRET_ACCESS_KEY: process.env.S3_TEST_SECRET_ACCESS_KEY ?? '',
+  S3_FORCE_PATH_STYLE: 'true',
+} as const;
+
+/** CreateBucket, tolerating a bucket that already exists (re-runs, shared emulator). */
+async function ensureLiveBucket() {
+  s3.restore();
+  const client = new S3Client({
+    region: LIVE_ENV.S3_REGION,
+    endpoint: LIVE_ENV.S3_ENDPOINT,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: LIVE_ENV.S3_ACCESS_KEY_ID || 'test',
+      secretAccessKey: LIVE_ENV.S3_SECRET_ACCESS_KEY || 'test',
+    },
+  });
+  try {
+    await client.send(new CreateBucketCommand({ Bucket: LIVE_ENV.S3_BUCKET }));
+  } catch (err) {
+    const name = (err as { name?: string }).name;
+    if (name !== 'BucketAlreadyOwnedByYou' && name !== 'BucketAlreadyExists') throw err;
+  } finally {
+    client.destroy();
+  }
+}
+
 describe.skipIf(!LIVE)('S3BlobStore (live endpoint, S3_TEST_ENDPOINT)', () => {
   let store: S3BlobStore;
   const key = `live-test/${randomUUID()}`;
+  beforeAll(ensureLiveBucket);
   beforeEach(() => {
     s3.restore();
-    const env = loadEnv({
-      STORAGE_DRIVER: 's3',
-      S3_ENDPOINT: process.env.S3_TEST_ENDPOINT!,
-      S3_BUCKET: process.env.S3_TEST_BUCKET ?? 'dfn-test',
-      S3_REGION: process.env.S3_TEST_REGION ?? 'us-east-1',
-      S3_ACCESS_KEY_ID: process.env.S3_TEST_ACCESS_KEY_ID ?? '',
-      S3_SECRET_ACCESS_KEY: process.env.S3_TEST_SECRET_ACCESS_KEY ?? '',
-    });
-    store = S3BlobStore.fromEnv(env);
+    store = S3BlobStore.fromEnv(loadEnv(LIVE_ENV));
   });
   afterEach(async () => {
     await store.delete(key).catch(() => undefined);
@@ -271,5 +308,83 @@ describe.skipIf(!LIVE)('S3BlobStore (live endpoint, S3_TEST_ENDPOINT)', () => {
     expect((await store.get(key)).equals(bytes)).toBe(true);
     await store.delete(key);
     expect(await store.exists(key)).toBe(false);
+    // Deleting a missing object is idempotent; reading it is NOT_FOUND.
+    await store.delete(key);
+    expect((await rejection(store.get(key))).reason).toBe('NOT_FOUND');
+  });
+
+  it('round-trips a large binary object byte for byte (checksums verified both ways)', async () => {
+    const bytes = Buffer.alloc(3 * 1024 * 1024);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31) & 0xff;
+    await store.put(key, bytes);
+    expect((await store.get(key)).equals(bytes)).toBe(true);
+  });
+});
+
+describe.skipIf(!LIVE)('STORAGE_MIGRATION against the live endpoint (local → S3)', () => {
+  const D1 = 'c3'.repeat(32);
+  let ctx: TestContext;
+  let dir: string;
+  beforeAll(async () => {
+    await ensureLiveBucket();
+    dir = mkdtempSync(join(tmpdir(), 'dfn-live-migration-'));
+    ctx = await bootTestApp({ ...LIVE_ENV, STORAGE_DIR: dir, ENCRYPTION_KEYRING: `documents:d1:${D1}` });
+  });
+  afterAll(async () => {
+    await ctx?.close();
+    rmSync(dir, { recursive: true, force: true });
+    loadEnv();
+  });
+
+  it('moves a local blob to the bucket: readable afterwards, local copy removed', async () => {
+    await resetDatabase(ctx.prisma);
+    await ctx.app.get(ReferenceDataService).ensure();
+    const { client, user } = await registerUser(ctx, `live-${randomUUID().slice(0, 8)}@example.com`);
+    const orgId = user.organizations[0].id as string;
+    const content = Buffer.concat([PDF_BYTES, Buffer.from(`% live ${randomUUID()}\n`)]);
+    const { sealed } = new KeyRing(process.env.DOCUMENT_ENCRYPTION_KEY!, `documents:d1:${D1}`).sealBuffer(
+      KeyPurpose.DOCUMENTS,
+      content,
+    );
+    const storageKey = `${orgId}/${randomUUID()}`;
+    mkdirSync(join(dir, orgId), { recursive: true });
+    writeFileSync(join(dir, storageKey), sealed, { mode: 0o600 });
+    const doc = await ctx.prisma.document.create({
+      data: {
+        organizationId: orgId,
+        uploadedByUserId: user.id,
+        title: 'Document local (live)',
+        fileName: 'live.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: content.length,
+        sha256: sha256Hex(content),
+        storageKey,
+        storageDriver: 'local',
+        encryptionKeyId: 'd1',
+      },
+    });
+
+    const run = await ctx.app.get(MaintenanceService).run('STORAGE_MIGRATION', 'scheduler');
+    expect(run.status, run.error ?? '').toBe('COMPLETED');
+    expect(run.summary).toMatchObject({ dryRun: false, migrated: 1, failed: 0, remaining: 0 });
+    const migrated = await ctx.prisma.document.findUniqueOrThrow({ where: { id: doc.id } });
+    expect(migrated.storageDriver).toBe('s3');
+    expect(existsSync(join(dir, storageKey))).toBe(false);
+    const bucket = ctx.app.get(BlobStoreRegistry).forDriver('s3');
+    expect((await bucket.get(storageKey)).equals(sealed)).toBe(true);
+
+    const download = await ctx
+      .http()
+      .get(`/v1/documents/${doc.id}/download`)
+      .set('Cookie', (client as unknown as { cookie: string }).cookie)
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(download.status).toBe(200);
+    expect((download.body as Buffer).equals(content)).toBe(true);
+    await bucket.delete(storageKey);
   });
 });

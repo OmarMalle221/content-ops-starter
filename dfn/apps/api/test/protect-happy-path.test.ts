@@ -86,6 +86,12 @@ describe('Scenario 1 — Diaspora Protect end-to-end (sandbox)', () => {
     expect(submitted.body.status).toBe('IN_PROGRESS');
     expect(submitted.body.milestones[0].status).toBe('SUBMITTED');
     expect(submitted.body.milestones[0].evidences).toHaveLength(2);
+    for (const e of submitted.body.milestones[0].evidences) {
+      expect(e.document).toMatchObject({
+        scan: { status: 'CLEAN', engine: 'sandbox-eicar' },
+        downloadUrl: `/api/v1/documents/${e.document.id}/download`,
+      });
+    }
 
     // Buyer asks for changes, seller resubmits, buyer approves → simulated release
     const changes = await actors.buyer.post(`/v1/transactions/${txId}/milestones/${m1.id}/request-changes`, {

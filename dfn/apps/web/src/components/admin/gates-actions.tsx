@@ -3,12 +3,13 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CheckCircle2, PencilLine, Undo2 } from 'lucide-react';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
+import { StepUpOperation } from '@dfn/shared';
 import { Button, Input, Label, Textarea } from '@dfn/ui';
 import { ActionDialog } from '@/components/transactions/action-dialog';
 import { FormMessage } from '@/components/form-message';
 import { StepUpFields } from '@/components/security/step-up-fields';
 import type { StepUpProof } from '@/components/security/webauthn-client';
-import { ClientApiError, api, errorMessage } from '@/lib/api-client';
+import { api, localizedApiError } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 
 type GateAction = 'PROGRESS' | 'APPROVE' | 'REVOKE';
@@ -19,7 +20,8 @@ const MIN = 3;
  * (server-driven `nextActions`) are rendered — COMPLIANCE staff receive none, so they see no
  * control at all. Every button posts to /v1/admin/gates/:code/{progress|approve|revoke}.
  * Approve and revoke carry a fresh second-factor proof: a code, or a passkey assertion when this
- * browser supports WebAuthn and the account has a passkey (same STEP_UP ceremony as transfers).
+ * browser supports WebAuthn and the account has a passkey (same STEP_UP ceremony as transfers,
+ * requested for this action on this gate).
  */
 export function GateActions({
   code,
@@ -62,12 +64,8 @@ export function GateActions({
     try {
       await api(`/v1/admin/gates/${encodeURIComponent(code)}/${path}`, { method: 'POST', json: body });
     } catch (e) {
-      if (e instanceof ClientApiError) {
-        const key = `gatesAdmin.errors.${e.body.code}`;
-        const localized = t(key);
-        throw new Error(localized === key ? errorMessage(e) : localized);
-      }
-      throw e;
+      // Gate wording first, then the shared second-factor wording (passkeys.errors).
+      throw new Error(localizedApiError(e, t, 'gatesAdmin.errors'));
     }
     setSuccess(t(`gatesAdmin.done.${action}`));
     reset();
@@ -107,9 +105,14 @@ export function GateActions({
     </div>
   );
 
-  const mfaField = (formComplete: boolean) => (
+  const mfaField = (
+    operation: typeof StepUpOperation.GATE_APPROVE | typeof StepUpOperation.GATE_REVOKE,
+    formComplete: boolean,
+  ) => (
     <StepUpFields
       id={`gate-mfa-${code}`}
+      operation={operation}
+      resourceId={code}
       code={mfaCode}
       onCodeChange={setMfaCode}
       hint={t('gatesAdmin.form.mfaHint')}
@@ -169,7 +172,7 @@ export function GateActions({
           >
             {noteField}
             {evidenceField(true)}
-            {mfaField(noteValid && evidenceValid)}
+            {mfaField(StepUpOperation.GATE_APPROVE, noteValid && evidenceValid)}
           </ActionDialog>
         ) : null}
         {nextActions.includes('REVOKE') ? (
@@ -187,7 +190,7 @@ export function GateActions({
             onConfirm={() => submit('REVOKE')}
           >
             {noteField}
-            {mfaField(noteValid)}
+            {mfaField(StepUpOperation.GATE_REVOKE, noteValid)}
           </ActionDialog>
         ) : null}
       </div>

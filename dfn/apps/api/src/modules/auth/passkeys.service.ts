@@ -3,10 +3,12 @@ import type { Request } from 'express';
 import type { WebAuthnCredential } from '@dfn/database';
 import {
   ErrorCode,
+  StepUpOperation,
   WebAuthnChallengePurpose,
   type PasskeyRegistrationOptionsInput,
   type PasskeyRegistrationVerifyInput,
   type PasskeyRevokeInput,
+  type PasskeyStepUpOptionsInput,
   type WebAuthnAssertionInput,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
@@ -101,7 +103,7 @@ export class PasskeysService {
       await this.verifier.assertFreshProof(
         auth,
         proof,
-        'passkey.register',
+        { operation: StepUpOperation.PASSKEY_REGISTER },
         {
           code: ErrorCode.STEP_UP_REQUIRED,
           message: 'A fresh second factor (code or passkey) is required to add a passkey',
@@ -242,7 +244,7 @@ export class PasskeysService {
       ? await this.verifier.assertFreshProof(
           auth,
           proof,
-          'passkey.revoke',
+          { operation: StepUpOperation.PASSKEY_REVOKE, resourceId: credential.id },
           {
             code: ErrorCode.STEP_UP_REQUIRED,
             message: 'A fresh second factor (code or passkey) is required to revoke a passkey',
@@ -397,17 +399,26 @@ export class PasskeysService {
   // ───────────────────────────── Step-up ─────────────────────────────
 
   /**
-   * STEP_UP challenge for the user's active passkeys, bound to this user and this session. Also
-   * allowed before the login MFA step (the assertion then completes it).
+   * STEP_UP challenge for the user's active passkeys, bound to this user, this session and the
+   * operation (+ resource) it will authorise. Before the login MFA step, only the login operation
+   * may be asked for: nothing else is reachable from a pre-MFA session anyway.
    */
-  async stepUpOptions(auth: AuthContext) {
+  async stepUpOptions(auth: AuthContext, input: PasskeyStepUpOptionsInput) {
     assertBrowserSession(auth);
+    if (auth.mfaEnabled && !auth.mfaVerified && input.operation !== StepUpOperation.LOGIN_MFA) {
+      throw new DomainError(
+        ErrorCode.MFA_REQUIRED,
+        'Multi-factor authentication required',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
     const credentials = await this.activeFor(auth.userId);
     if (!credentials.length) throw passkeyNotFound();
     return this.webauthn.authenticationOptions(
       WebAuthnChallengePurpose.STEP_UP,
       { userId: auth.userId, sessionId: auth.sessionId },
       credentials,
+      { operation: input.operation, resourceId: input.resourceId },
     );
   }
 }

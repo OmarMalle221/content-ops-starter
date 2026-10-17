@@ -1302,6 +1302,27 @@
         "tags": ["documents"]
       }
     },
+    "/v1/documents/deleted": {
+      "get": {
+        "operationId": "DocumentsController_listDeleted",
+        "parameters": [
+          {
+            "name": "organizationId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["documents"]
+      }
+    },
     "/v1/documents/{id}/download": {
       "get": {
         "operationId": "DocumentsController_download",
@@ -1363,6 +1384,30 @@
           }
         },
         "tags": ["documents"]
+      }
+    },
+    "/v1/admin/storage": {
+      "get": {
+        "operationId": "StorageAdminController_status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/storage/migration": {
+      "post": {
+        "operationId": "StorageAdminController_migrate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
       }
     },
     "/v1/transactions/{id}/disputes": {
@@ -3103,6 +3148,39 @@
       "post": {
         "operationId": "KeysController_rotate",
         "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/keys/{purpose}/generate": {
+      "post": {
+        "operationId": "KeysController_generate",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": ["admin"]
+      }
+    },
+    "/v1/admin/keys/{purpose}/{keyId}/retire": {
+      "post": {
+        "operationId": "KeysController_retire",
+        "parameters": [
+          {
+            "name": "keyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""

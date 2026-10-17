@@ -9,6 +9,7 @@ import {
   PROVIDER_REQUIRED_GATES,
   Permission,
   REGULATORY_GATES,
+  StepUpOperation,
   globalRoleHas,
   regulatoryGateMachine,
   type GateApproveInput,
@@ -124,12 +125,14 @@ export class RegulatoryGatesService {
   /**
    * Approving or revoking a gate is a high-impact governance act: when the acting ADMIN has a
    * second factor (TOTP or a passkey), a fresh proof is required — a stolen session alone is not
-   * enough. Accounts without any second factor keep the four-eyes rule as their only control.
+   * enough. Accounts without any second factor keep the four-eyes rule as their only control. A
+   * passkey proof must have been issued for this action on this gate (`code`, normalised).
    */
   private async requireStepUp(
     auth: AuthContext,
     proof: { mfaCode?: string; passkeyAssertion?: GateApproveInput['passkeyAssertion'] },
-    purpose: string,
+    operation: typeof StepUpOperation.GATE_APPROVE | typeof StepUpOperation.GATE_REVOKE,
+    code: string,
     req: Request,
   ) {
     const user = await this.prisma.user.findUnique({
@@ -143,7 +146,7 @@ export class RegulatoryGatesService {
     await this.mfa.assertFreshProof(
       auth,
       proof,
-      purpose,
+      { operation, resourceId: code },
       {
         code: ErrorCode.STEP_UP_REQUIRED,
         message: 'A fresh second factor (TOTP, recovery code or passkey) is required for this gate action',
@@ -271,7 +274,7 @@ export class RegulatoryGatesService {
    */
   async approve(auth: AuthContext, rawCode: string, input: GateApproveInput, req: Request) {
     const code = this.normalizeCode(rawCode);
-    await this.requireStepUp(auth, input, 'gate.approve', req);
+    await this.requireStepUp(auth, input, StepUpOperation.GATE_APPROVE, code, req);
     await this.ensureDefaults();
     const gate = await this.findGate(code);
     const now = new Date();
@@ -349,7 +352,7 @@ export class RegulatoryGatesService {
   /** IN_PROGRESS / PENDING_SECOND_APPROVAL / SATISFIED → REVOKED; approvals and evidence cleared. */
   async revoke(auth: AuthContext, rawCode: string, input: GateRevokeInput, req: Request) {
     const code = this.normalizeCode(rawCode);
-    await this.requireStepUp(auth, input, 'gate.revoke', req);
+    await this.requireStepUp(auth, input, StepUpOperation.GATE_REVOKE, code, req);
     await this.ensureDefaults();
     const gate = await this.findGate(code);
     regulatoryGateMachine.assertTransition(gate.status, 'REVOKED');

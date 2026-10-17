@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ShieldCheck } from 'lucide-react';
+import { StepUpOperation } from '@dfn/shared';
 import {
   Badge,
   Button,
@@ -145,6 +146,7 @@ export function SecurityPreferencesCard({ preferences }: { preferences: Record<s
           {needsProof ? (
             <StepUpFields
               id="secprefs-step-up"
+              operation={StepUpOperation.SECURITY_PREFERENCES_LOWER}
               code={code}
               onCodeChange={setCode}
               onPasskey={(passkeyAssertion) => save({ passkeyAssertion })}

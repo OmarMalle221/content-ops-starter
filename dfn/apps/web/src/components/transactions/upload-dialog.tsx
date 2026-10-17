@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Upload } from 'lucide-react';
 import { DocumentKind } from '@dfn/shared';
 import { Button, Input, Label, Select } from '@dfn/ui';
-import { ClientApiError, errorMessage } from '@/lib/api-client';
+import { ClientApiError, localizedApiError } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
 import { ActionDialog } from './action-dialog';
 
@@ -49,7 +49,11 @@ export function UploadDocumentDialog({
           { method: 'POST', body: fd, credentials: 'include' },
         );
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(errorMessage(new ClientApiError(res.status, body)));
+        // Antivirus refusals (DOCUMENT_INFECTED, SCAN_UNAVAILABLE) in the interface language.
+        if (!res.ok)
+          throw new Error(
+            localizedApiError(new ClientApiError(res.status, body), t, 'documentStorage.errors'),
+          );
         setFile(null);
         setTitle('');
         onUploaded?.(body);

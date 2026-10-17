@@ -20,10 +20,19 @@ export function generateRecoveryCode(): string {
   return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 10)}`;
 }
 
+/** Prefix of hashes keyed with MFA_RECOVERY_SECRET (unprefixed hashes are keyed with SESSION_SECRET). */
+export const RECOVERY_HASH_V2_PREFIX = 'r2:';
+
 /**
  * MFA recovery codes: generated in batches of 10 when MFA is enabled (or regenerated), shown
- * once, stored only as keyed hashes (HMAC-SHA-256 with the server secret, bound to the user), and
- * single use — consumption is an atomic `UPDATE … WHERE usedAt IS NULL`.
+ * once, stored only as keyed hashes (HMAC-SHA-256 bound to the user), and single use —
+ * consumption is an atomic `UPDATE … WHERE usedAt IS NULL`.
+ *
+ * Hash key (ADR-0014): with MFA_RECOVERY_SECRET set, new hashes are `r2:` + HMAC(MFA_RECOVERY_SECRET)
+ * — rotating SESSION_SECRET (which only signs sessions) then no longer invalidates them. Without
+ * it, and for codes created before it was set, the historical unprefixed HMAC(SESSION_SECRET) is
+ * used. Verification tries the MFA_RECOVERY_SECRET form first, then the SESSION_SECRET form, in a
+ * single compare-and-burn statement.
  */
 @Injectable()
 export class RecoveryCodesService {
@@ -34,8 +43,28 @@ export class RecoveryCodesService {
     @Inject(ENV) private readonly env: Env,
   ) {}
 
-  private hash(userId: string, canonicalCode: string): string {
+  /** Historical form: HMAC keyed with SESSION_SECRET, no prefix. */
+  private hashV1(userId: string, canonicalCode: string): string {
     return hmacHex(this.env.SESSION_SECRET, `dfn:mfa-recovery:v1:${userId}:${canonicalCode}`);
+  }
+
+  /** Form used for new codes once MFA_RECOVERY_SECRET is set (null otherwise). */
+  private hashV2(userId: string, canonicalCode: string): string | null {
+    const secret = this.env.MFA_RECOVERY_SECRET;
+    if (!secret) return null;
+    return `${RECOVERY_HASH_V2_PREFIX}${hmacHex(secret, `dfn:mfa-recovery:v2:${userId}:${canonicalCode}`)}`;
+  }
+
+  /** Hash stored for a new code. */
+  private hash(userId: string, canonicalCode: string): string {
+    return this.hashV2(userId, canonicalCode) ?? this.hashV1(userId, canonicalCode);
+  }
+
+  /** Every stored form a typed code may match, preferred secret first. */
+  private candidates(userId: string, canonicalCode: string): string[] {
+    const v2 = this.hashV2(userId, canonicalCode);
+    const v1 = this.hashV1(userId, canonicalCode);
+    return v2 ? [v2, v1] : [v1];
   }
 
   /** Replaces every code of the user with a fresh batch; returns the plaintext codes (once). */
@@ -84,7 +113,7 @@ export class RecoveryCodesService {
       );
     if (!canonical) throw invalid();
     const burnt = await this.prisma.mfaRecoveryCode.updateMany({
-      where: { userId, codeHash: this.hash(userId, canonical), usedAt: null },
+      where: { userId, codeHash: { in: this.candidates(userId, canonical) }, usedAt: null },
       data: { usedAt: new Date() },
     });
     if (burnt.count !== 1) throw invalid();

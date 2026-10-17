@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { KeyRound, Pencil, Trash2 } from 'lucide-react';
 import { startRegistration, type AuthenticationResponseJSON } from '@simplewebauthn/browser';
+import { StepUpOperation } from '@dfn/shared';
 import {
   Badge,
   Button,
@@ -119,6 +120,7 @@ export function PasskeysCard({ passkeys, mfaEnabled }: { passkeys: PasskeyItem[]
             {mfaEnabled ? (
               <StepUpFields
                 id="passkey-add-code"
+                operation={StepUpOperation.PASSKEY_REGISTER}
                 code={code}
                 onCodeChange={setCode}
                 passkeyDisabled={!name.trim()}
@@ -256,6 +258,8 @@ function PasskeyRow({ passkey, mfaEnabled }: { passkey: PasskeyItem; mfaEnabled:
               {mfaEnabled ? (
                 <StepUpFields
                   id={`revoke-${passkey.id}`}
+                  operation={StepUpOperation.PASSKEY_REVOKE}
+                  resourceId={passkey.id}
                   code={code}
                   onCodeChange={setCode}
                   onPasskey={(a, form) => {

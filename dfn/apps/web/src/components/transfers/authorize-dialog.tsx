@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
+import { StepUpOperation } from '@dfn/shared';
 import { Badge, Button } from '@dfn/ui';
 import { api, localizedApiError } from '@/lib/api-client';
 import { formatMoney } from '@/lib/format';
@@ -15,7 +16,8 @@ import type { TransferDto } from './types';
  * Authorisation dialog: debits the fictitious wallet. When the server requires a step-up (MFA
  * enabled and the `requireMfaForTransfers` preference on) it asks for a fresh proof — TOTP code,
  * recovery code, or (if this browser supports WebAuthn and the account has a passkey) a passkey
- * assertion for a STEP_UP challenge of this session. Otherwise it sends an empty proof.
+ * assertion for a STEP_UP challenge of this session issued for this transfer. Otherwise it sends
+ * an empty proof.
  */
 export function AuthorizeTransferDialog({
   transfer,
@@ -82,6 +84,8 @@ export function AuthorizeTransferDialog({
       {stepUpRequired ? (
         <StepUpFields
           id="transfer-mfa-code"
+          operation={StepUpOperation.TRANSFER_AUTHORIZE}
+          resourceId={transfer.id}
           code={code}
           onCodeChange={setCode}
           hint={t('passkeys.transfer.codeHint')}

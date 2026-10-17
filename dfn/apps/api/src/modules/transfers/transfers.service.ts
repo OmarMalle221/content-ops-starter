@@ -20,6 +20,7 @@ import {
   orgRoleHas,
   parseDecimalToMinor,
   securityPreferencesSchema,
+  StepUpOperation,
   transferMachine,
   type AuthorizeTransferInput,
   type CreateTransferInput,
@@ -536,9 +537,15 @@ export class TransfersService {
 
   /**
    * Transfer step-up. The proof — TOTP code (anti-replay), recovery code or passkey assertion for
-   * a STEP_UP challenge of this session — is checked by MfaVerifierService (ADR-0009).
+   * a STEP_UP challenge of this session issued for THIS transfer — is checked by
+   * MfaVerifierService (ADR-0009).
    */
-  private async assertMfa(auth: AuthContext, input: AuthorizeTransferInput, req?: Request) {
+  private async assertMfa(
+    auth: AuthContext,
+    transferId: string,
+    input: AuthorizeTransferInput,
+    req?: Request,
+  ) {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: auth.userId },
       select: { mfaEnabled: true, securityPreferences: true },
@@ -552,7 +559,7 @@ export class TransfersService {
       await this.mfa.assertFreshProof(
         auth,
         input,
-        'transfer.authorize',
+        { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: transferId },
         {
           code: ErrorCode.MFA_REQUIRED,
           message: 'A valid two-factor code is required to authorise this transfer',
@@ -610,7 +617,7 @@ export class TransfersService {
       });
     }
     transferMachine.assertTransition(transfer.status, 'AUTHORIZED');
-    const { mfaVerified, dailyTransferLimit } = await this.assertMfa(auth, input, req);
+    const { mfaVerified, dailyTransferLimit } = await this.assertMfa(auth, transfer.id, input, req);
 
     if (dailyTransferLimit) {
       const limitMinor = nominalLimitToMinor(dailyTransferLimit, transfer.sourceCurrency);

@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LifeBuoy, RefreshCw } from 'lucide-react';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/browser';
+import { StepUpOperation } from '@dfn/shared';
 import {
   Alert,
   AlertDescription,
@@ -123,6 +124,7 @@ export function RecoveryCodesCard({ summary }: { summary: RecoveryCodesSummary }
               >
                 <StepUpFields
                   id="recovery-regenerate-code"
+                  operation={StepUpOperation.RECOVERY_CODES_REGENERATE}
                   code={code}
                   onCodeChange={setCode}
                   onPasskey={(a, form) => {

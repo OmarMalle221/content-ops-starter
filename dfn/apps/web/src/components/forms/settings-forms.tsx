@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { StepUpOperation } from '@dfn/shared';
 import {
   Button,
   Card,
@@ -288,6 +289,7 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
             <p className="text-xs text-muted-foreground">{t('passkeys.mfa.disableHint')}</p>
             <StepUpFields
               id="mfa-disable-code"
+              operation={StepUpOperation.MFA_DISABLE}
               code={code}
               onCodeChange={setCode}
               onPasskey={(passkeyAssertion) =>

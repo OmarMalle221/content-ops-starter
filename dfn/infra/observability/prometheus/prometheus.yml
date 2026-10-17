@@ -1,0 +1,43 @@
+# Prometheus of the "observability" compose profile (docker-compose.yml). SANDBOX: every metric
+# describes fictitious funds. Every API replica is scraped: Docker's DNS returns one A record per
+# replica of the `api` service. The bearer token is the METRICS_TOKEN of .env, written to a tmpfs
+# file by the container's entrypoint (docker-compose.yml) — it is never written in this file.
+global:
+  scrape_interval: 15s
+  # Below the API's own refresh deadline for the domain gauges (5 s) plus the HTTP round trip.
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    stack: dfn-sandbox
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# No Alertmanager in the sandbox profile: firing alerts are visible at http://127.0.0.1:9090/alerts
+# and in Grafana. Point a receiver here before any pilot (docs/operations/OBSERVABILITY.md §5).
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: dfn-api
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics_token
+    dns_sd_configs:
+      - names: ['api']
+        type: A
+        port: 4000
+        refresh_interval: 30s
+    relabel_configs:
+      - target_label: service
+        replacement: dfn-api
+      - target_label: mode
+        replacement: sandbox
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

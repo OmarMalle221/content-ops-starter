@@ -14,6 +14,8 @@ import type { AuthChallenge, WebAuthnCredential } from '@dfn/database';
 import {
   ErrorCode,
   WebAuthnChallengePurpose,
+  stepUpResourceIdSchema,
+  type StepUpOperation,
   type WebAuthnAssertionInput,
   type WebAuthnRegistrationResponseInput,
 } from '@dfn/shared';
@@ -25,6 +27,31 @@ import { ENV, type Env } from '../../config/env';
 export const CHALLENGE_TTL_MS = 5 * 60_000;
 
 export type ChallengeBinding = { userId: string | null; sessionId: string | null };
+
+/** What a STEP_UP proof authorises: one operation and, when relevant, one resource (phase 7). */
+export interface StepUpBinding {
+  operation: StepUpOperation;
+  /** Transfer or passkey UUID, gate code, managed key id… exactly as the protected endpoint uses it. */
+  resourceId?: string;
+}
+
+/**
+ * Value stored in `AuthChallenge.operation` and compared on use: `<operation>:<resourceId|->`.
+ * A resource id must be one a client can ask a challenge for (`stepUpResourceIdSchema`, the
+ * contract of POST /v1/auth/passkeys/step-up/options): an endpoint binding an id outside that
+ * format — or an empty one — would match no challenge ever issued, and every passkey
+ * confirmation of that action would be refused. That is a programming error, surfaced as such
+ * (500 in tests and logs) rather than as STEP_UP_OPERATION_MISMATCH to every user.
+ */
+export function stepUpOperationKey(binding: StepUpBinding): string {
+  if (binding.resourceId !== undefined && !stepUpResourceIdSchema.safeParse(binding.resourceId).success) {
+    throw new Error(
+      `step-up binding ${binding.operation}: resource id ${JSON.stringify(binding.resourceId)} is not ` +
+        'a valid stepUpResourceIdSchema value (no client could request a challenge for it)',
+    );
+  }
+  return `${binding.operation}:${binding.resourceId ?? '-'}`;
+}
 
 export type AssertionFailureReason =
   | 'credential_unknown'
@@ -90,6 +117,7 @@ export class WebAuthnService {
     purpose: WebAuthnChallengePurpose,
     challenge: string,
     binding: ChallengeBinding,
+    operation: string | null = null,
   ) {
     await this.prisma.authChallenge.create({
       data: {
@@ -97,6 +125,7 @@ export class WebAuthnService {
         challenge,
         userId: binding.userId,
         sessionId: binding.sessionId,
+        operation,
         expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
       },
     });
@@ -191,12 +220,13 @@ export class WebAuthnService {
   /**
    * Options for an assertion. `allowCredentials` is empty for passwordless login (discoverable
    * credentials: the response never depends on who asks) and lists the user's passkeys for a
-   * step-up of an authenticated session.
+   * step-up of an authenticated session, whose challenge also records the operation it is for.
    */
   async authenticationOptions(
     purpose: typeof WebAuthnChallengePurpose.AUTHENTICATION | typeof WebAuthnChallengePurpose.STEP_UP,
     binding: ChallengeBinding,
     allowCredentials: Array<Pick<WebAuthnCredential, 'credentialId' | 'transports'>> = [],
+    stepUp: StepUpBinding | null = null,
   ): Promise<PublicKeyCredentialRequestOptionsJSON> {
     const options = await generateAuthenticationOptions({
       rpID: this.rpID,
@@ -204,7 +234,12 @@ export class WebAuthnService {
       userVerification: 'required',
       timeout: CHALLENGE_TTL_MS,
     });
-    await this.storeChallenge(purpose, options.challenge, binding);
+    await this.storeChallenge(
+      purpose,
+      options.challenge,
+      binding,
+      stepUp ? stepUpOperationKey(stepUp) : null,
+    );
     return options;
   }
 

@@ -19,7 +19,17 @@ export const transactionInclude = {
       evidences: {
         include: {
           document: {
-            select: { id: true, title: true, kind: true, fileName: true, status: true, mimeType: true },
+            select: {
+              id: true,
+              title: true,
+              kind: true,
+              fileName: true,
+              status: true,
+              mimeType: true,
+              scanStatus: true,
+              scanEngine: true,
+              scannedAt: true,
+            },
           },
         },
       },

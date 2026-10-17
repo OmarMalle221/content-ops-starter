@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { KeyRound } from 'lucide-react';
+import { StepUpOperation } from '@dfn/shared';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '@dfn/ui';
 import { api, localizedApiError } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
@@ -57,7 +58,7 @@ export function MfaForm() {
     setPasskeyLoading(true);
     setError(null);
     try {
-      const passkeyAssertion = await passkeyStepUpAssertion();
+      const passkeyAssertion = await passkeyStepUpAssertion(StepUpOperation.LOGIN_MFA);
       await api('/v1/auth/mfa/verify', { method: 'POST', json: { passkeyAssertion } });
       done();
     } catch (err) {

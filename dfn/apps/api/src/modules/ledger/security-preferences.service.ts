@@ -4,6 +4,7 @@ import type { Prisma, PrismaTransactionClient } from '@dfn/database';
 import {
   DEFAULT_SECURITY_PREFERENCES,
   ErrorCode,
+  StepUpOperation,
   securityPreferencesSchema,
   type SecurityPreferencesInput,
 } from '@dfn/shared';
@@ -92,7 +93,7 @@ export class SecurityPreferencesService {
       ? await this.mfa.assertFreshProof(
           auth,
           input,
-          'security_preferences.lower',
+          { operation: StepUpOperation.SECURITY_PREFERENCES_LOWER },
           {
             code: ErrorCode.MFA_REQUIRED,
             message: 'A valid two-factor code is required to lower your security preferences',

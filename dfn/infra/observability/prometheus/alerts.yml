@@ -1,0 +1,289 @@
+# Alert rules on the metrics of GET /metrics (apps/api/src/modules/observability). SANDBOX: the
+# figures describe fictitious funds; the alerts exercise the operational loop, nothing more.
+#
+# Conventions, checked by apps/api/test/observability.test.ts:
+#   - every metric named in an `expr` exists in the registry the API exposes;
+#   - every rule has severity (critical | warning), summary, description and a runbook_url pointing
+#     at a section of docs/operations/OBSERVABILITY.md (meaning and first action of each alert).
+# Database-wide gauges are reported by every replica with the same value: expressions aggregate
+# them with max()/sum(max by ...) so a fleet of N replicas raises one alert, not N.
+# Thresholds assume JOBS_INTERVAL_MINUTES=15 (one tick of every maintenance job every 15 min).
+groups:
+  - name: dfn-api-availability
+    rules:
+      - alert: DfnApiDown
+        expr: up{job="dfn-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'API replica {{ $labels.instance }} is not answering GET /metrics'
+          description: 'Prometheus could not scrape {{ $labels.instance }} for 2 minutes (process down, port closed, token refused or metrics disabled).'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnapidown
+
+      - alert: DfnApiAbsent
+        expr: absent(up{job="dfn-api"})
+        for: 5m
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'No API replica is discovered'
+          description: 'The dfn-api scrape job has no target for 5 minutes: the api service is gone or its DNS name does not resolve from Prometheus.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnapiabsent
+
+  - name: dfn-api-http
+    rules:
+      - alert: DfnApiHigh5xxRatio
+        expr: |
+          (
+            sum(rate(dfn_http_requests_total{job="dfn-api", status=~"5.."}[5m]))
+              /
+            sum(rate(dfn_http_requests_total{job="dfn-api"}[5m]))
+          ) > 0.05
+          and sum(rate(dfn_http_requests_total{job="dfn-api"}[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'More than 5 % of API answers are 5xx'
+          description: 'Over the last 5 minutes {{ $value | humanizePercentage }} of the requests (all replicas) ended in a server error, with at least 0.2 req/s of traffic.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnapihigh5xxratio
+
+      - alert: DfnApiHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(dfn_http_request_duration_seconds_bucket{job="dfn-api", route!~"unmatched|/metrics|/docs"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'API p95 latency above 1 s'
+          description: 'The 95th percentile of the response time of the routed requests (all replicas) is {{ $value | humanizeDuration }} over the last 5 minutes.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnapihighlatencyp95
+
+      - alert: DfnApiEventLoopLag
+        expr: dfn_nodejs_eventloop_lag_p99_seconds{job="dfn-api"} > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Event loop of {{ $labels.instance }} is blocked'
+          description: 'The p99 event-loop lag of the replica is {{ $value | humanizeDuration }}: synchronous work (crypto, large JSON, a stuck job) is starving the requests.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnapieventlooplag
+
+  - name: dfn-maintenance-jobs
+    rules:
+      - alert: DfnMaintenanceJobFailed
+        expr: max by (job_name) (dfn_maintenance_job_last_run_status{job="dfn-api", status="FAILED"}) == 1
+        for: 30m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Maintenance job {{ $labels.job_name }} keeps failing'
+          description: 'The latest run of {{ $labels.job_name }} is FAILED and no later run succeeded within 30 minutes (two scheduler ticks).'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnmaintenancejobfailed
+
+      - alert: DfnMaintenanceJobStale
+        expr: max by (job_name) (dfn_maintenance_job_last_success_age_seconds{job="dfn-api"}) > 3600
+        for: 15m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Maintenance job {{ $labels.job_name }} has not succeeded for an hour'
+          description: 'Last COMPLETED run of {{ $labels.job_name }} was {{ $value | humanizeDuration }} ago: scheduler stopped, lease stuck on a dead replica, or every run failing.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnmaintenancejobstale
+
+      # DfnMaintenanceJobStale needs a first success to measure from: a job that never completed
+      # has no dfn_maintenance_job_last_success_age_seconds series at all. Every replica reports the
+      # jobs it registered; one of them without any success is a scheduler that never ran it.
+      - alert: DfnMaintenanceJobNeverSucceeded
+        expr: |
+          max by (job_name) (dfn_maintenance_job_registered{job="dfn-api"})
+            unless on (job_name)
+          max by (job_name) (dfn_maintenance_job_last_success_age_seconds{job="dfn-api"})
+        for: 1h
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Maintenance job {{ $labels.job_name }} is registered but has never succeeded'
+          description: 'A replica registers {{ $labels.job_name }} with the scheduler, yet no COMPLETED MaintenanceRun exists after an hour (four ticks): the scheduler never started (JOBS_ENABLED, JOBS_DRIVER / Redis), no replica runs it, or every run so far failed.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnmaintenancejobneversucceeded
+
+      - alert: DfnMaintenanceJobStuck
+        expr: |
+          max by (job_name) (dfn_maintenance_job_last_run_status{job="dfn-api", status="RUNNING"}) == 1
+          and max by (job_name) (dfn_maintenance_job_last_run_duration_seconds{job="dfn-api"}) > 1800
+        for: 5m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Maintenance job {{ $labels.job_name }} has been RUNNING for over 30 minutes'
+          description: 'The latest MaintenanceRun of {{ $labels.job_name }} is still RUNNING after 30 minutes: a hung handler, or a replica that died without closing its run.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnmaintenancejobstuck
+
+  - name: dfn-webhooks
+    rules:
+      - alert: DfnWebhookBacklog
+        expr: max(dfn_webhook_deliveries_due{job="dfn-api"}) > 100
+        for: 15m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'More than 100 webhook deliveries are waiting for an attempt'
+          description: '{{ $value }} deliveries are PENDING or FAILED with an elapsed back-off for 15 minutes: partner endpoints down, or the WEBHOOK_RETRY job not running.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnwebhookbacklog
+
+      - alert: DfnWebhookOldestDue
+        expr: max(dfn_webhook_oldest_due_age_seconds{job="dfn-api"}) > 3600
+        for: 15m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'A webhook delivery has been due for more than an hour'
+          description: 'The oldest due delivery has waited {{ $value | humanizeDuration }}: retries are not being attempted (WEBHOOK_RETRY stale or every attempt refused).'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnwebhookoldestdue
+
+      - alert: DfnWebhookExhausted
+        expr: max(delta(dfn_webhook_deliveries{job="dfn-api", status="EXHAUSTED"}[1h])) > 0
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Webhook deliveries were abandoned in the last hour'
+          description: '{{ $value }} deliveries reached EXHAUSTED (every retry failed) within the last hour; the partner never received those events.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnwebhookexhausted
+
+  - name: dfn-review-queue
+    rules:
+      - alert: DfnReviewSlaBreached
+        expr: sum(max by (severity) (dfn_review_alerts_sla_breached{job="dfn-api"})) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Risk alerts past their review SLA'
+          description: '{{ $value }} open alerts are marked past their SLA by the REVIEW_SLA job for 15 minutes.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnreviewslabreached
+
+      - alert: DfnReviewHighOverdue
+        expr: max(dfn_review_alerts_overdue{job="dfn-api", severity="HIGH"}) > 0
+        for: 30m
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'HIGH severity risk alerts are overdue'
+          description: '{{ $value }} open HIGH alerts are past their dueAt for 30 minutes without a first staff action.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnreviewhighoverdue
+
+  - name: dfn-documents
+    rules:
+      - alert: DfnDocumentInfected
+        expr: max(dfn_documents{job="dfn-api", scan_status="INFECTED"}) > 0
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'A document row carries the INFECTED verdict'
+          description: '{{ $value }} Document rows are INFECTED. Uploads refuse infected files before storage, so such a row means a later scan or a manual change: the blob must stay unserved.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfndocumentinfected
+
+  - name: dfn-encryption-keys
+    rules:
+      - alert: DfnEncryptionKeyNoActive
+        expr: |
+          max by (purpose) (dfn_encryption_keys{job="dfn-api", status="ACTIVE"}) == 0
+          and sum by (purpose) (max by (purpose, status) (dfn_encryption_keys{job="dfn-api"})) > 0
+        for: 15m
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'Purpose {{ $labels.purpose }} has managed keys but none ACTIVE'
+          description: 'Values of purpose {{ $labels.purpose }} can be opened but nothing new can be sealed with a managed key (all keys STAGED, DECRYPT_ONLY or RETIRED).'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnencryptionkeynoactive
+
+      - alert: DfnEncryptionKeyStagedTooLong
+        expr: max by (purpose) (dfn_encryption_keys{job="dfn-api", status="STAGED"}) > 0
+        for: 1h
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'A STAGED key of purpose {{ $labels.purpose }} was never activated'
+          description: 'A key of purpose {{ $labels.purpose }} has been STAGED for an hour while KEY_ACTIVATION_DELAY_SECONDS is minutes: the KEY_LIFECYCLE job is not running.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnencryptionkeystagedtoolong
+
+  - name: dfn-ledger
+    rules:
+      - alert: DfnReconciliationDifferences
+        expr: max(dfn_ledger_reconciliation_last_completed_differences{job="dfn-api"}) > 0
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'The ledger reconciliation found differences'
+          description: 'The latest COMPLETED reconciliation found {{ $value }} differences between ledger entries and balances.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnreconciliationdifferences
+
+      - alert: DfnReconciliationFailed
+        expr: max(dfn_ledger_reconciliation_last_run_status{job="dfn-api", status="FAILED"}) == 1
+        for: 30m
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'The latest ledger reconciliation failed'
+          description: 'The latest ReconciliationJob is FAILED and no later run completed within 30 minutes.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnreconciliationfailed
+
+      - alert: DfnReconciliationStale
+        expr: max(dfn_ledger_reconciliation_last_run_age_seconds{job="dfn-api"}) > 3600
+        for: 15m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'No ledger reconciliation for an hour'
+          description: 'The latest ReconciliationJob started {{ $value | humanizeDuration }} ago (the RECONCILIATION job runs every scheduler tick).'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnreconciliationstale
+
+      # DfnReconciliationStale measures from a run: without any ReconciliationJob row the age series
+      # does not exist. The status series are exposed from the start (all 0 until the first run),
+      # so "never ran" (sum 0) is told apart from "collector failed" (no series, DfnMetricsCollectErrors).
+      - alert: DfnReconciliationNeverRun
+        expr: sum(max by (status) (dfn_ledger_reconciliation_last_run_status{job="dfn-api"})) == 0
+        for: 1h
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'The ledger reconciliation has never run'
+          description: 'No ReconciliationJob row exists after an hour of exposure: the RECONCILIATION job never ran (scheduler never started) and no on-demand reconciliation was done.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnreconciliationneverrun
+
+  - name: dfn-metrics
+    rules:
+      - alert: DfnMetricsCollectErrors
+        expr: sum by (instance, collector) (increase(dfn_metrics_collect_errors_total{job="dfn-api"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'Domain gauges of {{ $labels.instance }} are not refreshed ({{ $labels.collector }})'
+          description: 'The {{ $labels.collector }} collector failed or timed out on every scrape for 15 minutes: its gauges are absent, the database is slow or unreachable from this replica.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnmetricscollecterrors

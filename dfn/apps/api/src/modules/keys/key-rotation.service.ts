@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import type { Prisma } from '@dfn/database';
 import { ErrorCode, KeyPurpose } from '@dfn/shared';
 import { DomainError } from '../../common/domain-error';
-import { LEGACY_KEY_ID, keyRingFor, type KeyRing } from '../../common/keyring';
+import { keyRingFor, type KeyRing } from '../../common/keyring';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { isStorageError } from '../../common/storage/blob-store';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { DocumentStorageService } from '../documents/storage.service';
 import { JobRegistry, type JobResult } from '../jobs/job-registry';
+import { pendingDocumentsWhere } from './key-usage';
+import { ManagedKeysService, validatedKeyRing } from './managed-keys.service';
 import {
   SEALED_COLUMNS,
   ZERO_UUID,
@@ -18,6 +19,8 @@ import {
   replaceIfUnchanged,
   type SealedColumn,
 } from './sealed-columns';
+
+export { pendingDocumentsWhere } from './key-usage';
 
 export const KEY_ROTATION_JOB = 'ENCRYPTION_KEY_ROTATION' as const;
 
@@ -81,6 +84,11 @@ export interface PurposeRotationSummary {
   repaired?: number;
   /** Failure counts by reason — reasons only, never values or key material. */
   errors?: Record<string, number>;
+  /**
+   * Set when the purpose was not rotated: its ACTIVE managed key could not be loaded by this
+   * replica (rotating towards its fallback key would undo the activation).
+   */
+  skipped?: 'ACTIVE_KEY_NOT_LOADED';
 }
 
 const PURPOSE_SUFFIX = /:purpose=([a-z]+)$/;
@@ -122,10 +130,12 @@ class RotationFailure extends Error {
 
 /**
  * ENCRYPTION_KEY_ROTATION — re-seals with the active key every value still sealed with another
- * key: MFA secrets, webhook signing secrets, beneficiary account identifiers and document blobs.
+ * key: MFA secrets, webhook signing secrets, beneficiary account identifiers and document blobs
+ * (blobs of deleted documents included while they are retained, i.e. until DOCUMENT_PURGE).
  *
- * Runs through MaintenanceService (advisory lock + MaintenanceRun history), from the scheduler or
- * on demand (/v1/admin/jobs/ENCRYPTION_KEY_ROTATION/run, /v1/admin/keys/rotate). Each run is
+ * Runs through MaintenanceService (advisory lock + MaintenanceRun history), from the scheduler, on
+ * demand (/v1/admin/jobs/ENCRYPTION_KEY_ROTATION/run, /v1/admin/keys/rotate) or right after
+ * KEY_LIFECYCLE activated a managed key. The managed keys are refreshed first. Each run is
  * bounded (ROTATION_BATCH values per purpose, a scan cap and a time budget) and idempotent:
  * already-rotated values are not selected again, so successive runs resume where the previous one
  * stopped and a run with nothing left to do is a no-op. String values are replaced with a
@@ -140,18 +150,12 @@ export class KeyRotationService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly documents: DocumentStorageService,
     private readonly audit: AuditService,
+    private readonly managed: ManagedKeysService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
   onModuleInit() {
-    // Fail fast on a malformed ENCRYPTION_KEYRING instead of at the first seal/open. The key ring
-    // error may quote part of the faulty entry: hex runs are redacted before it is rethrown.
-    try {
-      keyRingFor(this.env);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`ENCRYPTION_KEYRING is invalid: ${message.replace(/[0-9a-f]{8,}/gi, '[redacted]')}`);
-    }
+    validatedKeyRing(this.env);
     this.registry.register(KEY_ROTATION_JOB, (ctx) => this.run(ctx));
   }
 
@@ -163,12 +167,20 @@ export class KeyRotationService implements OnModuleInit {
   async run(ctx: { triggeredBy: string; signal?: AbortSignal }): Promise<JobResult> {
     const only = purposeFromTrigger(ctx.triggeredBy);
     const deadline = Date.now() + TIME_BUDGET_MS;
+    // Rotate towards the active keys recorded in the database, not a view up to
+    // KEYRING_REFRESH_SECONDS old (a key activated by another replica would otherwise be undone).
+    await this.managed.refresh();
     const shouldStop = () => Boolean(ctx.signal?.aborted) || Date.now() > deadline;
 
     const purposes: Partial<Record<KeyPurpose, PurposeRotationSummary>> = {};
     for (const purpose of KEY_PURPOSES) {
       if (only && purpose !== only) continue;
       const spec = SEALED_COLUMNS.find((c) => c.purpose === purpose);
+      const unloaded = this.managed.unloadedActiveKeyId(purpose);
+      if (unloaded) {
+        purposes[purpose] = await this.skipped(purpose, unloaded, spec);
+        continue;
+      }
       purposes[purpose] =
         purpose === KeyPurpose.DOCUMENTS
           ? await this.rotateDocuments(shouldStop)
@@ -196,6 +208,20 @@ export class KeyRotationService implements OnModuleInit {
       );
     }
     return { summary };
+  }
+
+  /** Summary of a purpose left alone because its ACTIVE managed key is not loaded here. */
+  private async skipped(
+    purpose: KeyPurpose,
+    activeKeyId: string,
+    spec: SealedColumn | undefined,
+  ): Promise<PurposeRotationSummary> {
+    this.logger.error(`key rotation of ${purpose} skipped: active key ${activeKeyId} is not loaded here`);
+    const remaining =
+      purpose === KeyPurpose.DOCUMENTS
+        ? await this.prisma.document.count({ where: pendingDocumentsWhere(activeKeyId) })
+        : await countPending(this.prisma, spec!, activeKeyId);
+    return { activeKeyId, scanned: 0, rotated: 0, failed: 0, remaining, skipped: 'ACTIVE_KEY_NOT_LOADED' };
   }
 
   /** Re-seals one string column in a bounded batch. */
@@ -313,11 +339,4 @@ export class KeyRotationService implements OnModuleInit {
     if (result.failed > 0) result.errors = errors;
     return result;
   }
-}
-
-/** Live encrypted documents whose recorded key id is not the active one (null = legacy). */
-export function pendingDocumentsWhere(activeKeyId: string): Prisma.DocumentWhereInput {
-  const base = { deletedAt: null, encrypted: true };
-  if (activeKeyId === LEGACY_KEY_ID) return { ...base, encryptionKeyId: { not: null } };
-  return { ...base, OR: [{ encryptionKeyId: null }, { encryptionKeyId: { not: activeKeyId } }] };
 }

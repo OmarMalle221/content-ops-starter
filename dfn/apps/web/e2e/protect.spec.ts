@@ -28,6 +28,10 @@ test('sandbox banner is always visible and the API is tagged', async ({ page, re
   await expect(page.getByRole('status')).toContainText(/Aucun fonds réel|No real funds/);
   const health = await request.get('/api/v1/health');
   expect(health.headers()['x-dfn-mode']).toBe('sandbox');
+  // Only the versioned API is proxied: the API's operational endpoints are not reachable through
+  // the web origin (/metrics would otherwise see the web server as a loopback peer).
+  expect((await request.get('/api/metrics')).status()).toBe(404);
+  expect((await request.get('/api/docs')).status()).toBe(404);
 });
 
 test('buyer creates a protected transaction, seller joins, funding is simulated and a milestone is released', async ({

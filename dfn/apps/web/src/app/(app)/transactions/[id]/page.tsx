@@ -11,6 +11,7 @@ import {
   Stepper,
   type Step,
 } from '@dfn/ui';
+import { ScanBadge } from '@/components/documents/scan-badge';
 import { PageHeader } from '@/components/shell/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { TransactionActions } from '@/components/transactions/transaction-actions';
@@ -224,16 +225,26 @@ export default async function TransactionDetailPage({ params }: { params: Promis
                   {documents.map((d) => (
                     <li key={d.id} className="flex items-center gap-3 py-2 text-sm">
                       <FileText className="size-4 text-muted-foreground" />
-                      <a
-                        className="flex-1 truncate text-primary hover:underline"
-                        href={`/api${d.downloadUrl.replace(/^\/api/, '')}`}
-                      >
-                        {d.title}
-                      </a>
+                      {d.downloadUrl ? (
+                        <a
+                          className="flex-1 truncate text-primary hover:underline"
+                          href={`/api${d.downloadUrl.replace(/^\/api/, '')}`}
+                        >
+                          {d.title}
+                        </a>
+                      ) : (
+                        <span
+                          className="flex-1 truncate text-muted-foreground"
+                          title={t('documentStorage.scan.blocked')}
+                        >
+                          {d.title}
+                        </span>
+                      )}
                       <span className="text-xs text-muted-foreground">{t(`docs.kinds.${d.kind}`)}</span>
                       <span className="text-xs text-muted-foreground">
                         {(d.sizeBytes / 1024).toFixed(0)} Ko
                       </span>
+                      <ScanBadge scan={d.scan} />
                       <StatusBadge status={d.status} />
                     </li>
                   ))}

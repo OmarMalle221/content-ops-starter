@@ -130,11 +130,21 @@ const envSchema = z
     KMS_KEY_ID: z.string().min(1).optional(),
     KMS_REGION: z.string().min(1).optional(),
     KMS_ENDPOINT: z.string().url().optional(),
-    /** Scheduled rotation: a new data key per purpose when the active one is older (0 = manual only). */
+    /**
+     * Scheduled rotation (KEY_LIFECYCLE job): stages a new data key for every purpose whose active
+     * KMS-managed key is older than this (0 = manual only; the first managed key is always generated
+     * by an admin).
+     */
     KEY_ROTATION_INTERVAL_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
-    /** A new key stays STAGED (decrypt-only) this long so every replica loads it before it seals. */
+    /**
+     * A new key stays STAGED (decrypt-only) this long so every replica loads it before it seals.
+     * Keep it above KEYRING_REFRESH_SECONDS (a warning is logged otherwise).
+     */
     KEY_ACTIVATION_DELAY_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
-    /** How often each replica reloads KMS-managed keys from the database. */
+    /**
+     * How often each replica reloads KMS-managed keys from the database (only new keys are sent to
+     * the KMS). A decrypt-only key can be retired two periods after its deactivation.
+     */
     KEYRING_REFRESH_SECONDS: z.coerce.number().int().min(5).max(3600).default(60),
     /**
      * "false" retires the legacy DOCUMENT_ENCRYPTION_KEY for decryption once every value has been
@@ -144,7 +154,12 @@ const envSchema = z
       .string()
       .default('true')
       .transform((v) => v !== 'false'),
-    /** Secret keying the recovery-code hashes (defaults to SESSION_SECRET for existing codes). */
+    /**
+     * Secret keying new recovery-code hashes (stored with an "r2:" prefix); without it, hashes are
+     * keyed with SESSION_SECRET. Both forms keep verifying, so it can be set at any time; rotating
+     * SESSION_SECRET then no longer invalidates the codes created under it. Changing this secret
+     * invalidates the codes created under it.
+     */
     MFA_RECOVERY_SECRET: z.string().min(32).optional(),
     /** Prometheus metrics at GET /metrics (bearer METRICS_TOKEN; without a token: loopback only). */
     METRICS_ENABLED: z
@@ -152,10 +167,16 @@ const envSchema = z
       .default('true')
       .transform((v) => v !== 'false'),
     METRICS_TOKEN: z.string().min(24).optional(),
-    /** Antivirus for uploads: "none" (SKIPPED), "sandbox" (EICAR test signature), "clamd" (ClamAV daemon). */
+    /**
+     * Antivirus for uploads, scanned before storage and fail closed (no verdict → 503
+     * SCAN_UNAVAILABLE): "none" (stored unscanned, SKIPPED), "sandbox" (SIMULATION that only
+     * detects the EICAR test file — not protection), "clamd" (ClamAV daemon, INSTREAM over TCP;
+     * its StreamMaxLength must be ≥ MAX_UPLOAD_MB).
+     */
     ANTIVIRUS_PROVIDER: z.enum(['none', 'sandbox', 'clamd']).default('sandbox'),
     CLAMD_HOST: z.string().default('127.0.0.1'),
     CLAMD_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+    /** Deadline of one clamd scan (connection, upload of the file and verdict). */
     ANTIVIRUS_TIMEOUT_MS: z.coerce.number().int().min(500).max(120_000).default(10_000),
     /** Days a deleted document's blob is kept when it has no later retentionUntil (0 = next purge run). */
     DOCUMENT_PURGE_GRACE_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
