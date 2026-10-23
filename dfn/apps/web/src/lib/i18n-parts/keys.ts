@@ -208,6 +208,9 @@ export const keysAdminPart = definePart(
         bound: 'Codes encore liés à SESSION_SECRET',
         boundHint:
           'codes non utilisés créés avant MFA_RECOVERY_SECRET : ils deviendront invalides si SESSION_SECRET change',
+        orphaned: 'Codes créés sous un MFA_RECOVERY_SECRET absent',
+        orphanedHint:
+          'ces codes non utilisés sont refusés tant que le secret n’est pas rétabli : restaurer la valeur de MFA_RECOVERY_SECRET depuis le coffre de secrets — une nouvelle valeur masquerait l’alerte sans les rendre valides (ne pas demander aux utilisateurs de régénérer)',
       },
     },
   },
@@ -408,6 +411,9 @@ export const keysAdminPart = definePart(
         bound: 'Codes still bound to SESSION_SECRET',
         boundHint:
           'unused codes created before MFA_RECOVERY_SECRET: they become invalid if SESSION_SECRET changes',
+        orphaned: 'Codes created under a missing MFA_RECOVERY_SECRET',
+        orphanedHint:
+          'these unused codes are rejected until the secret is restored: restore the value of MFA_RECOVERY_SECRET from the secrets vault — a new value would hide this alert without making them valid (do not ask users to regenerate)',
       },
     },
   },

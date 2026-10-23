@@ -102,6 +102,21 @@ test('buyer creates a protected transaction, seller joins, funding is simulated 
   await seller.goto(txUrl);
   const milestone1 = seller.getByRole('listitem').filter({ hasText: 'Embarquement' }).first();
   await milestone1.getByRole('button', { name: /Ajouter un document|Add a document/ }).click();
+  // The EICAR test file (assembled in two halves) is refused by the sandbox scanner, and the
+  // refusal says that scanner is a simulation.
+  const eicar = ['X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR', '-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'].join('');
+  await seller.getByLabel(/Fichier|File/).setInputFiles({
+    name: 'eicar.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from(`%PDF-1.4\n% ${eicar}\n%%EOF\n`, 'latin1'),
+  });
+  await seller
+    .getByRole('button', { name: /Téléverser|Upload/ })
+    .last()
+    .click();
+  await expect(
+    seller.getByRole('dialog').getByText(/antivirus simulé du bac à sable|simulated sandbox antivirus/),
+  ).toBeVisible();
   await seller.getByLabel(/Fichier|File/).setInputFiles({
     name: 'bol.pdf',
     mimeType: 'application/pdf',

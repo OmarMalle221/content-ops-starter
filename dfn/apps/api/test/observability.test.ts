@@ -1135,6 +1135,8 @@ describe('observability (metrics, gauges, traces)', () => {
       'DfnWebhookExhausted',
       'DfnReviewSlaBreached',
       'DfnDocumentInfected',
+      'DfnDocumentScanUnavailable',
+      'DfnDocumentScanSizeLimit',
       'DfnReconciliationDifferences',
       'DfnMetricsCollectErrors',
     ]) {

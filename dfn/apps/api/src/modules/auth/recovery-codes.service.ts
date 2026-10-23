@@ -1,4 +1,4 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import type { Request } from 'express';
 import type { PrismaTransactionClient } from '@dfn/database';
@@ -20,6 +20,21 @@ export function generateRecoveryCode(): string {
   return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 10)}`;
 }
 
+/**
+ * Unused codes created under MFA_RECOVERY_SECRET while that secret is no longer set: they can
+ * never verify (each try answers RECOVERY_CODE_INVALID and counts toward the lockout) until the
+ * secret is restored. Always 0 while the secret is set.
+ */
+export function orphanedRecoveryCodeCount(
+  prisma: Pick<PrismaService, 'mfaRecoveryCode'>,
+  env: Pick<Env, 'MFA_RECOVERY_SECRET'>,
+): Promise<number> {
+  if (env.MFA_RECOVERY_SECRET) return Promise.resolve(0);
+  return prisma.mfaRecoveryCode.count({
+    where: { usedAt: null, codeHash: { startsWith: RECOVERY_HASH_V2_PREFIX } },
+  });
+}
+
 /** Prefix of hashes keyed with MFA_RECOVERY_SECRET (unprefixed hashes are keyed with SESSION_SECRET). */
 export const RECOVERY_HASH_V2_PREFIX = 'r2:';
 
@@ -35,13 +50,30 @@ export const RECOVERY_HASH_V2_PREFIX = 'r2:';
  * single compare-and-burn statement.
  */
 @Injectable()
-export class RecoveryCodesService {
+export class RecoveryCodesService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(RecoveryCodesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
+
+  /** Reports orphaned codes at start (a lost or forgotten MFA_RECOVERY_SECRET), never blocks it. */
+  async onApplicationBootstrap(): Promise<void> {
+    try {
+      const orphaned = await orphanedRecoveryCodeCount(this.prisma, this.env);
+      if (orphaned > 0) {
+        this.logger.error(
+          `${orphaned} unused MFA recovery code(s) were created under MFA_RECOVERY_SECRET, which is not set: ` +
+            'they are rejected until the vaulted secret is restored (KEY_ROTATION.md §6)',
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`recovery code check skipped (${err instanceof Error ? err.message : 'error'})`);
+    }
+  }
 
   /** Historical form: HMAC keyed with SESSION_SECRET, no prefix. */
   private hashV1(userId: string, canonicalCode: string): string {

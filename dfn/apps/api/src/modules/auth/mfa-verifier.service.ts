@@ -12,7 +12,7 @@ import {
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
-import { KeyRingError, keyRingFor } from '../../common/keyring';
+import { KeyUnavailableError, keyRingFor } from '../../common/keyring';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
@@ -157,8 +157,9 @@ export class MfaVerifierService {
       secret = ring.openString(KeyPurpose.MFA, user.mfaSecretEnc);
     } catch (err) {
       // The secret cannot be opened — sealed with a key the ring no longer has (retired early,
-      // legacy decryption switched off: KeyRingError), or not authenticating under the key its id
-      // names (a wrong key value under the right id, a corrupted row: DECRYPT_FAILED). The code
+      // legacy decryption switched off: KeyUnavailableError and its reason), or not authenticating
+      // under the key its id names (a wrong key value under the right id, a corrupted row:
+      // DECRYPT_FAILED). The code
       // was not checked, so this is neither a wrong guess nor a 500: the account cannot
       // authenticate until the key is restored (KEY_ROTATION.md §7); assertFreshProof audits it.
       throw new DomainError(
@@ -168,7 +169,7 @@ export class MfaVerifierService {
         {
           purpose: KeyPurpose.MFA,
           keyId: ring.keyIdOfString(user.mfaSecretEnc),
-          reason: err instanceof KeyRingError ? 'KEY_NOT_FOUND' : 'DECRYPT_FAILED',
+          reason: err instanceof KeyUnavailableError ? err.reason : 'DECRYPT_FAILED',
         },
       );
     }

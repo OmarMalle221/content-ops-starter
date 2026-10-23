@@ -128,8 +128,9 @@ export class DocumentStorageService {
 
   /**
    * Reads and opens a blob, trying the recorded key id first and then the id named in the blob
-   * header. Throws KEY_NOT_FOUND (503) when the only candidate key is missing from the ring, and
-   * an audited integrity error (409) when the blob does not authenticate or its hash differs.
+   * header. Throws KEY_NOT_FOUND (503) when the only candidate key — or the key the blob header
+   * names — is missing from the ring, and an audited integrity error (409) when the blob does not
+   * authenticate under the keys available or its hash differs.
    */
   async openVerified(
     doc: StoredDocumentRef,
@@ -172,20 +173,40 @@ export class DocumentStorageService {
       }
       return { plaintext, keyId, sealed };
     }
-    if (missingKey && !decryptFailed) {
+    // KEY_NOT_FOUND when the only candidate key is missing, and also when the blob header names
+    // another key, absent from the ring: the row and the blob disagree, as after a database
+    // restored to before a managed key re-sealed the blob (ADR-0014). That header key is the one
+    // reported. A blob without a key-ring header reads as "legacy": it never counts as such a
+    // header, so a corrupted or truncated blob stays an integrity failure even once legacy
+    // decryption is retired.
+    const headerKeyMissing =
+      fromHeader !== recorded &&
+      fromHeader !== LEGACY_KEY_ID &&
+      !this.ring.hasKey(KeyPurpose.DOCUMENTS, fromHeader);
+    if (headerKeyMissing || (missingKey && !decryptFailed)) {
+      const keyId = headerKeyMissing ? fromHeader : missingKey!;
       await this.auditFailure({
         actorUserId,
         organizationId: doc.organizationId,
         action: 'document.key_unavailable',
         entityType: 'Document',
         entityId: doc.id,
-        metadata: { keyId: missingKey, storageDriver: doc.storageDriver },
+        metadata: {
+          keyId,
+          storageDriver: doc.storageDriver,
+          ...(keyId !== recorded ? { recordedKeyId: recorded } : {}),
+        },
       });
       throw new DomainError(
         ErrorCode.KEY_NOT_FOUND,
         'The encryption key of this document is not configured',
         HttpStatus.SERVICE_UNAVAILABLE,
-        { documentId: doc.id, keyId: missingKey },
+        {
+          documentId: doc.id,
+          purpose: KeyPurpose.DOCUMENTS,
+          keyId,
+          reason: keyId === LEGACY_KEY_ID ? 'LEGACY_DISABLED' : 'KEY_NOT_IN_RING',
+        },
       );
     }
     throw await this.integrityFailure(doc, 'DECRYPT_FAILED', actorUserId, recorded);

@@ -436,6 +436,43 @@ describe('documents on the encrypted blob store', () => {
     ).toBe(1);
   });
 
+  it('names the key of the blob when the row and the blob disagree (database restored to before a key)', async () => {
+    // The row still says "legacy" (restored from a dump older than the key) while the blob was
+    // re-sealed since with a key the ring no longer has: a missing key, not corruption.
+    const newer = new KeyRing(LEGACY_KEY, `documents:k9:${'c3'.repeat(32)}`);
+    const { sealed } = newer.sealBuffer(KeyPurpose.DOCUMENTS, PDF_BYTES);
+    const doc = await upload();
+    writeFileSync(join(dir, doc.storageKey), sealed);
+    await ctx.prisma.document.update({ where: { id: doc.id }, data: { encryptionKeyId: null } });
+    const res = await owner.get(`/v1/documents/${doc.id}/download`);
+    expect(res.status, JSON.stringify(res.body)).toBe(503);
+    expect(res.body).toMatchObject({
+      code: 'KEY_NOT_FOUND',
+      details: { documentId: doc.id, purpose: 'documents', keyId: 'k9', reason: 'KEY_NOT_IN_RING' },
+    });
+    const audit = await ctx.prisma.auditLog.findFirstOrThrow({
+      where: { action: 'document.key_unavailable', entityId: doc.id },
+    });
+    expect(audit.metadata).toMatchObject({ keyId: 'k9', recordedKeyId: 'legacy' });
+    expect(
+      await ctx.prisma.auditLog.count({ where: { action: 'document.integrity_failed', entityId: doc.id } }),
+    ).toBe(0);
+
+    // Control: a blob whose header names a loaded key but does not authenticate stays corruption.
+    const loaded = new KeyRing(LEGACY_KEY, `documents:d1:${D1}`).sealBuffer(KeyPurpose.DOCUMENTS, PDF_BYTES);
+    const tampered = Buffer.from(loaded.sealed);
+    tampered[tampered.length - 1] ^= 0xff;
+    const second = await upload();
+    writeFileSync(join(dir, second.storageKey), tampered);
+    await ctx.prisma.document.update({ where: { id: second.id }, data: { encryptionKeyId: null } });
+    const corrupt = await owner.get(`/v1/documents/${second.id}/download`);
+    expect(corrupt.status).toBe(409);
+    expect(corrupt.body).toMatchObject({
+      code: 'DOCUMENT_INTEGRITY_FAILED',
+      details: { reason: 'DECRYPT_FAILED' },
+    });
+  });
+
   it('repairs the key id of a row left behind by an interrupted rotation', async () => {
     const doc = await upload();
     // Blob already re-sealed with d1, row still says "legacy" (crash between swap and update).
@@ -751,6 +788,73 @@ class MemoryS3Store implements BlobStore {
     };
   }
 }
+
+describe('documents once the legacy key is retired (ENCRYPTION_LEGACY_DECRYPT=false)', () => {
+  let ctx: TestContext;
+  let dir: string;
+  let owner: Client;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'dfn-storage-strict-'));
+    ctx = await bootWith({
+      STORAGE_DIR: dir,
+      ENCRYPTION_KEYRING: `documents:d1:${D1}`,
+      ENCRYPTION_LEGACY_DECRYPT: 'false',
+    });
+    await resetDatabase(ctx.prisma);
+    await ctx.app.get(ReferenceDataService).ensure();
+    owner = (await registerUser(ctx, `strict-${randomUUID().slice(0, 8)}@example.com`)).client;
+  });
+  afterAll(async () => {
+    await ctx.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function upload() {
+    const res = await owner.upload(
+      '/v1/documents',
+      { kind: 'INVOICE' },
+      { name: 'facture.pdf', buffer: PDF_BYTES, type: 'application/pdf' },
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const doc = await ctx.prisma.document.findUniqueOrThrow({ where: { id: res.body.id } });
+    expect(doc.encryptionKeyId).toBe('d1');
+    return doc;
+  }
+
+  it('reports a corrupted or headerless blob as corruption, never as a missing legacy key', async () => {
+    for (const bytes of [Buffer.from('not a sealed blob at all, no key ring header'), Buffer.alloc(0)]) {
+      const doc = await upload();
+      writeFileSync(join(dir, doc.storageKey), bytes);
+      const res = await owner.get(`/v1/documents/${doc.id}/download`);
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body).toMatchObject({
+        code: 'DOCUMENT_INTEGRITY_FAILED',
+        details: { reason: 'DECRYPT_FAILED' },
+      });
+      expect(
+        await ctx.prisma.auditLog.count({ where: { action: 'document.key_unavailable', entityId: doc.id } }),
+      ).toBe(0);
+    }
+  });
+
+  it('names the key of the blob header when it and the recorded key are both missing', async () => {
+    const doc = await upload();
+    const lost = new KeyRing(LEGACY_KEY, `documents:k9:${'c3'.repeat(32)}`).sealBuffer(
+      KeyPurpose.DOCUMENTS,
+      PDF_BYTES,
+    );
+    writeFileSync(join(dir, doc.storageKey), lost.sealed);
+    await ctx.prisma.document.update({ where: { id: doc.id }, data: { encryptionKeyId: null } });
+    const res = await owner.get(`/v1/documents/${doc.id}/download`);
+    expect(res.status, JSON.stringify(res.body)).toBe(503);
+    expect(res.body).toMatchObject({ code: 'KEY_NOT_FOUND', details: { keyId: 'k9' } });
+    const audit = await ctx.prisma.auditLog.findFirstOrThrow({
+      where: { action: 'document.key_unavailable', entityId: doc.id },
+    });
+    expect(audit.metadata).toMatchObject({ keyId: 'k9', recordedKeyId: 'legacy' });
+  });
+});
 
 describe('STORAGE_MIGRATION (local → S3)', () => {
   let ctx: TestContext;

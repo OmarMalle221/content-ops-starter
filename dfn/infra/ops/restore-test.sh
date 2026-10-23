@@ -14,7 +14,8 @@
 #   --allow-differences  ledger reconciliation differences are reported but do not fail the drill
 #   --allow-empty        with --dump: a backup without users or ledger rows passes (fresh database)
 #
-# Checks: 1) backup.sh + restore.sh succeed (checksum, decryption, pg_restore in one transaction)
+# Checks: 1) backup.sh + restore.sh succeed (checksum, decryption, pg_restore in one transaction),
+#            in place too: over a newer schema, and refusing to drop a managed key newer than the dump
 #         2) prisma migrate status: the restored schema is up to date with the code's migrations
 #         3) row counts per key table: restored == source (or > 0 for the ledger when --dump)
 #         4) ledger: LedgerService.reconcile() on the restored database — 0 unbalanced transaction,
@@ -128,6 +129,96 @@ restore_s="$(elapsed "$t")"
 bash "$DFN_OPS_DIR/restore.sh" "$DUMP" --target-url "$SCRATCH_URL" --yes
 [[ "$(count_rows "$SCRATCH_URL" DrillNewer 2>/dev/null || echo error)" == absent ]] ||
   fail "in-place restore kept a table the backup does not contain"
+
+# In place over a database holding managed data keys the backup lacks (generated after the dump):
+# refused by default — it would destroy the only copy of each key —, carried over with
+# --keep-newer-keys (ACTIVE demoted to DECRYPT_ONLY; every document with a blob recorded under the
+# newest carried-over documents key, for a full re-read by the key rotation), dropped with
+# --discard-newer-keys. These checks run on a second backup of the scratch database that holds at
+# least one encrypted document (so the re-read check cannot pass on an empty table); the original
+# backup is restored afterwards, so the checks below compare it with the source as before.
+drill_suffix="$(date -u +%H%M%S)"
+scratch_sql() {
+  (
+    parse_pg_url "$SCRATCH_URL"
+    psql -X -At -v ON_ERROR_STOP=1 -c "$1"
+  )
+}
+key_state() {
+  scratch_sql "SELECT coalesce(max(status::text || CASE WHEN \"deactivatedAt\" IS NULL THEN '' ELSE '+deactivated' END), 'absent')
+    FROM \"$SCHEMA\".\"EncryptionKey\" WHERE \"keyId\" = '$1'"
+}
+if [[ "$(count_rows "$SCRATCH_URL" EncryptionKey)" != absent ]]; then
+  # One encrypted document with a blob (fields only: no blob store is involved), when the backup has
+  # an organisation member to own it (a fresh database may not).
+  drill_document="$(scratch_sql "INSERT INTO \"$SCHEMA\".\"Document\" (id, \"organizationId\", \"uploadedByUserId\", title, \"fileName\",
+      \"mimeType\", \"sizeBytes\", sha256, \"storageKey\", encrypted)
+    SELECT gen_random_uuid(), m.\"organizationId\", m.\"userId\", 'drill', 'drill.pdf', 'application/pdf', 1,
+      repeat('0', 64), 'drill/' || gen_random_uuid(), true
+    FROM \"$SCHEMA\".\"OrganizationMember\" m LIMIT 1 RETURNING id")"
+  mkdir -p "$WORK/backups"
+  keys_dump="$WORK/backups/drill-keys.dump"
+  (
+    parse_pg_url "$SCRATCH_URL"
+    pg_dump --format=custom --file="$keys_dump" "$PGDATABASE"
+  )
+  # A purpose without an ACTIVE key in the backup takes an ACTIVE drill key (the demotion is then
+  # observable); the documents purpose takes two DECRYPT_ONLY keys, the newer one must be used.
+  free_purpose="$(scratch_sql "SELECT p FROM unnest(ARRAY['webhooks','beneficiaries','mfa']) p
+    WHERE NOT EXISTS (SELECT 1 FROM \"$SCHEMA\".\"EncryptionKey\" k WHERE k.purpose = p AND k.status = 'ACTIVE')
+    ORDER BY 1 LIMIT 1")"
+  active_key="kms-drill-a$drill_suffix"
+  older_documents_key="kms-drill-o$drill_suffix"
+  documents_key="kms-drill-d$drill_suffix"
+  insert_key() {
+    scratch_sql "INSERT INTO \"$SCHEMA\".\"EncryptionKey\" (id, purpose, \"keyId\", status, \"wrappedKey\",
+      \"kmsProvider\", \"kmsKeyRef\", \"createdAt\", \"updatedAt\") VALUES (gen_random_uuid(), '$1', '$2', '$3',
+      '\\x00', 'local', 'drill', now() - interval '$4 minutes', now())" >/dev/null
+  }
+  [[ -n "$free_purpose" ]] && insert_key "$free_purpose" "$active_key" ACTIVE 0
+  insert_key documents "$older_documents_key" DECRYPT_ONLY 60
+  insert_key documents "$documents_key" DECRYPT_ONLY 0
+  scratch_sql "CREATE TABLE \"$SCHEMA\".\"DrillSentinel\" (id int)" >/dev/null
+
+  if bash "$DFN_OPS_DIR/restore.sh" "$keys_dump" --target-url "$SCRATCH_URL" --yes 2>"$WORK/keys-refused.txt"; then
+    fail "in-place restore dropped managed data keys the backup does not contain"
+  elif ! grep -q "$documents_key" "$WORK/keys-refused.txt" || [[ "$(count_rows "$SCRATCH_URL" DrillSentinel)" == absent ]] ||
+    [[ -n "$free_purpose" && "$(key_state "$active_key")" != ACTIVE ]]; then
+    fail "refused restore did not name the managed keys or left the database changed"
+  else
+    log "ok   in-place restore refused over managed keys newer than the backup"
+  fi
+
+  bash "$DFN_OPS_DIR/restore.sh" "$keys_dump" --target-url "$SCRATCH_URL" --yes --keep-newer-keys
+  [[ "$(count_rows "$SCRATCH_URL" DrillSentinel)" == absent ]] || fail "--keep-newer-keys did not restore the backup"
+  for key in "$documents_key" "$older_documents_key"; do
+    [[ "$(key_state "$key")" == DECRYPT_ONLY+deactivated ]] ||
+      fail "--keep-newer-keys did not carry $key over as DECRYPT_ONLY"
+  done
+  [[ -z "$free_purpose" || "$(key_state "$active_key")" == DECRYPT_ONLY+deactivated ]] ||
+    fail "--keep-newer-keys did not demote the ACTIVE key to DECRYPT_ONLY"
+  with_blob="$(scratch_sql "SELECT count(*) FROM \"$SCHEMA\".\"Document\" WHERE encrypted AND \"blobPurgedAt\" IS NULL")"
+  marked="$(scratch_sql "SELECT count(*) FROM \"$SCHEMA\".\"Document\" WHERE encrypted AND \"blobPurgedAt\" IS NULL
+    AND \"encryptionKeyId\" = '$documents_key'")"
+  if [[ "$with_blob" == 0 && -z "$drill_document" ]]; then
+    log "skip full re-read check (no organisation member in the backup to own a drill document)"
+  elif [[ "$with_blob" == 0 ]]; then
+    fail "the drill document is missing from its backup: the full re-read cannot be checked"
+  elif [[ "$marked" != "$with_blob" ]]; then
+    fail "--keep-newer-keys left $((with_blob - marked)) document(s) out of the full re-read (newest documents key)"
+  else
+    log "ok   --keep-newer-keys: keys carried over as DECRYPT_ONLY, $marked document(s) recorded under the newest documents key"
+  fi
+
+  bash "$DFN_OPS_DIR/restore.sh" "$keys_dump" --target-url "$SCRATCH_URL" --yes --discard-newer-keys
+  for key in "$documents_key" "$older_documents_key" "$active_key"; do
+    [[ "$(key_state "$key")" == absent ]] || fail "--discard-newer-keys kept $key"
+  done
+  # Back to the original backup for the checks below (no newer key left: no flag needed).
+  bash "$DFN_OPS_DIR/restore.sh" "$DUMP" --target-url "$SCRATCH_URL" --yes
+else
+  log "skip managed-key restore checks (backup older than phase 7: no EncryptionKey table)"
+fi
 
 # ── 3. Prisma migration status of the restored schema ───────────────────────
 t="$(now_ms)"

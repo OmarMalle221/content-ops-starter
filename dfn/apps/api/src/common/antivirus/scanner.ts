@@ -23,6 +23,16 @@ export interface Scanner {
   scan(bytes: Buffer): Promise<ScanResult>;
 }
 
+/** Every ScanFailureReason (bounded label values of dfn_document_scans_total). */
+export const SCAN_FAILURE_REASONS = [
+  'UNREACHABLE',
+  'TIMEOUT',
+  'SIZE_LIMIT',
+  'ENGINE_ERROR',
+  'CONNECTION_LOST',
+  'PROTOCOL_ERROR',
+] as const;
+
 export type ScanFailureReason =
   /** Connection refused / host unknown. */
   | 'UNREACHABLE'

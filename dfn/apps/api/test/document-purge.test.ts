@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BlobStoreRegistry,
   LocalBlobStore,
@@ -11,6 +11,7 @@ import {
   rotationTempKey,
   type StorageHealth,
 } from '../src/common/storage';
+import { AuditService } from '../src/modules/audit/audit.service';
 import { DocumentPurgeService, purgeAfter } from '../src/modules/documents/document-purge.service';
 import { MaintenanceService } from '../src/modules/jobs/maintenance.service';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
@@ -338,6 +339,147 @@ describe('deferred, retention-aware purge of deleted documents (DOCUMENT_PURGE)'
       expect(existsSync(item.path)).toBe(false);
       expect((await row(item.doc.id)).blobPurgedAt).toBeInstanceOf(Date);
     }
+  });
+
+  it('completes a purge interrupted between its delete and its stamp, never one whose delete failed', async () => {
+    const past = new Date(Date.now() - 400 * DAY);
+    const crashed = await retainedDoc(past, past, 'crashed');
+    const appliedAnyway = await retainedDoc(past, past, 'delete-reported-failure-but-applied');
+    const failedDelete = await retainedDoc(past, past, 'delete-really-failed');
+    const intents = (id: string) =>
+      ctx.prisma.auditLog.findMany({
+        where: {
+          entityId: id,
+          action: { in: ['document.blob_purge_started', 'document.blob_purge_aborted'] },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+    // Run 1: the blob of `crashed` is destroyed, then the database refuses the stamp (a trigger
+    // stands in for a crash or a failover); the store reports a failure for `appliedAnyway`
+    // although it removed the blob (a timed-out S3 DeleteObject, for instance); the delete of
+    // `failedDelete` really fails (the blob stays).
+    await ctx.prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION dfn_test_refuse_stamp() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.id = '${crashed.doc.id}' AND NEW."blobPurgedAt" IS NOT NULL THEN
+          RAISE EXCEPTION 'connection terminated';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`);
+    await ctx.prisma.$executeRawUnsafe(
+      'CREATE TRIGGER dfn_test_refuse_stamp BEFORE UPDATE ON "Document" FOR EACH ROW EXECUTE FUNCTION dfn_test_refuse_stamp()',
+    );
+    store.onDelete = async (key) => {
+      if (key === appliedAnyway.doc.storageKey) throw new StorageError('delete', 'UNREACHABLE', 'local');
+    };
+    store.failDeleteOn = failedDelete.doc.storageKey;
+    try {
+      const first = await runAt(new Date());
+      expect(first.summary).toMatchObject({ scanned: 3, purged: 1, failed: 2, remaining: 2 });
+    } finally {
+      await ctx.prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS dfn_test_refuse_stamp ON "Document"');
+      await ctx.prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS dfn_test_refuse_stamp()');
+      store.onDelete = null;
+      store.failDeleteOn = null;
+    }
+    // A delete reported failed but applied is a purge like any other.
+    expect(existsSync(appliedAnyway.path)).toBe(false);
+    expect((await row(appliedAnyway.doc.id)).blobPurgedAt).toBeInstanceOf(Date);
+    expect((await intents(appliedAnyway.doc.id)).map((a) => a.action)).toEqual([
+      'document.blob_purge_started',
+    ]);
+    // The crashed one: blob gone, row not stamped, intent bound to its location.
+    expect(existsSync(crashed.path)).toBe(false);
+    expect((await row(crashed.doc.id)).blobPurgedAt).toBeNull();
+    const crashedIntents = await intents(crashed.doc.id);
+    expect(crashedIntents.map((a) => a.action)).toEqual(['document.blob_purge_started']);
+    expect(crashedIntents[0]!.metadata).toMatchObject({
+      storageDriver: 'local',
+      storageKey: crashed.doc.storageKey,
+    });
+    // The failed delete withdrew its intent; its blob is still there.
+    expect(existsSync(failedDelete.path)).toBe(true);
+    expect((await intents(failedDelete.doc.id)).map((a) => a.action)).toEqual([
+      'document.blob_purge_started',
+      'document.blob_purge_aborted',
+    ]);
+
+    // Then the blob of `failedDelete` disappears for another reason (a wrong volume, say): it is
+    // never assumed destroyed by the purge. The interrupted purge is completed and audited.
+    rmSync(failedDelete.path);
+    const second = await runAt(new Date());
+    expect(second.summary).toMatchObject({
+      purged: 1,
+      failed: 1,
+      errors: { STORAGE_NOT_FOUND: 1 },
+      remaining: 1,
+    });
+    expect((await row(crashed.doc.id)).blobPurgedAt).toBeInstanceOf(Date);
+    expect((await row(failedDelete.doc.id)).blobPurgedAt).toBeNull();
+    const purgedIds = (
+      await ctx.prisma.auditLog.findMany({ where: { action: 'document.blobs_purged' } })
+    ).flatMap((a) => (a.metadata as { documentIds: string[] }).documentIds);
+    expect(purgedIds.sort()).toEqual([appliedAnyway.doc.id, crashed.doc.id].sort());
+    const listed = await owner.get('/v1/documents/deleted');
+    const state = (id: string) =>
+      listed.body.find((d: { id: string; purge: { state: string } }) => d.id === id)?.purge.state;
+    expect(state(crashed.doc.id)).toBe('PURGED');
+    expect(state(failedDelete.doc.id)).toBe('RETAINED');
+
+    // An intent recorded for another location (another driver, or another key on the same
+    // driver: the document moved since) proves nothing.
+    const movedDriver = await retainedDoc(past, past, 'moved-driver-after-intent');
+    const movedKey = await retainedDoc(past, past, 'moved-key-after-intent');
+    for (const [item, location] of [
+      [movedDriver, { storageDriver: 's3', storageKey: movedDriver.doc.storageKey }],
+      [movedKey, { storageDriver: 'local', storageKey: `${movedKey.doc.storageKey}.old` }],
+    ] as const) {
+      await ctx.prisma.auditLog.create({
+        data: {
+          action: 'document.blob_purge_started',
+          entityType: 'Document',
+          entityId: item.doc.id,
+          metadata: location,
+        },
+      });
+      rmSync(item.path);
+    }
+    const third = await runAt(new Date());
+    expect(third.summary).toMatchObject({ purged: 0, failed: 3, errors: { STORAGE_NOT_FOUND: 3 } });
+    expect((await row(movedDriver.doc.id)).blobPurgedAt).toBeNull();
+    expect((await row(movedKey.doc.id)).blobPurgedAt).toBeNull();
+  });
+
+  it('never deletes a blob whose purge intent could not be recorded', async () => {
+    const past = new Date(Date.now() - 400 * DAY);
+    const item = await retainedDoc(past, past, 'intent-refused');
+    const audit = ctx.app.get(AuditService);
+    const original = audit.log.bind(audit);
+    const spy = vi
+      .spyOn(audit, 'log')
+      .mockImplementation((input, db) =>
+        input.action === 'document.blob_purge_started'
+          ? Promise.reject(new Error('database unavailable'))
+          : original(input, db),
+      );
+    const deletes: string[] = [];
+    store.onDelete = async (key) => {
+      deletes.push(key);
+    };
+    try {
+      const run = await runAt(new Date());
+      expect(run.summary).toMatchObject({ purged: 0, failed: 1, remaining: 1 });
+    } finally {
+      spy.mockRestore();
+      store.onDelete = null;
+    }
+    expect(deletes).not.toContain(item.doc.storageKey);
+    expect(existsSync(item.path)).toBe(true);
+    expect((await row(item.doc.id)).blobPurgedAt).toBeNull();
+    // Once the database takes the intent again, the purge proceeds normally.
+    expect((await runAt(new Date())).summary).toMatchObject({ purged: 1, failed: 0, remaining: 0 });
+    expect(existsSync(item.path)).toBe(false);
   });
 
   it('stamps nothing while the store is unhealthy, nor for a retained blob that is merely missing', async () => {

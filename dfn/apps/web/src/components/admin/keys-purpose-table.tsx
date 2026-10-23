@@ -102,7 +102,12 @@ export interface KeysStatus {
     loadFailures: Array<{ purpose: string; keyId: string; status: string; reason: string }>;
   };
   legacy: { decryptEnabled: boolean; values: number; deletedBlobs: number; safeToDisable: boolean };
-  recoveryCodes: { secret: 'MFA_RECOVERY_SECRET' | 'SESSION_SECRET'; sessionSecretBound: number };
+  recoveryCodes: {
+    secret: 'MFA_RECOVERY_SECRET' | 'SESSION_SECRET';
+    sessionSecretBound: number;
+    /** Unused codes created under an MFA_RECOVERY_SECRET that is no longer set (rejected). */
+    orphanedV2: number;
+  };
   nextActions: string[];
 }
 

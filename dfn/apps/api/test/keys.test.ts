@@ -184,7 +184,11 @@ describe('key rotation (ENCRYPTION_KEY_ROTATION, /v1/admin/keys)', () => {
       deletedBlobs: 0,
       safeToDisable: false,
     });
-    expect(legacyStatus.body.recoveryCodes).toEqual({ secret: 'SESSION_SECRET', sessionSecretBound: 0 });
+    expect(legacyStatus.body.recoveryCodes).toEqual({
+      secret: 'SESSION_SECRET',
+      sessionSecretBound: 0,
+      orphanedV2: 0,
+    });
     for (const p of legacyStatus.body.purposes) {
       expect(p).toMatchObject({ managedKeys: [], legacy: { values: 1, deletedBlobs: 0 }, nextActions: [] });
     }

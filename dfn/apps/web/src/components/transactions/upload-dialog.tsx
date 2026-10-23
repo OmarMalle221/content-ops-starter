@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Upload } from 'lucide-react';
-import { DocumentKind } from '@dfn/shared';
+import { DocumentKind, SANDBOX_SCAN_ENGINE } from '@dfn/shared';
 import { Button, Input, Label, Select } from '@dfn/ui';
 import { ClientApiError, localizedApiError } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
@@ -49,11 +49,17 @@ export function UploadDocumentDialog({
           { method: 'POST', body: fd, credentials: 'include' },
         );
         const body = await res.json().catch(() => ({}));
-        // Antivirus refusals (DOCUMENT_INFECTED, SCAN_UNAVAILABLE) in the interface language.
-        if (!res.ok)
+        // Antivirus refusals (DOCUMENT_INFECTED, SCAN_UNAVAILABLE) in the interface language. A
+        // verdict of the sandbox scanner says it is a simulation: never presented as real protection.
+        if (!res.ok) {
+          const simulated =
+            body?.code === 'DOCUMENT_INFECTED' && body?.details?.engine === SANDBOX_SCAN_ENGINE;
           throw new Error(
-            localizedApiError(new ClientApiError(res.status, body), t, 'documentStorage.errors'),
+            simulated
+              ? t('documentStorage.errors.DOCUMENT_INFECTED_SIMULATED')
+              : localizedApiError(new ClientApiError(res.status, body), t, 'documentStorage.errors'),
           );
+        }
         setFile(null);
         setTitle('');
         onUploaded?.(body);

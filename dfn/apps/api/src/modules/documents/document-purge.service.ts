@@ -97,7 +97,8 @@ function failureReason(err: unknown): string {
  * that is not CLOSED). Deleting a document only soft-deletes the row: until this job runs, the
  * blob stays available to compliance.
  *
- * Per document: delete the blob (and any leftover key-rotation copy), stamp Document.blobPurgedAt
+ * Per document: record the intent (`document.blob_purge_started`, bound to the blob location), delete
+ * the blob (and any leftover key-rotation copy), stamp Document.blobPurgedAt
  * with a compare-and-set on the blob location (a document the storage migration moved meanwhile
  * is left for the next run), then delete once more against a key-rotation swap racing with the
  * purge. A row is stamped only when this job — or a deletion that predates the deferred purge —
@@ -108,8 +109,10 @@ function failureReason(err: unknown): string {
  *    ciphertext, which no job would ever revisit);
  *  - a blob absent from a healthy store is recorded as purged only when the document was deleted
  *    before the purge was deferred (`DocumentStorageService.recordMissingDeletedBlob`, the rule the
- *    rotation and the migration apply); otherwise it is an anomaly counted STORAGE_NOT_FOUND,
- *    retried by every run and visible in `remaining` until an operator resolves it.
+ *    rotation and the migration apply), or when this job's own intent record for that location
+ *    shows a purge interrupted after its delete (crash, database error before the stamp), which
+ *    is then completed; otherwise it is an anomaly counted STORAGE_NOT_FOUND, retried by every
+ *    run and visible in `remaining` until an operator resolves it.
  * Each run also deletes once more the location of the rows purged since the previous run started:
  * a rotation (or migration) replica that wrote its copy after this job's second delete and crashed
  * before its own compare-and-set would otherwise leave that copy behind a purged row for good.
@@ -173,7 +176,7 @@ export class DocumentPurgeService implements OnModuleInit {
       for (const doc of docs) {
         cursor.after = doc.id;
         summary.scanned += 1;
-        const outcome = await this.purgeOne(doc, health);
+        const outcome = await this.purgeOne(doc, health, ctx.runId ?? null);
         page.push({ doc, outcome });
         if (typeof outcome === 'string') summary[outcome] += 1;
         else {
@@ -195,32 +198,72 @@ export class DocumentPurgeService implements OnModuleInit {
   }
 
   /** Purges one blob; never throws (failures are counted and retried by the next run). */
-  private async purgeOne(doc: PurgeCandidate, health: HealthCache): Promise<PurgeOutcome> {
+  private async purgeOne(
+    doc: PurgeCandidate,
+    health: HealthCache,
+    runId: string | null,
+  ): Promise<PurgeOutcome> {
     try {
       const store = await this.healthyStore(doc.storageDriver, health);
       if (!(await store.exists(doc.storageKey))) {
         // Only a deletion older than the deferred purge explains an absent blob: that row is
-        // recorded as purged (`document.blob_missing`), as the rotation and the migration do. Any
-        // other absence is a retained blob that should be there (volume not mounted, wrong bucket,
-        // blobs restored from an older backup): reported, never stamped, retried by the next run.
-        if (!(await this.storage.recordMissingDeletedBlob(doc))) {
+        // recorded as purged (`document.blob_missing`), as the rotation and the migration do. A
+        // purge of this job interrupted between its delete and its stamp (crash, database error)
+        // is recognised by its intent record for this very location and completed. Any other
+        // absence is a retained blob that should be there (volume not mounted, wrong bucket, blobs
+        // restored from an older backup): reported, never stamped, retried by the next run.
+        if (await this.storage.recordMissingDeletedBlob(doc)) {
+          await store.delete(rotationTempKey(doc.id)).catch(() => undefined);
+          return 'missing';
+        }
+        if (!(await this.purgeWasStarted(doc))) {
           throw new StorageError('exists', 'NOT_FOUND', store.driver);
         }
         await store.delete(rotationTempKey(doc.id)).catch(() => undefined);
-        return 'missing';
+        if ((await this.stamp(doc)) === 0) return 'raced';
+        this.logger.warn(`document ${doc.id}: completed a purge interrupted after its blob was deleted`);
+        return 'purged';
       }
-      await store.delete(doc.storageKey);
-      await store.delete(rotationTempKey(doc.id)).catch(() => undefined);
-      const { count } = await this.prisma.document.updateMany({
-        where: {
-          id: doc.id,
-          deletedAt: { not: null },
-          blobPurgedAt: null,
-          storageDriver: doc.storageDriver,
-          storageKey: doc.storageKey,
-        },
-        data: { blobPurgedAt: new Date() },
+      // Intent before destruction: if the stamp below never happens, the next run can tell this
+      // job's own delete from a lost retained blob. Written first — no intent, no delete.
+      await this.audit.log({
+        actorUserId: null,
+        organizationId: doc.organizationId,
+        action: 'document.blob_purge_started',
+        entityType: 'Document',
+        entityId: doc.id,
+        metadata: { storageDriver: doc.storageDriver, storageKey: doc.storageKey, runId },
       });
+      let deleteError: unknown = null;
+      try {
+        await store.delete(doc.storageKey);
+      } catch (err) {
+        deleteError = err;
+      }
+      // A delete reported failed may still have been applied (a timed-out DeleteObject whose first
+      // attempt went through): the store, healthy a moment ago, says whether the blob is gone.
+      if (deleteError && (await store.exists(doc.storageKey).catch(() => true))) {
+        // Still there: withdraw the intent, so that a later absence of this blob (a wrong volume,
+        // a wrong bucket) is never mistaken for this purge's own delete.
+        await this.audit
+          .log({
+            actorUserId: null,
+            organizationId: doc.organizationId,
+            action: 'document.blob_purge_aborted',
+            entityType: 'Document',
+            entityId: doc.id,
+            metadata: { storageDriver: doc.storageDriver, storageKey: doc.storageKey, runId },
+          })
+          .catch(() => undefined);
+        throw deleteError;
+      }
+      if (deleteError) {
+        this.logger.warn(
+          `document ${doc.id}: delete reported ${failureReason(deleteError)} but the blob is gone`,
+        );
+      }
+      await store.delete(rotationTempKey(doc.id)).catch(() => undefined);
+      const count = await this.stamp(doc);
       if (count === 0) return 'raced';
       // A key-rotation swap that raced with the first delete may have written the blob again.
       await store.delete(doc.storageKey).catch((err: unknown) => {
@@ -232,6 +275,43 @@ export class DocumentPurgeService implements OnModuleInit {
       this.logger.warn(`document ${doc.id}: blob not purged (${reason})`);
       return { failed: reason };
     }
+  }
+
+  /** Stamps blobPurgedAt with a compare-and-set on the blob location; returns the rows stamped. */
+  private async stamp(doc: PurgeCandidate): Promise<number> {
+    const { count } = await this.prisma.document.updateMany({
+      where: {
+        id: doc.id,
+        deletedAt: { not: null },
+        blobPurgedAt: null,
+        storageDriver: doc.storageDriver,
+        storageKey: doc.storageKey,
+      },
+      data: { blobPurgedAt: new Date() },
+    });
+    return count;
+  }
+
+  /**
+   * Whether this job's latest word on the document is an intent to destroy the blob at its current
+   * location (and not a withdrawn one): its delete was issued and may have completed.
+   */
+  private async purgeWasStarted(doc: PurgeCandidate): Promise<boolean> {
+    const latest = (action: string) =>
+      this.prisma.auditLog.findFirst({
+        where: { action, entityType: 'Document', entityId: doc.id },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, metadata: true },
+      });
+    const [started, aborted] = await Promise.all([
+      latest('document.blob_purge_started'),
+      latest('document.blob_purge_aborted'),
+    ]);
+    if (!started) return false;
+    // Same millisecond counts as withdrawn: the safe reading.
+    if (aborted && aborted.createdAt >= started.createdAt) return false;
+    const at = started.metadata as { storageDriver?: unknown; storageKey?: unknown } | null;
+    return Boolean(at && at.storageDriver === doc.storageDriver && at.storageKey === doc.storageKey);
   }
 
   /**

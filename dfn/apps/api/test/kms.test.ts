@@ -11,10 +11,18 @@ import {
 } from '@aws-sdk/client-kms';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createPrismaClient } from '@dfn/database';
 import { ErrorCode, KeyPurpose, MANAGED_KEY_ID_PATTERN, StepUpOperation } from '@dfn/shared';
 import { createApp } from '../src/bootstrap';
 import { DomainError } from '../src/common/domain-error';
-import { KeyRing, KeyRingError, LEGACY_KEY_ID, keyRingFor, sealString } from '../src/common/keyring';
+import {
+  KeyRing,
+  KeyRingError,
+  KeyUnavailableError,
+  LEGACY_KEY_ID,
+  keyRingFor,
+  sealString,
+} from '../src/common/keyring';
 import {
   AwsKmsProvider,
   LocalKmsProvider,
@@ -301,6 +309,14 @@ describe('KeyRing managed layer', () => {
     expect(ring.openString(KeyPurpose.MFA, ring.sealString(KeyPurpose.MFA, 'new'))).toBe('new');
     // Without an active key nothing can be sealed (the retired legacy key would make it unreadable).
     expect(() => ring.sealString(KeyPurpose.WEBHOOKS, 'x')).toThrow(/No active key/);
+    let sealError: unknown = null;
+    try {
+      ring.sealString(KeyPurpose.WEBHOOKS, 'x');
+    } catch (err) {
+      sealError = err;
+    }
+    expect(sealError).toBeInstanceOf(KeyUnavailableError);
+    expect(sealError).toMatchObject({ purpose: 'webhooks', keyId: null, reason: 'NO_ACTIVE_KEY' });
     expect(() => ring.sealBuffer(KeyPurpose.DOCUMENTS, Buffer.from('x'))).toThrow(KeyRingError);
 
     // keyRingFor reads the flag (absent = legacy decryption allowed, the phase 6 behaviour).
@@ -1003,10 +1019,29 @@ describe('KMS-managed data keys (KMS_PROVIDER=local)', () => {
       });
       expect(unavailable.metadata).toMatchObject({
         operation: StepUpOperation.LOGIN_MFA,
-        reason: 'KEY_NOT_FOUND',
+        reason: 'LEGACY_DISABLED',
         purpose: 'mfa',
         keyId: 'legacy',
       });
+
+      // A purpose with no active key once the legacy key is retired refuses to seal — as a typed
+      // 503 the client can act on, never a 500, and nothing is stored.
+      const owner = await login(strict, emails.owner);
+      const before = await strict.prisma.beneficiary.count();
+      const refused = await owner.post('/v1/beneficiaries', {
+        name: 'Awa Diop',
+        country: 'SN',
+        currencyCode: 'XOF',
+        method: 'BANK_ACCOUNT',
+        accountIdentifier: 'SN08 SN01 0152 0000 0012 3456 7890',
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(503);
+      expect(refused.body).toMatchObject({
+        code: 'KEY_NOT_FOUND',
+        details: { purpose: 'beneficiaries', keyId: null, reason: 'NO_ACTIVE_KEY' },
+      });
+      expect(JSON.stringify(refused.body)).not.toMatch(/[0-9a-f]{64}/);
+      expect(await strict.prisma.beneficiary.count()).toBe(before);
     } finally {
       warn.mockRestore();
       await strict.close();
@@ -1025,6 +1060,57 @@ describe('KMS-managed data keys (KMS_PROVIDER=local)', () => {
       expect(err?.message).toMatch(/managed data key\(s\) cannot be loaded — refusing to start/);
       expect(err?.message).toMatch(/MASTER_KEY_MISMATCH|KMS_NOT_CONFIGURED/);
       expect(err?.message).not.toContain(master);
+    }
+  });
+});
+
+// ── Lost master key: boot refusal and the documented way back ──────────────────────────────
+
+describe('a managed key the KMS can no longer unwrap', () => {
+  afterAll(async () => {
+    await dropManagedKeys();
+  });
+
+  it('blocks every boot, STAGED keys included; retiring it (KEY_ROTATION.md §7) restores boot', async () => {
+    await dropManagedKeys();
+    const lostMaster = new LocalKmsProvider(randomBytes(32).toString('hex'));
+    const keyId = 'kms-20261023-0a1b2c';
+    const wrapped = await lostMaster.wrap(randomBytes(32), { purpose: 'webhooks', keyId });
+    const db = createPrismaClient({ url: process.env.DATABASE_URL });
+    try {
+      await db.encryptionKey.create({
+        data: {
+          purpose: 'webhooks',
+          keyId,
+          status: 'STAGED',
+          wrappedKey: new Uint8Array(wrapped),
+          kmsProvider: 'local',
+          kmsKeyRef: lostMaster.keyRef,
+          activateAfter: new Date(Date.now() + 3_600_000),
+        },
+      });
+      // Strict on purpose, even for a key that never sealed anything: once it activates, an
+      // instance that cannot unwrap it could not read what the other replicas seal with it.
+      const refused = await createApp({ KMS_PROVIDER: 'none' });
+      const err = (await caught(refused.app.init())) as Error | null;
+      await refused.app.close().catch(() => undefined);
+      expect(err?.message).toMatch(/refusing to start/);
+      expect(err?.message).toContain(`webhooks:${keyId} (STAGED, KMS_NOT_CONFIGURED)`);
+
+      // The documented exit once the loss is recorded: mark the key RETIRED (lossless for a
+      // STAGED key; values sealed with an ACTIVE or DECRYPT_ONLY one would stay unreadable).
+      await db.encryptionKey.update({
+        where: { purpose_keyId: { purpose: 'webhooks', keyId } },
+        data: { status: 'RETIRED', retiredAt: new Date() },
+      });
+      const back = await boot({ KMS_PROVIDER: 'none' });
+      try {
+        expect((await back.http().get('/v1/health')).body).toMatchObject({ status: 'ok' });
+      } finally {
+        await back.close();
+      }
+    } finally {
+      await db.$disconnect();
     }
   });
 });
@@ -1061,7 +1147,11 @@ describe('MFA recovery codes keyed with MFA_RECOVERY_SECRET', () => {
     expect(v2Rows.every((r) => /^r2:[0-9a-f]{64}$/.test(r.codeHash))).toBe(true);
     expect(v2Rows.some((r) => r.codeHash.includes(codesV2[0]!))).toBe(false);
     const status = await ctx.app.get(KeysService).status();
-    expect(status.recoveryCodes).toEqual({ secret: 'MFA_RECOVERY_SECRET', sessionSecretBound: 9 });
+    expect(status.recoveryCodes).toEqual({
+      secret: 'MFA_RECOVERY_SECRET',
+      sessionSecretBound: 9,
+      orphanedV2: 0,
+    });
     await ctx.close();
 
     // SESSION_SECRET rotated: codes created under MFA_RECOVERY_SECRET survive, older ones do not.
@@ -1076,5 +1166,36 @@ describe('MFA recovery codes keyed with MFA_RECOVERY_SECRET', () => {
     expect(await codes.consume(after.user.id, codesV2[1]!.replace(/-/g, '').toLowerCase(), 'test')).toEqual({
       remaining: 8,
     });
+    await ctx.close();
+
+    // MFA_RECOVERY_SECRET lost from the configuration: its codes are rejected — and reported, at
+    // boot and in the console, instead of passing for ordinary wrong codes.
+    const error = vi.spyOn(Logger.prototype, 'error');
+    try {
+      ctx = await boot({ SESSION_SECRET: S2 });
+      expect(
+        error.mock.calls.some((c) =>
+          /8 unused MFA recovery code\(s\).*MFA_RECOVERY_SECRET, which is not set/.test(String(c[0])),
+        ),
+      ).toBe(true);
+      expect(error.mock.calls.every((c) => !String(c[0]).includes(RECOVERY))).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
+    codes = ctx.app.get(RecoveryCodesService);
+    const orphan = await caught(codes.consume(after.user.id, codesV2[2]!, 'test'));
+    expect(orphan).toMatchObject({ code: ErrorCode.RECOVERY_CODE_INVALID });
+    expect((await ctx.app.get(KeysService).status()).recoveryCodes).toEqual({
+      secret: 'SESSION_SECRET',
+      sessionSecretBound: 9, // the first user's older, unprefixed codes
+      orphanedV2: 8,
+    });
+    await ctx.close();
+
+    // Restoring the vaulted secret is the whole remedy.
+    ctx = await boot({ SESSION_SECRET: S2, MFA_RECOVERY_SECRET: RECOVERY });
+    codes = ctx.app.get(RecoveryCodesService);
+    expect(await codes.consume(after.user.id, codesV2[2]!, 'test')).toEqual({ remaining: 7 });
+    expect((await ctx.app.get(KeysService).status()).recoveryCodes).toMatchObject({ orphanedV2: 0 });
   });
 });

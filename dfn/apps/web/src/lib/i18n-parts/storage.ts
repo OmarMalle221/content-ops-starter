@@ -39,6 +39,8 @@ export const documentStoragePart = definePart(
       },
       errors: {
         DOCUMENT_INFECTED: 'L’antivirus a signalé ce fichier : il n’a pas été enregistré.',
+        DOCUMENT_INFECTED_SIMULATED:
+          'L’antivirus simulé du bac à sable (il ne reconnaît que le fichier de test EICAR) a signalé ce fichier : il n’a pas été enregistré. Ce n’est pas une protection antivirus réelle.',
         SCAN_UNAVAILABLE:
           'L’analyse antivirus est indisponible : le fichier n’a pas été enregistré. Réessayez plus tard.',
       },
@@ -78,6 +80,8 @@ export const documentStoragePart = definePart(
       },
       errors: {
         DOCUMENT_INFECTED: 'The antivirus flagged this file: it was not stored.',
+        DOCUMENT_INFECTED_SIMULATED:
+          'The simulated sandbox antivirus (it only recognises the EICAR test file) flagged this file: it was not stored. This is not real antivirus protection.',
         SCAN_UNAVAILABLE:
           'Antivirus scanning is unavailable: the file was not stored. Please try again later.',
       },

@@ -200,6 +200,24 @@ groups:
           summary: 'A document row carries the INFECTED verdict'
           description: '{{ $value }} Document rows are INFECTED. Uploads refuse infected files before storage, so such a row means a later scan or a manual change: the blob must stay unserved.'
           runbook_url: docs/operations/OBSERVABILITY.md#dfndocumentinfected
+      - alert: DfnDocumentScanUnavailable
+        expr: sum(increase(dfn_document_scans_total{job="dfn-api", outcome="UNAVAILABLE", reason!="SIZE_LIMIT"}[15m])) >= 2
+        labels:
+          severity: critical
+          service: dfn-api
+        annotations:
+          summary: 'Uploads are refused: the antivirus gives no verdict'
+          description: '{{ $value }} uploads were refused with 503 SCAN_UNAVAILABLE over 15 minutes (fail closed): no document can be added until the scanner answers again.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfndocumentscanunavailable
+      - alert: DfnDocumentScanSizeLimit
+        expr: sum(increase(dfn_document_scans_total{job="dfn-api", outcome="UNAVAILABLE", reason="SIZE_LIMIT"}[1h])) > 0
+        labels:
+          severity: warning
+          service: dfn-api
+        annotations:
+          summary: 'The antivirus refuses files below the upload limit'
+          description: '{{ $value }} uploads were refused with 503 SCAN_UNAVAILABLE (SIZE_LIMIT) over 1 hour: the engine accepts less than MAX_UPLOAD_MB (clamd StreamMaxLength).'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfndocumentscansizelimit
 
   - name: dfn-encryption-keys
     rules:

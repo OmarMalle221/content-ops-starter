@@ -248,11 +248,24 @@ export default async function AdminKeysPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <p className={data.recoveryCodes.secret === 'MFA_RECOVERY_SECRET' ? '' : 'text-warning'}>
-                {data.recoveryCodes.secret === 'MFA_RECOVERY_SECRET'
-                  ? t('keysAdmin.recovery.secretMfa')
-                  : t('keysAdmin.recovery.secretSession')}
-              </p>
+              {data.recoveryCodes.orphanedV2 > 0 ? (
+                <p className="font-medium text-destructive" role="alert">
+                  {t('keysAdmin.recovery.orphaned')} :{' '}
+                  <span className="font-semibold tabular-nums">
+                    {formatCount(data.recoveryCodes.orphanedV2, locale)}
+                  </span>{' '}
+                  — {t('keysAdmin.recovery.orphanedHint')}
+                </p>
+              ) : null}
+              {/* While codes are orphaned, the advice to set a (new) secret would hide the alert without
+                  bringing the codes back: only restoring the vaulted value does. */}
+              {data.recoveryCodes.orphanedV2 > 0 ? null : (
+                <p className={data.recoveryCodes.secret === 'MFA_RECOVERY_SECRET' ? '' : 'text-warning'}>
+                  {data.recoveryCodes.secret === 'MFA_RECOVERY_SECRET'
+                    ? t('keysAdmin.recovery.secretMfa')
+                    : t('keysAdmin.recovery.secretSession')}
+                </p>
+              )}
               {data.recoveryCodes.secret === 'MFA_RECOVERY_SECRET' ? (
                 <p className="text-muted-foreground">
                   {t('keysAdmin.recovery.bound')} :{' '}

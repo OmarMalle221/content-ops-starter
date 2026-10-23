@@ -137,7 +137,7 @@ Parcours suggérés : `moussa@demo.dfn` → _Portefeuille_ (soldes, filtres, rel
 | `pnpm --filter @dfn/api openapi:export`         | régénère `docs/api/openapi.json`                                                                                                                                                                                      |
 | `pnpm format` / `pnpm format:check`             | Prettier                                                                                                                                                                                                              |
 
-Tests exécutés à la fin du volet technique de la phase 7 : 156 tests unitaires de paquets, 322 tests d'intégration API (tests live S3 et KMS contre moto inclus), 4 tests unitaires du web, 9 parcours Playwright, démarrage de fumée, exercice de restauration et tests de charge — tous verts (rapport de livraison dans `ROADMAP.md` §14).
+Tests exécutés après la revue d'intégration de la phase 7 (2026-10-23) : 156 tests unitaires de paquets, 332 tests d'intégration API (tests live S3 et KMS contre moto inclus), 4 tests unitaires du web, 9 parcours Playwright et exercice de restauration ; démarrage de fumée et tests de charge à la livraison du volet technique — tous verts (rapports dans `ROADMAP.md` §14 et §14.1).
 
 ## Déploiement sandbox
 

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import { SCAN_FAILURE_REASONS } from '../../common/antivirus/scanner';
 import { ENV, type Env } from '../../config/env';
 
 /** Every metric of this process, default Node.js / process metrics included, carries this prefix. */
@@ -18,6 +19,8 @@ export class MetricsService {
   readonly registry = new Registry();
   readonly httpRequestsTotal: Counter<'method' | 'route' | 'status'>;
   readonly httpRequestDuration: Histogram<'method' | 'route'>;
+  /** Antivirus verdicts of uploads (UNAVAILABLE = refused 503, fail closed, with its reason). */
+  readonly documentScans: Counter<'engine' | 'outcome' | 'reason'>;
 
   constructor(@Inject(ENV) env: Env) {
     collectDefaultMetrics({ register: this.registry, prefix: METRICS_PREFIX });
@@ -40,6 +43,34 @@ export class MetricsService {
       buckets: HTTP_DURATION_BUCKETS,
       registers: [this.registry],
     });
+    this.documentScans = new Counter({
+      name: 'dfn_document_scans_total',
+      help: 'Antivirus scans of uploads by engine, outcome (CLEAN, INFECTED, UNAVAILABLE: refused, fail closed; SKIPPED: scanning disabled) and reason (why no verdict; "none" otherwise). The sandbox-eicar engine is a simulation.',
+      labelNames: ['engine', 'outcome', 'reason'],
+      registers: [this.registry],
+    });
+  }
+
+  /** Counts one antivirus outcome; `engine` is null when scanning is disabled. */
+  recordDocumentScan(
+    engine: string | null,
+    outcome: 'CLEAN' | 'INFECTED' | 'UNAVAILABLE' | 'SKIPPED',
+    reason: (typeof SCAN_FAILURE_REASONS)[number] | 'none' = 'none',
+  ) {
+    this.documentScans.inc({ engine: engine ?? 'none', outcome, reason });
+  }
+
+  /** Exposes the series of `engine` at 0, so that rate()/increase() see the first failure. */
+  initDocumentScans(engine: string | null) {
+    const name = engine ?? 'none';
+    if (!engine) {
+      this.documentScans.inc({ engine: name, outcome: 'SKIPPED', reason: 'none' }, 0);
+      return;
+    }
+    for (const outcome of ['CLEAN', 'INFECTED'] as const)
+      this.documentScans.inc({ engine: name, outcome, reason: 'none' }, 0);
+    for (const reason of SCAN_FAILURE_REASONS)
+      this.documentScans.inc({ engine: name, outcome: 'UNAVAILABLE', reason }, 0);
   }
 
   observeHttpRequest(method: string, route: string, statusCode: number, seconds: number) {

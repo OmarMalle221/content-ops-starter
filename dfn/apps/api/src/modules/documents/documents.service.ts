@@ -6,6 +6,7 @@ import {
   DocumentScanStatus,
   ErrorCode,
   Permission,
+  SANDBOX_SCAN_ENGINE,
   TransactionEventType,
   type DocumentMetadataInput,
   type DocumentPurgeDto,
@@ -116,6 +117,8 @@ export class DocumentsService {
         entityId: null,
         metadata: {
           engine: scan.engine,
+          // The sandbox scanner is a simulation: its verdict is never presented as real protection.
+          ...(scan.engine === SANDBOX_SCAN_ENGINE ? { simulated: true } : {}),
           signature: scan.signature,
           kind: meta.kind,
           mimeType: file.mimetype,
@@ -127,7 +130,9 @@ export class DocumentsService {
       });
       throw new DomainError(
         ErrorCode.DOCUMENT_INFECTED,
-        'The antivirus flagged this file: it was not stored',
+        scan.engine === SANDBOX_SCAN_ENGINE
+          ? 'The simulated antivirus of the sandbox (it only recognises the EICAR test file) flagged this file: it was not stored. This is not real malware protection'
+          : 'The antivirus flagged this file: it was not stored',
         HttpStatus.UNPROCESSABLE_ENTITY,
         { engine: scan.engine, signature: scan.signature },
       );

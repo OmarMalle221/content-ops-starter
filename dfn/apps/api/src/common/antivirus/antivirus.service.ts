@@ -1,5 +1,6 @@
-import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { ENV, type Env } from '../../config/env';
+import { MetricsService } from '../../modules/observability/metrics.service';
 import { ClamdScanner } from './clamd-scanner';
 import { SandboxEicarScanner } from './sandbox-scanner';
 import { ScanUnavailableError, type Scanner } from './scanner';
@@ -45,8 +46,12 @@ export class AntivirusService implements OnApplicationBootstrap {
   private readonly logger = new Logger('Antivirus');
   private scanner: Scanner | null;
 
-  constructor(@Inject(ENV) private readonly env: Env) {
+  constructor(
+    @Inject(ENV) private readonly env: Env,
+    @Optional() private readonly metrics?: MetricsService,
+  ) {
     this.scanner = createScanner(env);
+    this.metrics?.initDocumentScans(this.scanner?.engine ?? null);
   }
 
   get provider(): Env['ANTIVIRUS_PROVIDER'] {
@@ -61,9 +66,13 @@ export class AntivirusService implements OnApplicationBootstrap {
   /** Scans `bytes`. Throws ScanUnavailableError (503) when no verdict can be obtained. */
   async scan(bytes: Buffer): Promise<ScanOutcome> {
     const scanner = this.scanner;
-    if (!scanner) return { status: 'SKIPPED', engine: null, scannedAt: null };
+    if (!scanner) {
+      this.metrics?.recordDocumentScan(null, 'SKIPPED');
+      return { status: 'SKIPPED', engine: null, scannedAt: null };
+    }
     try {
       const result = await scanner.scan(bytes);
+      this.metrics?.recordDocumentScan(scanner.engine, result.verdict);
       return {
         status: result.verdict,
         engine: scanner.engine,
@@ -74,6 +83,8 @@ export class AntivirusService implements OnApplicationBootstrap {
       const unavailable =
         err instanceof ScanUnavailableError ? err : new ScanUnavailableError(scanner.engine, 'ENGINE_ERROR');
       this.logger.warn(`scan unavailable (engine=${unavailable.engine}, reason=${unavailable.reason})`);
+      // Alerted on (DfnDocumentScanUnavailable): every upload is refused while no verdict comes.
+      this.metrics?.recordDocumentScan(scanner.engine, 'UNAVAILABLE', unavailable.reason);
       throw unavailable;
     }
   }
@@ -102,5 +113,6 @@ export class AntivirusService implements OnApplicationBootstrap {
   /** Test seam: replaces the scanner (null = scanning disabled). */
   useScanner(scanner: Scanner | null): void {
     this.scanner = scanner;
+    this.metrics?.initDocumentScans(scanner?.engine ?? null);
   }
 }

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  SCAN_FAILURE_REASONS,
   AntivirusService,
   ClamdScanner,
   EICAR_TEST_STRING,
@@ -15,6 +16,7 @@ import {
   sanitizeSignature,
   type ScanFailureReason,
 } from '../src/common/antivirus';
+import { MetricsService } from '../src/modules/observability/metrics.service';
 import { loadEnv } from '../src/config/env';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import { Client, PDF_BYTES, bootTestApp, registerUser, resetDatabase, type TestContext } from './helpers/app';
@@ -304,6 +306,35 @@ describe('AntivirusService', () => {
       loadEnv();
     }
   });
+
+  it('exposes the scan series of the configured engine at 0 from the start (no useScanner)', async () => {
+    try {
+      // The production path: the scanner comes from ANTIVIRUS_PROVIDER at construction. Without
+      // zeroed series, increase() would miss the first refusal after every restart.
+      const clamdEnv = loadEnv({ ANTIVIRUS_PROVIDER: 'clamd', CLAMD_HOST: 'clamav', CLAMD_PORT: '3310' });
+      const clamdMetrics = new MetricsService(clamdEnv);
+      new AntivirusService(clamdEnv, clamdMetrics);
+      const text = await clamdMetrics.render();
+      for (const reason of SCAN_FAILURE_REASONS) {
+        expect(text).toContain(
+          `dfn_document_scans_total{engine="clamd",outcome="UNAVAILABLE",reason="${reason}"} 0`,
+        );
+      }
+      for (const outcome of ['CLEAN', 'INFECTED']) {
+        expect(text).toContain(
+          `dfn_document_scans_total{engine="clamd",outcome="${outcome}",reason="none"} 0`,
+        );
+      }
+      const noneEnv = loadEnv({ ANTIVIRUS_PROVIDER: 'none' });
+      const noneMetrics = new MetricsService(noneEnv);
+      new AntivirusService(noneEnv, noneMetrics);
+      expect(await noneMetrics.render()).toContain(
+        'dfn_document_scans_total{engine="none",outcome="SKIPPED",reason="none"} 0',
+      );
+    } finally {
+      loadEnv();
+    }
+  });
 });
 
 describe('uploads are scanned before anything is stored', () => {
@@ -368,6 +399,9 @@ describe('uploads are scanned before anything is stored', () => {
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('DOCUMENT_INFECTED');
     expect(res.body.details).toEqual({ engine: 'sandbox-eicar', signature: 'Eicar-Test-Signature' });
+    // The sandbox verdict is a simulation, and says so wherever it is shown.
+    expect(res.body.message).toMatch(/simulated/i);
+    expect(res.body.message).toMatch(/EICAR/);
     expect(await ctx.prisma.document.count()).toBe(0);
     expect(blobCount()).toBe(0);
     const audit = await ctx.prisma.auditLog.findFirstOrThrow({
@@ -376,6 +410,7 @@ describe('uploads are scanned before anything is stored', () => {
     expect(audit).toMatchObject({ actorUserId: ownerId, organizationId: orgId, entityId: null });
     expect(audit.metadata).toMatchObject({
       engine: 'sandbox-eicar',
+      simulated: true,
       signature: 'Eicar-Test-Signature',
       kind: 'INVOICE',
       sizeBytes: EICAR_PDF.length,
@@ -388,12 +423,29 @@ describe('uploads are scanned before anything is stored', () => {
 
   it('fails closed with 503 when the scanner is unreachable, and stores nothing', async () => {
     antivirus.useScanner(new ClamdScanner({ host: '127.0.0.1', port: await closedPort(), timeoutMs: 2000 }));
+    const metrics = ctx.app.get(MetricsService);
+    const unavailable = async () =>
+      (await metrics.documentScans.get()).values.find(
+        (v) =>
+          v.labels.engine === 'clamd' &&
+          v.labels.outcome === 'UNAVAILABLE' &&
+          v.labels.reason === 'UNREACHABLE',
+      )?.value;
+    // Exposed at 0 as soon as the engine is configured, so that increase() sees the first refusal.
+    expect(await unavailable()).toBe(0);
     const res = await upload(PDF_BYTES);
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('SCAN_UNAVAILABLE');
     expect(res.body.details).toEqual({ engine: 'clamd', reason: 'UNREACHABLE' });
     expect(await ctx.prisma.document.count()).toBe(0);
     expect(blobCount()).toBe(0);
+    // Counted for DfnDocumentScanUnavailable (alerts.yml).
+    expect(await unavailable()).toBe(1);
+    expect(
+      (await metrics.render()).includes(
+        'dfn_document_scans_total{engine="clamd",outcome="UNAVAILABLE",reason="UNREACHABLE"} 1',
+      ),
+    ).toBe(true);
   });
 
   it('uses the clamd verdict end to end (clean stored, infected refused)', async () => {
@@ -405,6 +457,7 @@ describe('uploads are scanned before anything is stored', () => {
     const infected = await upload(EICAR_PDF);
     expect(infected.status).toBe(422);
     expect(infected.body.details).toEqual({ engine: 'clamd', signature: 'Win.Test.EICAR_HDB-1' });
+    expect(infected.body.message).not.toMatch(/simulat/i);
     expect(await ctx.prisma.document.count()).toBe(1);
     expect(blobCount()).toBe(1);
   });

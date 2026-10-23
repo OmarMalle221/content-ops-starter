@@ -8,7 +8,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
-import { RECOVERY_HASH_V2_PREFIX } from '../auth/recovery-codes.service';
+import { RECOVERY_HASH_V2_PREFIX, orphanedRecoveryCodeCount } from '../auth/recovery-codes.service';
 import { MaintenanceService } from '../jobs/maintenance.service';
 import { KeyLifecycleService, MANAGED_KEY_SELECT, type ManagedKeyRow } from './key-lifecycle.service';
 import { KEY_PURPOSES, KEY_ROTATION_JOB, ROTATION_BATCH, rotationTrigger } from './key-rotation.service';
@@ -187,7 +187,7 @@ export class KeysService {
     ]);
     const purposes = [];
     for (const purpose of KEY_PURPOSES) purposes.push(await this.purposeStatus(purpose, rows, deleted));
-    const [drivers, lastRun, sessionSecretBound] = await Promise.all([
+    const [drivers, lastRun, sessionSecretBound, orphanedV2] = await Promise.all([
       this.prisma.document.groupBy({
         by: ['storageDriver'],
         where: { deletedAt: null },
@@ -201,6 +201,8 @@ export class KeysService {
       this.prisma.mfaRecoveryCode.count({
         where: { usedAt: null, NOT: { codeHash: { startsWith: RECOVERY_HASH_V2_PREFIX } } },
       }),
+      // Unused codes keyed with an MFA_RECOVERY_SECRET this instance no longer has (rejected).
+      orphanedRecoveryCodeCount(this.prisma, this.env),
     ]);
     const pendingRotation = purposes.reduce((n, p) => n + p.pendingRotation, 0);
     const ring = keyRingFor(this.env);
@@ -243,6 +245,7 @@ export class KeysService {
       recoveryCodes: {
         secret: this.env.MFA_RECOVERY_SECRET ? 'MFA_RECOVERY_SECRET' : 'SESSION_SECRET',
         sessionSecretBound,
+        orphanedV2,
       },
       nextActions: pendingRotation > 0 ? [KeyRingAction.ROTATE] : [],
     };

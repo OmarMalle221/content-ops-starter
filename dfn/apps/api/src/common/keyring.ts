@@ -42,6 +42,26 @@ interface KeyEntry {
 
 export class KeyRingError extends Error {}
 
+/** Why a key the ring needs is not available. */
+export type KeyUnavailableReason = 'NO_ACTIVE_KEY' | 'LEGACY_DISABLED' | 'KEY_NOT_IN_RING';
+
+/**
+ * A value cannot be sealed or opened because the key it needs is not in the ring: a purpose with
+ * no active key once the legacy key is retired, a legacy value with legacy decryption disabled,
+ * or a key id the ring does not hold. Configuration, not corruption: the HTTP layer answers it as
+ * 503 KEY_NOT_FOUND with these fields (no key material), wherever it is not handled first.
+ */
+export class KeyUnavailableError extends KeyRingError {
+  constructor(
+    message: string,
+    readonly purpose: KeyPurpose,
+    readonly keyId: string | null,
+    readonly reason: KeyUnavailableReason,
+  ) {
+    super(message);
+  }
+}
+
 /** A KMS-managed data key, already unwrapped, as installed in the ring. */
 export interface ManagedKeyMaterial {
   purpose: KeyPurpose;
@@ -195,11 +215,20 @@ export class KeyRing {
 
   private keyFor(purpose: KeyPurpose, keyId: string): Buffer {
     if (keyId === LEGACY_KEY_ID) {
-      if (!this.legacyDecrypt) throw new KeyRingError(LEGACY_DISABLED);
+      if (!this.legacyDecrypt) {
+        throw new KeyUnavailableError(LEGACY_DISABLED, purpose, LEGACY_KEY_ID, 'LEGACY_DISABLED');
+      }
       return this.legacy;
     }
     const entry = this.entryFor(purpose, keyId);
-    if (!entry) throw new KeyRingError(`Key ${purpose}:${keyId} is not in the key ring`);
+    if (!entry) {
+      throw new KeyUnavailableError(
+        `Key ${purpose}:${keyId} is not in the key ring`,
+        purpose,
+        keyId,
+        'KEY_NOT_IN_RING',
+      );
+    }
     return entry.key;
   }
 
@@ -207,7 +236,12 @@ export class KeyRing {
   private sealingKeyId(purpose: KeyPurpose): string {
     const keyId = this.activeKeyId(purpose);
     if (keyId === LEGACY_KEY_ID && !this.legacyDecrypt) {
-      throw new KeyRingError(`No active key for purpose "${purpose}" and the legacy key is retired`);
+      throw new KeyUnavailableError(
+        `No active key for purpose "${purpose}" and the legacy key is retired`,
+        purpose,
+        null,
+        'NO_ACTIVE_KEY',
+      );
     }
     return keyId;
   }

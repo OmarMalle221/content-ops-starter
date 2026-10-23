@@ -4,6 +4,7 @@ import { ErrorCode, InvalidTransitionError, type ApiErrorBody } from '@dfn/share
 import { LedgerError } from '@dfn/financial-ledger';
 import { Prisma } from '@dfn/database';
 import { DomainError } from '../domain-error';
+import { KeyUnavailableError } from '../keyring';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -28,6 +29,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
         code: exception.code,
         message: exception.message,
         details: exception.details,
+      };
+    }
+    if (exception instanceof KeyUnavailableError) {
+      // A purpose that cannot seal (no active key once the legacy key is retired) or a value whose
+      // key is not configured: an operational outage with an actionable code (KEY_ROTATION.md §5).
+      return {
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        code: ErrorCode.KEY_NOT_FOUND,
+        message: 'The encryption key needed for this operation is not configured',
+        details: { purpose: exception.purpose, keyId: exception.keyId, reason: exception.reason },
       };
     }
     if (exception instanceof InvalidTransitionError) {
