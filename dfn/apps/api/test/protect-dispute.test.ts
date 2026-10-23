@@ -61,7 +61,7 @@ describe('Scenario 2 — dispute freezes releases', () => {
     expect(opened.body.evidences[0].document).toMatchObject({
       id: photo,
       scan: { status: 'CLEAN', engine: 'sandbox-eicar' },
-      downloadUrl: `/api/v1/documents/${photo}/download`,
+      downloadUrl: `/v1/documents/${photo}/download`,
     });
     const disputeId = opened.body.id;
 

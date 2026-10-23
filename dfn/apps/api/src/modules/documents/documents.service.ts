@@ -25,6 +25,7 @@ import { TransactionAccessService } from '../transactions/transaction-access.ser
 import { TransactionEventsService } from '../transactions/transaction-events.service';
 import { HELD_AS_EVIDENCE, HELD_BY_DISPUTE_MESSAGE, purgeAfter } from './document-purge.service';
 import { DocumentStorageService } from './storage.service';
+import { documentDownloadPath } from '../../common/serialize';
 
 const ALLOWED: Record<string, { ext: string[]; magic: (b: Buffer) => boolean }> = {
   'application/pdf': { ext: ['pdf'], magic: (b) => b.subarray(0, 5).toString('latin1') === '%PDF-' },
@@ -250,9 +251,9 @@ export class DocumentsService {
       uploadedByUserId: doc.uploadedByUserId,
       createdAt: doc.createdAt,
       scan,
-      // A document flagged INFECTED is never served: no download link.
-      downloadUrl:
-        scan.status === DocumentScanStatus.INFECTED ? null : `/api/v1/documents/${doc.id}/download`,
+      // A document flagged INFECTED is never served: no download link. API-relative path (the web
+      // prepends its /api proxy prefix; partners resolve it against API_PUBLIC_URL).
+      downloadUrl: scan.status === DocumentScanStatus.INFECTED ? null : documentDownloadPath(doc.id),
     };
   }
 

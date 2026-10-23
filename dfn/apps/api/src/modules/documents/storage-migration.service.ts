@@ -67,7 +67,11 @@ export interface MigrationSummary {
   /** Copied, verified, switched and removed from local (dry run: verified and ready to copy). */
   migrated: number;
   bytes: number;
-  /** Deleted document whose local blob is already gone: nothing to copy (the purge stamps it). */
+  /**
+   * Deleted before the purge was deferred, local blob gone with the deletion: nothing to copy, the
+   * row is recorded as purged (a dry run only counts it). A deleted document whose blob should
+   * have been retained is NOT counted here: it fails with STORAGE_NOT_FOUND like a live one.
+   */
   missing: number;
   /** Changed concurrently (key rotation, purge): the copy was dropped, retried next run. */
   raced: number;
@@ -106,7 +110,8 @@ function failureReason(err: unknown): string {
  * bytes. Bounded, resumable (migrated rows no longer match), scans from a random point; each page
  * is audited per organisation (`document.blobs_migrated`), and each run that started by hand or
  * changed something (`storage.migration_run`). A deleted document whose local blob is gone because
- * it was deleted before the purge was deferred is recorded as purged (nothing left to move).
+ * it was deleted before the purge was deferred is recorded as purged (nothing left to move); a
+ * missing blob that should have been retained is a failure (STORAGE_NOT_FOUND), as for the purge.
  */
 @Injectable()
 export class StorageMigrationService implements OnModuleInit {
@@ -225,7 +230,7 @@ export class StorageMigrationService implements OnModuleInit {
     }
     if (summary.scanned > 0) {
       this.logger.log(
-        `storage migration${dryRun ? ' (dry run)' : ''}: migrated=${summary.migrated} failed=${summary.failed} remaining=${summary.remaining}`,
+        `storage migration${dryRun ? ' (dry run)' : ''}: migrated=${summary.migrated} missing=${summary.missing} raced=${summary.raced} failed=${summary.failed} remaining=${summary.remaining}`,
       );
     }
     return { summary: { ...summary } };
@@ -244,11 +249,17 @@ export class StorageMigrationService implements OnModuleInit {
       try {
         sealed = await source.get(doc.storageKey);
       } catch (err) {
-        if (doc.deletedAt && isStorageError(err, 'NOT_FOUND')) {
+        if (
+          doc.deletedAt &&
+          isStorageError(err, 'NOT_FOUND') &&
+          (await this.storage.deletionTookBlob(doc.id))
+        ) {
           // A deletion older than the deferred purge took its blob: recorded as purged (no longer
-          // pending). Any other missing blob stays pending and reported.
-          if (!dryRun) await this.storage.recordMissingDeletedBlob(doc);
-          return { kind: 'missing' };
+          // pending; a dry run records nothing). Any other missing blob — live document, or a
+          // deletion that promised retention — is the anomaly the purge reports too: counted
+          // `failed` (STORAGE_NOT_FOUND), kept pending and retried next run.
+          if (dryRun || (await this.storage.recordMissingDeletedBlob(doc))) return { kind: 'missing' };
+          return { kind: 'raced' }; // stamped or moved concurrently: no longer pending
         }
         throw err;
       }

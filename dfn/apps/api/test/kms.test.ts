@@ -11,7 +11,6 @@ import {
 } from '@aws-sdk/client-kms';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createPrismaClient } from '@dfn/database';
 import { ErrorCode, KeyPurpose, MANAGED_KEY_ID_PATTERN, StepUpOperation } from '@dfn/shared';
 import { createApp } from '../src/bootstrap';
 import { DomainError } from '../src/common/domain-error';
@@ -26,6 +25,7 @@ import {
 } from '../src/common/kms';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import { ENV, type Env } from '../src/config/env';
+import { MAX_MFA_FAILURES } from '../src/modules/auth/mfa-verifier.service';
 import { RecoveryCodesService } from '../src/modules/auth/recovery-codes.service';
 import { MaintenanceService } from '../src/modules/jobs/maintenance.service';
 import { KeysService } from '../src/modules/keys/keys.service';
@@ -35,6 +35,7 @@ import {
   Client,
   PASSWORD,
   PDF_BYTES,
+  dropManagedKeys,
   promote,
   registerUser,
   resetDatabase,
@@ -319,15 +320,6 @@ describe('KeyRing managed layer', () => {
 // ── Managed keys end to end (local KMS, database dfn_test_kms) ───────────────────────────────
 
 /** Removes managed keys left by an interrupted run: a boot with another master key would refuse them. */
-async function dropManagedKeys() {
-  const db = createPrismaClient({ url: process.env.DATABASE_URL });
-  try {
-    await db.encryptionKey.deleteMany();
-  } finally {
-    await db.$disconnect();
-  }
-}
-
 async function boot(overrides: Partial<Record<keyof Env, string>>): Promise<TestContext> {
   const { app } = await createApp(overrides);
   await app.init();
@@ -374,6 +366,7 @@ describe('KMS-managed data keys (KMS_PROVIDER=local)', () => {
     admin: `kms-admin-${tag}@example.com`,
     admin2: `kms-admin2-${tag}@example.com`,
     admin3: `kms-admin3-${tag}@example.com`,
+    admin4: `kms-admin4-${tag}@example.com`,
     compliance: `kms-compliance-${tag}@example.com`,
     owner: `kms-owner-${tag}@example.com`,
   };
@@ -884,6 +877,52 @@ describe('KMS-managed data keys (KMS_PROVIDER=local)', () => {
     expect(retiredAudit.metadata).toMatchObject({ purpose: 'mfa', keyId: k2, stepUp: 'passkey' });
   });
 
+  it('two concurrent generates: one key is staged, the loser answers 409 with its code intact', async () => {
+    const ctx = a!;
+    const admin4 = await registerUser(ctx, emails.admin4);
+    await promote(ctx, emails.admin4, 'ADMIN');
+    const client = await login(ctx, emails.admin4);
+    const { recoveryCodes } = await enableMfa(client);
+    const unusedCodes = () =>
+      ctx.prisma.mfaRecoveryCode.count({ where: { userId: admin4.user.id, usedAt: null } });
+    // Start from a purpose with no staged key (the step-up test above left one).
+    await ctx.prisma.encryptionKey.deleteMany({ where: { purpose: 'webhooks', status: 'STAGED' } });
+    const managed = ctx.app.get(ManagedKeysService);
+    await managed.refresh();
+    try {
+      // Both pass the pre-check (nothing staged) and the KMS round trip; the purpose lock then
+      // serialises them: the first records its key, the second finds it and is refused BEFORE its
+      // second factor is consumed.
+      const [first, second] = await Promise.all([
+        client.post('/v1/admin/keys/webhooks/generate', { mfaCode: recoveryCodes[0] }),
+        client.post('/v1/admin/keys/webhooks/generate', { mfaCode: recoveryCodes[1] }),
+      ]);
+      const statuses = [first.status, second.status].sort();
+      expect(statuses, JSON.stringify([first.body, second.body])).toEqual([201, 409]);
+      const loser = first.status === 409 ? first : second;
+      expect(loser.body.code).toBe('KEY_LIFECYCLE_CONFLICT');
+      expect(loser.body.details).toMatchObject({ reason: 'STAGED_KEY_EXISTS', purpose: 'webhooks' });
+      expect(await ctx.prisma.encryptionKey.count({ where: { purpose: 'webhooks', status: 'STAGED' } })).toBe(
+        1,
+      );
+      expect(await unusedCodes()).toBe(recoveryCodes.length - 1);
+      // The code the loser offered is still good.
+      const winner = first.status === 201 ? first : second;
+      const retry = await client.post(`/v1/admin/keys/webhooks/generate`, {
+        mfaCode: first.status === 409 ? recoveryCodes[0] : recoveryCodes[1],
+      });
+      expect(retry.status).toBe(409);
+      expect(retry.body.details).toMatchObject({ reason: 'STAGED_KEY_EXISTS', keyId: winner.body.keyId });
+      expect(await unusedCodes()).toBe(recoveryCodes.length - 1);
+      expect(
+        await ctx.prisma.auditLog.count({ where: { action: 'keys.generated', actorUserId: admin4.user.id } }),
+      ).toBe(1);
+    } finally {
+      await ctx.prisma.encryptionKey.deleteMany({ where: { purpose: 'webhooks', status: 'STAGED' } });
+      await managed.refresh();
+    }
+  });
+
   it('ENCRYPTION_LEGACY_DECRYPT=false: boots with a warning, refuses legacy values, reports what still uses them', async () => {
     const ctx = a!;
     const orgId = (await ctx.prisma.organizationMember.findFirstOrThrow({ where: { userId: ownerId } }))
@@ -901,7 +940,7 @@ describe('KMS-managed data keys (KMS_PROVIDER=local)', () => {
     });
     await ctx.prisma.user.update({
       where: { email: emails.compliance },
-      data: { mfaSecretEnc: legacyRing.sealString(KeyPurpose.MFA, MFA_SECRET) },
+      data: { mfaEnabled: true, mfaSecretEnc: legacyRing.sealString(KeyPurpose.MFA, MFA_SECRET) },
     });
 
     const warn = vi.spyOn(Logger.prototype, 'warn');
@@ -939,9 +978,39 @@ describe('KMS-managed data keys (KMS_PROVIDER=local)', () => {
       // The rotation job cannot open legacy values either (reported, never blocks the rest).
       const run = await strict.app.get(MaintenanceService).run('ENCRYPTION_KEY_ROTATION', 'scheduler');
       expect((run.summary as any).purposes.mfa).toMatchObject({ failed: 1, errors: { KEY_NOT_FOUND: 1 } });
+
+      // A user whose TOTP secret is sealed with the retired key cannot be checked: an outage
+      // (503 KEY_NOT_FOUND, its own audit action), never a wrong guess — no lockout, no 500.
+      const compliance = await login(strict, emails.compliance);
+      const complianceId = (
+        await strict.prisma.user.findUniqueOrThrow({ where: { email: emails.compliance } })
+      ).id;
+      for (let i = 0; i < MAX_MFA_FAILURES + 1; i += 1) {
+        const res = await compliance.post('/v1/auth/mfa/verify', { code: '123456' });
+        expect(res.status, JSON.stringify(res.body)).toBe(503);
+        expect(res.body).toMatchObject({
+          code: 'KEY_NOT_FOUND',
+          details: { purpose: 'mfa', keyId: 'legacy' },
+        });
+      }
+      expect(
+        await strict.prisma.auditLog.count({
+          where: { action: 'auth.mfa_failed', actorUserId: complianceId },
+        }),
+      ).toBe(0);
+      const unavailable = await strict.prisma.auditLog.findFirstOrThrow({
+        where: { action: 'auth.mfa_key_unavailable', actorUserId: complianceId },
+      });
+      expect(unavailable.metadata).toMatchObject({
+        operation: StepUpOperation.LOGIN_MFA,
+        reason: 'KEY_NOT_FOUND',
+        purpose: 'mfa',
+        keyId: 'legacy',
+      });
     } finally {
       warn.mockRestore();
       await strict.close();
+      await ctx.prisma.user.update({ where: { email: emails.compliance }, data: { mfaEnabled: false } });
     }
   });
 

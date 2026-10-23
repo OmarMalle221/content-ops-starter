@@ -29,6 +29,7 @@ export const transactionInclude = {
               scanStatus: true,
               scanEngine: true,
               scannedAt: true,
+              deletedAt: true,
             },
           },
         },

@@ -89,7 +89,7 @@ describe('Scenario 1 — Diaspora Protect end-to-end (sandbox)', () => {
     for (const e of submitted.body.milestones[0].evidences) {
       expect(e.document).toMatchObject({
         scan: { status: 'CLEAN', engine: 'sandbox-eicar' },
-        downloadUrl: `/api/v1/documents/${e.document.id}/download`,
+        downloadUrl: `/v1/documents/${e.document.id}/download`,
       });
     }
 

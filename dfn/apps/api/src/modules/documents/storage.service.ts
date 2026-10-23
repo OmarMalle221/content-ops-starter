@@ -359,13 +359,7 @@ export class DocumentStorageService {
   async recordMissingDeletedBlob(
     doc: Pick<StoredDocumentRef, 'id' | 'organizationId' | 'storageKey' | 'storageDriver'>,
   ): Promise<boolean> {
-    const deletion = await this.prisma.auditLog.findFirst({
-      where: { action: 'document.deleted', entityType: 'Document', entityId: doc.id },
-      orderBy: { createdAt: 'desc' },
-      select: { metadata: true },
-    });
-    const retained = (deletion?.metadata as { blobRetained?: unknown } | null)?.blobRetained === true;
-    if (!deletion || retained) return false;
+    if (!(await this.deletionTookBlob(doc.id))) return false;
     const { count } = await this.prisma.document.updateMany({
       where: {
         id: doc.id,
@@ -387,6 +381,21 @@ export class DocumentStorageService {
       metadata: { storageDriver: doc.storageDriver, recordedAsPurged: true },
     });
     return true;
+  }
+
+  /**
+   * Whether the document's deletion predates the deferred purge, i.e. its blob was destroyed on
+   * the spot (latest `document.deleted` audit record without `blobRetained`). Read-only: the
+   * migration's dry run classifies missing blobs with it without recording anything.
+   */
+  async deletionTookBlob(documentId: string): Promise<boolean> {
+    const deletion = await this.prisma.auditLog.findFirst({
+      where: { action: 'document.deleted', entityType: 'Document', entityId: documentId },
+      orderBy: { createdAt: 'desc' },
+      select: { metadata: true },
+    });
+    if (!deletion) return false;
+    return (deletion.metadata as { blobRetained?: unknown } | null)?.blobRetained !== true;
   }
 
   private sameLocation(

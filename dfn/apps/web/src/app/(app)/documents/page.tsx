@@ -23,6 +23,7 @@ import { UploadDocumentDialog } from '@/components/transactions/upload-dialog';
 import { apiFetch, getSession } from '@/lib/api-server';
 import { formatDate } from '@/lib/format';
 import { getT } from '@/lib/i18n-server';
+import { apiHref } from '@/lib/api-href';
 
 export const metadata = { title: 'Documents' };
 
@@ -84,10 +85,7 @@ export default async function DocumentsPage() {
                 <TableCell className="text-muted-foreground">{formatDate(d.createdAt, locale)}</TableCell>
                 <TableCell className="text-right">
                   {d.downloadUrl ? (
-                    <a
-                      className="text-sm text-primary hover:underline"
-                      href={`/api/v1/documents/${d.id}/download`}
-                    >
+                    <a className="text-sm text-primary hover:underline" href={apiHref(d.downloadUrl)}>
                       {t('common.download')}
                     </a>
                   ) : (

@@ -12,7 +12,7 @@ import {
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
-import { openString } from '../../common/keyring';
+import { KeyRingError, keyRingFor } from '../../common/keyring';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { ENV, type Env } from '../../config/env';
@@ -151,7 +151,27 @@ export class MfaVerifierService {
       select: { mfaSecretEnc: true },
     });
     if (!user?.mfaSecretEnc || !isTotpCode(code)) throw options.invalid();
-    const secret = openString(this.env, KeyPurpose.MFA, user.mfaSecretEnc);
+    const ring = keyRingFor(this.env);
+    let secret: string;
+    try {
+      secret = ring.openString(KeyPurpose.MFA, user.mfaSecretEnc);
+    } catch (err) {
+      // The secret cannot be opened — sealed with a key the ring no longer has (retired early,
+      // legacy decryption switched off: KeyRingError), or not authenticating under the key its id
+      // names (a wrong key value under the right id, a corrupted row: DECRYPT_FAILED). The code
+      // was not checked, so this is neither a wrong guess nor a 500: the account cannot
+      // authenticate until the key is restored (KEY_ROTATION.md §7); assertFreshProof audits it.
+      throw new DomainError(
+        ErrorCode.KEY_NOT_FOUND,
+        'The second factor of this account cannot be checked: its encryption key is not available',
+        HttpStatus.SERVICE_UNAVAILABLE,
+        {
+          purpose: KeyPurpose.MFA,
+          keyId: ring.keyIdOfString(user.mfaSecretEnc),
+          reason: err instanceof KeyRingError ? 'KEY_NOT_FOUND' : 'DECRYPT_FAILED',
+        },
+      );
+    }
     const step = acceptedTotpStep(secret, code.trim(), Date.now());
     if (step === null) throw options.invalid();
     if (options.consume) {
@@ -298,11 +318,27 @@ export class MfaVerifierService {
         method = 'recovery_code';
       }
     } catch (err) {
-      // A replayed valid code (MFA_CODE_REUSED) is not a guess: its attempt is given back. A wrong
-      // code keeps it; the one that reached the threshold answers 423 instead of its own error.
+      // A replayed valid code (MFA_CODE_REUSED) or a code that could not be checked at all
+      // (KEY_NOT_FOUND) is not a guess: its attempt is given back. A wrong code keeps it; the one
+      // that reached the threshold answers 423 instead of its own error.
       const guess = wrongTotp || (err instanceof DomainError && err.code === ErrorCode.RECOVERY_CODE_INVALID);
       if (!guess) {
         await this.codeAttempts.release(attempt);
+        if (err instanceof DomainError && err.code === ErrorCode.KEY_NOT_FOUND) {
+          // An operational outage, audited once here for every step-up (login, key management,
+          // transfers, gates…), never counted against the account.
+          await this.audit.log({
+            actorUserId: auth.userId,
+            action: 'auth.mfa_key_unavailable',
+            entityType: 'User',
+            entityId: auth.userId,
+            metadata: {
+              operation: purpose,
+              ...(typeof err.details === 'object' && err.details ? err.details : {}),
+            },
+            ...(req ? requestMeta(req) : {}),
+          });
+        }
       } else if (attempt.lockedUntil) {
         await this.onCodesLocked(auth.userId, attempt.lockedUntil, purpose, req);
         throw this.lockedError();

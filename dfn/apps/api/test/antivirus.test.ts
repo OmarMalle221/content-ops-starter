@@ -353,7 +353,7 @@ describe('uploads are scanned before anything is stored', () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.scan).toMatchObject({ status: 'CLEAN', engine: 'sandbox-eicar' });
     expect(typeof res.body.scan.scannedAt).toBe('string');
-    expect(res.body.downloadUrl).toBe(`/api/v1/documents/${res.body.id}/download`);
+    expect(res.body.downloadUrl).toBe(`/v1/documents/${res.body.id}/download`);
     const row = await ctx.prisma.document.findUniqueOrThrow({ where: { id: res.body.id } });
     expect(row).toMatchObject({ scanStatus: 'CLEAN', scanEngine: 'sandbox-eicar' });
     expect(row.scannedAt).toBeInstanceOf(Date);

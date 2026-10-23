@@ -9,6 +9,7 @@ import { ApiError, apiFetch, getSession } from '@/lib/api-server';
 import { formatDate, formatMoney } from '@/lib/format';
 import { getT } from '@/lib/i18n-server';
 import { ScanBadge } from '@/components/documents/scan-badge';
+import { apiHref } from '@/lib/api-href';
 
 export const metadata = { title: 'Litige' };
 
@@ -55,11 +56,11 @@ export default async function DisputeDetailPage({ params }: { params: Promise<{ 
                   {d.evidences.map((e: any) => (
                     <li key={e.id} className="flex flex-wrap items-center gap-2">
                       {e.document.downloadUrl ? (
-                        <a className="text-primary hover:underline" href={e.document.downloadUrl}>
+                        <a className="text-primary hover:underline" href={apiHref(e.document.downloadUrl)}>
                           {e.document.title}
                         </a>
                       ) : (
-                        // An INFECTED document is never served: title only, no link.
+                        // An INFECTED or deleted document is never served: title only, no link.
                         <span className="text-muted-foreground line-through">{e.document.title}</span>
                       )}
                       <span className="text-xs text-muted-foreground">
@@ -67,7 +68,13 @@ export default async function DisputeDetailPage({ params }: { params: Promise<{ 
                       </span>
                       <ScanBadge scan={e.document.scan} />
                       {e.document.downloadUrl ? null : (
-                        <span className="text-xs text-destructive">{t('documentStorage.scan.blocked')}</span>
+                        <span className="text-xs text-destructive">
+                          {t(
+                            e.document.deleted
+                              ? 'documentStorage.deletedDocument'
+                              : 'documentStorage.scan.blocked',
+                          )}
+                        </span>
                       )}
                     </li>
                   ))}
@@ -99,7 +106,7 @@ export default async function DisputeDetailPage({ params }: { params: Promise<{ 
                     {m.document ? (
                       <span className="mt-1 inline-flex items-center gap-2 text-xs">
                         {m.document.downloadUrl ? (
-                          <a className="text-primary hover:underline" href={m.document.downloadUrl}>
+                          <a className="text-primary hover:underline" href={apiHref(m.document.downloadUrl)}>
                             📎 {m.document.title}
                           </a>
                         ) : (

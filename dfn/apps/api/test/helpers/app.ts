@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { createPrismaClient } from '@dfn/database';
 import { createApp } from '../../src/bootstrap';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 
@@ -14,8 +15,7 @@ const TABLES = [
   'RegulatoryGateEvent',
   'RegulatoryGate',
   'JobLease',
-  // Managed data keys: a row left behind by a crashed run would make every later boot with
-  // KMS_PROVIDER=none fail on purpose, so the reset always clears them.
+  // Managed data keys (also cleared BEFORE boot by bootTestApp — see dropManagedKeys).
   'EncryptionKey',
   'AuthChallenge',
   'MfaRecoveryCode',
@@ -82,7 +82,22 @@ export async function resetDatabase(prisma: PrismaService) {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${TABLES.map((t) => `"${t}"`).join(',')} CASCADE`);
 }
 
+/**
+ * Removes every managed data key. Runs before the app boots: ManagedKeysService loads the table at
+ * startup, so a row left behind by another test file (or a crashed run) would make a boot with
+ * KMS_PROVIDER=none fail on purpose — and truncating it after boot would leave a stale ring.
+ */
+export async function dropManagedKeys(url = process.env.DATABASE_URL): Promise<void> {
+  const db = createPrismaClient({ url });
+  try {
+    await db.encryptionKey.deleteMany();
+  } finally {
+    await db.$disconnect();
+  }
+}
+
 export async function bootTestApp(envOverrides: Parameters<typeof createApp>[0] = {}): Promise<TestContext> {
+  await dropManagedKeys(envOverrides.DATABASE_URL ?? process.env.DATABASE_URL);
   const { app } = await createApp(envOverrides);
   await app.init();
   const prisma = app.get(PrismaService);

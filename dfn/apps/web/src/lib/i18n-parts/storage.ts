@@ -24,6 +24,7 @@ export const documentStoragePart = definePart(
           INFECTED: 'Signalé par l’antivirus : ce fichier n’est jamais servi.',
         },
       },
+      deletedDocument: 'Document supprimé — plus téléchargeable',
       deleted: {
         title: 'Documents supprimés',
         subtitle:
@@ -62,6 +63,7 @@ export const documentStoragePart = definePart(
           INFECTED: 'Flagged by the antivirus: this file is never served.',
         },
       },
+      deletedDocument: 'Deleted document — no longer downloadable',
       deleted: {
         title: 'Deleted documents',
         subtitle:

@@ -853,15 +853,20 @@ describe('STORAGE_MIGRATION (local → S3)', () => {
     const dry = await admin.post('/v1/admin/storage/migration', { dryRun: true });
     expect(dry.status, JSON.stringify(dry.body)).toBe(200);
     expect(dry.body.status).toBe('COMPLETED');
+    // The vanished blob of a retained deletion is an anomaly, not a benign `missing` — the dry
+    // run already says so (without recording anything), as the purge would.
     expect(dry.body.summary).toMatchObject({
       dryRun: true,
       scanned: 4,
       migrated: 2,
       bytes: live.sealed.length + retained.sealed.length,
-      missing: 2,
-      failed: 0,
+      missing: 1,
+      failed: 1,
+      errors: { STORAGE_NOT_FOUND: 1 },
       remaining: 4,
     });
+    expect((await row(legacyGone.doc.id)).blobPurgedAt).toBeNull();
+    expect(await ctx.prisma.auditLog.count({ where: { action: 'document.blob_missing' } })).toBe(0);
     expect(mem.objects.size).toBe(1);
     expect(existsSync(live.path)).toBe(true);
     expect((await row(live.doc.id)).storageDriver).toBe('local');
@@ -871,16 +876,18 @@ describe('STORAGE_MIGRATION (local → S3)', () => {
     expect(real.body.summary).toMatchObject({
       dryRun: false,
       migrated: 2,
-      missing: 2,
+      missing: 1,
       raced: 0,
-      failed: 0,
+      failed: 1,
+      errors: { STORAGE_NOT_FOUND: 1 },
       localCleanupFailed: 0,
       remaining: 1,
     });
     // Nothing left to move for the pre-phase-7 deletion; the other vanished blob is an anomaly
-    // (its deletion promised retention) and stays reported.
+    // (its deletion promised retention): failed, never stamped, still pending.
     expect((await row(legacyGone.doc.id)).blobPurgedAt).toBeInstanceOf(Date);
     expect((await row(vanished.doc.id)).blobPurgedAt).toBeNull();
+    expect(await ctx.prisma.auditLog.count({ where: { action: 'document.blob_missing' } })).toBe(1);
     for (const item of [live, retained]) {
       expect((await row(item.doc.id)).storageDriver).toBe('s3');
       expect(mem.objects.get(item.doc.storageKey)!.equals(item.sealed)).toBe(true);
@@ -902,9 +909,17 @@ describe('STORAGE_MIGRATION (local → S3)', () => {
     expect(await ctx.prisma.auditLog.count({ where: { action: 'storage.migration_run' } })).toBe(2);
     expect(await ctx.prisma.auditLog.count({ where: { action: 'admin.storage_migration' } })).toBe(2);
 
-    // Idempotent: the next run has nothing left but the vanished blob of a deleted document.
+    // Idempotent: the next run has nothing left but the vanished blob of a retained deletion,
+    // which keeps failing until an operator restores it or records the loss (runbook §11).
     const again = await run();
-    expect(again.summary).toMatchObject({ scanned: 1, migrated: 0, missing: 1, remaining: 1 });
+    expect(again.summary).toMatchObject({
+      scanned: 1,
+      migrated: 0,
+      missing: 0,
+      failed: 1,
+      errors: { STORAGE_NOT_FOUND: 1 },
+      remaining: 1,
+    });
   });
 
   it('never carries content that does not verify, and drops copies that do not read back', async () => {

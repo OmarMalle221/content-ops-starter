@@ -239,14 +239,19 @@ export class AuthService {
         req,
       );
     } catch (err) {
-      await this.audit.log({
-        actorUserId: user.id,
-        action: 'auth.mfa_failed',
-        entityType: 'User',
-        entityId: user.id,
-        metadata: { reason: err instanceof DomainError ? err.code : 'error' },
-        ...requestMeta(req),
-      });
+      const reason = err instanceof DomainError ? err.code : 'error';
+      // A secret the key ring cannot open is an outage, not a failed attempt: the verifier audits
+      // it (auth.mfa_key_unavailable) for every step-up and it is never counted as a failure.
+      if (reason !== ErrorCode.KEY_NOT_FOUND) {
+        await this.audit.log({
+          actorUserId: user.id,
+          action: 'auth.mfa_failed',
+          entityType: 'User',
+          entityId: user.id,
+          metadata: { reason },
+          ...requestMeta(req),
+        });
+      }
       throw err;
     }
     await this.sessions.markMfaVerified(auth.sessionId);

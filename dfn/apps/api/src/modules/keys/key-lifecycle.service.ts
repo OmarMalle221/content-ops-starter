@@ -188,9 +188,11 @@ export class KeyLifecycleService implements OnModuleInit {
   /**
    * Creates a STAGED key for the purpose. The data key exists in clear only in this function and
    * in the ring cache (after the refresh unwraps it again through the KMS). `proveStepUp`, when
-   * given, runs once the KMS round trip has succeeded and before anything is stored: a code is
-   * consumed only for a key the KMS has actually wrapped (the random data key does not depend on
-   * the proof, and is discarded on any failure).
+   * given, runs once the KMS round trip has succeeded, inside the transaction that holds the
+   * purpose lock and has checked that no staged key exists, and before anything is stored: a code
+   * is consumed only for a key the KMS has actually wrapped AND that is about to be recorded — the
+   * losing side of two concurrent generates answers 409 STAGED_KEY_EXISTS with its code intact
+   * (the random data key does not depend on the proof, and is discarded on any failure).
    */
   private async stage(
     purpose: KeyPurpose,
@@ -201,7 +203,6 @@ export class KeyLifecycleService implements OnModuleInit {
     const dataKey = randomBytes(32);
     let row: ManagedKeyRow | null = null;
     let stepUp: string | null = null;
-    let pendingProof = proveStepUp;
     try {
       for (let attempt = 0; attempt < 3 && !row; attempt += 1) {
         const now = new Date();
@@ -213,45 +214,49 @@ export class KeyLifecycleService implements OnModuleInit {
         const roundTrip = check.equals(dataKey);
         check.fill(0);
         if (!roundTrip) throw kmsUnavailable(provider.name, 'unwrap', 'INVALID_CIPHERTEXT');
-        // The second factor is checked (and consumed) only now that the KMS has answered. A key id
-        // collision below re-wraps under another id without asking for a second proof.
-        if (pendingProof) {
-          stepUp = await pendingProof();
-          pendingProof = null;
-        }
-        row = await this.prisma.$transaction(async (tx) => {
-          await lockPurpose(tx, purpose);
-          const staged = await this.stagedKey(purpose, tx);
-          if (staged) {
-            throw lifecycleConflict(
-              'STAGED_KEY_EXISTS',
-              `A staged key already waits for activation (${purpose})`,
-              {
+        row = await this.prisma.$transaction(
+          async (tx) => {
+            await lockPurpose(tx, purpose);
+            const staged = await this.stagedKey(purpose, tx);
+            if (staged) {
+              throw lifecycleConflict(
+                'STAGED_KEY_EXISTS',
+                `A staged key already waits for activation (${purpose})`,
+                {
+                  purpose,
+                  keyId: staged.keyId,
+                  activateAfter: staged.activateAfter,
+                },
+              );
+            }
+            const taken = await tx.encryptionKey.findUnique({
+              where: { purpose_keyId: { purpose, keyId } },
+              select: { id: true },
+            });
+            if (taken) return null; // 24-bit suffix collision: draw another id (no proof asked yet)
+            // The second factor is checked (and consumed) only now: the KMS has answered, the lock
+            // is held and nothing stands in the way of this key being recorded. The proof writes
+            // through the pool (code burnt, TOTP step recorded) — its outcome is final whatever this
+            // transaction does, as a consumed code must be.
+            if (proveStepUp) stepUp = await proveStepUp();
+            return tx.encryptionKey.create({
+              data: {
                 purpose,
-                keyId: staged.keyId,
-                activateAfter: staged.activateAfter,
+                keyId,
+                status: ManagedKeyStatus.STAGED,
+                wrappedKey: new Uint8Array(wrapped),
+                kmsProvider: provider.name,
+                kmsKeyRef: provider.keyRef,
+                activateAfter: new Date(now.getTime() + this.env.KEY_ACTIVATION_DELAY_SECONDS * 1000),
+                createdByUserId: actor.userId,
               },
-            );
-          }
-          const taken = await tx.encryptionKey.findUnique({
-            where: { purpose_keyId: { purpose, keyId } },
-            select: { id: true },
-          });
-          if (taken) return null; // 24-bit suffix collision: draw another id
-          return tx.encryptionKey.create({
-            data: {
-              purpose,
-              keyId,
-              status: ManagedKeyStatus.STAGED,
-              wrappedKey: new Uint8Array(wrapped),
-              kmsProvider: provider.name,
-              kmsKeyRef: provider.keyRef,
-              activateAfter: new Date(now.getTime() + this.env.KEY_ACTIVATION_DELAY_SECONDS * 1000),
-              createdByUserId: actor.userId,
-            },
-            select: MANAGED_KEY_SELECT,
-          });
-        });
+              select: MANAGED_KEY_SELECT,
+            });
+          },
+          // The proof (a few statements, an audit record, a notification) runs under the lock: a
+          // concurrent generate waits for it, so both bounds are above Prisma's defaults (2 s / 5 s).
+          { maxWait: 5_000, timeout: 15_000 },
+        );
       }
     } finally {
       dataKey.fill(0);

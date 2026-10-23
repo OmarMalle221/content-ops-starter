@@ -20,6 +20,7 @@ import { ContractView } from '@/components/transactions/contract-view';
 import { ApiError, apiFetch } from '@/lib/api-server';
 import { formatDate, formatMoney } from '@/lib/format';
 import { getT } from '@/lib/i18n-server';
+import { apiHref } from '@/lib/api-href';
 
 export const metadata = { title: 'Transaction' };
 
@@ -228,7 +229,7 @@ export default async function TransactionDetailPage({ params }: { params: Promis
                       {d.downloadUrl ? (
                         <a
                           className="flex-1 truncate text-primary hover:underline"
-                          href={`/api${d.downloadUrl.replace(/^\/api/, '')}`}
+                          href={apiHref(d.downloadUrl)}
                         >
                           {d.title}
                         </a>

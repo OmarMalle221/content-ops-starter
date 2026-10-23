@@ -98,6 +98,21 @@ Mesure de contrôle (base de test seulement, réglage annulé ensuite) pour vali
 
 Tous les objectifs du PRD sont tenus, JIT de PostgreSQL actif : la liste des transactions passe de 1 672 ms à **91 ms** au p95 sur 100 000 lignes.
 
+### 4.5 Phase 7 : bundle compilé avec l'instrumentation d'observabilité (2026-10-17, jeu de démonstration)
+
+Même méthode (10 connexions, 8 s mesurées par scénario après 2 s de chauffe, mode client `distinct`), API compilée de la phase 7 — intercepteur de métriques HTTP, contexte de trace `traceparent`, antivirus `sandbox`, trousseau de clés gérées — sur le jeu de démonstration (3 transactions, 0 transfert visible). Hôte : 4 vCPU, 16 Gio, PostgreSQL 16 local.
+
+| Scénario       | Requête                                            | Conn. | Requêtes | Débit (req/s) | p50 (ms) | p95 (ms) | p99 (ms) | max (ms) | Erreurs | Objectif p95 | Verdict |
+| -------------- | -------------------------------------------------- | ----: | -------: | ------------: | -------: | -------: | -------: | -------: | ------: | ------------ | ------- |
+| health         | `GET /v1/health`                                   |    10 |     7094 |         886,8 |     10,3 |     18,5 |     24,4 |     40,4 |  0,00 % | < 500 ms     | OK      |
+| wallet-summary | `GET /v1/wallets/:org/summary`                     |    10 |     3166 |         395,8 |     24,6 |     32,3 |     39,3 |     55,1 |  0,00 % | < 500 ms     | OK      |
+| transactions   | `GET /v1/transactions?pageSize=20`                 |    10 |     2278 |         284,8 |     34,6 |     45,6 |     52,4 |     76,7 |  0,00 % | < 500 ms     | OK      |
+| fx-estimate    | `POST /v1/wallets/estimate`                        |    10 |     7936 |           992 |      9,3 |     14,8 |     18,1 |     34,1 |  0,00 % | < 500 ms     | OK      |
+| transfers      | `GET /v1/transfers?pageSize=20`                    |    10 |     4349 |         543,6 |     17,8 |     25,4 |     30,0 |     55,4 |  0,00 % | < 500 ms     | OK      |
+| ledger-write   | `POST /v1/sandbox/wallets/self-deposit (0,01 CAD)` |     1 |      218 |          27,3 |     33,8 |     57,6 |     63,4 |     65,8 |  0,00 % | < 100 ms     | OK      |
+
+L'instrumentation de la phase 7 (séries HTTP par gabarit de route, contexte de trace) n'a pas d'effet mesurable : la santé répond en 18,5 ms au p95 contre 500 ms visés, l'écriture ledger en 57,6 ms contre 100 ms. La série sur 100 000 transactions (§4.4) n'a pas été rejouée dans cette phase.
+
 ## 5. Comparaison avec les objectifs et constats
 
 ### 5.1 Liste des transactions sur 100 000 lignes : objectif d'abord **non atteint**, **corrigé** (§4.4)
