@@ -226,6 +226,70 @@ jobs:
           DFN_RECONCILE_RUNNER: source
         run: bash infra/ops/restore-test.sh
 
+  profiles:
+    name: Compose profiles s3 + observability (MinIO, Prometheus, Grafana)
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway .env with the profiles' credentials (none committed or defaulted)
+        run: |
+          grep -vE '^(SESSION_SECRET|DOCUMENT_ENCRYPTION_KEY|STORAGE_DRIVER)=' .env.example > .env
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "POSTGRES_APP_PASSWORD=$(openssl rand -hex 16)"
+            echo "REDIS_PASSWORD=$(openssl rand -hex 16)"
+            echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "DOCUMENT_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "STORAGE_DRIVER=s3"
+            echo "S3_ACCESS_KEY_ID=dfn-api-$(openssl rand -hex 4)"
+            echo "S3_SECRET_ACCESS_KEY=$(openssl rand -hex 24)"
+            echo "MINIO_ROOT_USER=dfn-root-$(openssl rand -hex 4)"
+            echo "MINIO_ROOT_PASSWORD=$(openssl rand -hex 24)"
+            echo "METRICS_TOKEN=$(openssl rand -hex 24)"
+            echo "GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+          } >> .env
+      - name: Validate prometheus.yml and alerts.yml with promtool, and run the rule unit tests
+        run: |
+          docker run --rm --entrypoint /bin/promtool -v "$PWD/infra/observability/prometheus:/t:ro" -w /t \
+            prom/prometheus:v3.5.0 test rules alerts.test.yml
+          # credentials_file must exist for `check config`: a placeholder in a throwaway copy.
+          mkdir -p "$RUNNER_TEMP/prom" && cp infra/observability/prometheus/*.yml "$RUNNER_TEMP/prom/"
+          printf x > "$RUNNER_TEMP/prom/token"
+          sed -i -e 's#/run/secrets/metrics_token#/t/token#' -e 's#/etc/prometheus/alerts.yml#/t/alerts.yml#' "$RUNNER_TEMP/prom/prometheus.yml"
+          docker run --rm --entrypoint /bin/promtool -v "$RUNNER_TEMP/prom:/t:ro" prom/prometheus:v3.5.0 check config /t/prometheus.yml
+      - name: Build images and start the stack with the s3 and observability profiles
+        run: docker compose --profile s3 --profile observability up -d --build
+      - name: Wait for API, Prometheus and Grafana
+        run: |
+          for _ in $(seq 1 90); do curl -sf http://127.0.0.1:4000/v1/health > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:9090/-/ready > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:3001/api/health > /dev/null && break; sleep 2; done
+          docker compose --profile s3 --profile observability ps -a
+          test "$(docker compose --profile s3 ps -a minio-init --format '{{.ExitCode}}')" = "0"
+      - name: Documents on MinIO, metrics in Prometheus, dashboards in Grafana
+        run: |
+          GRAFANA_ADMIN_PASSWORD="$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)" bash infra/ops/check-profiles.sh
+          # The document of the check is an object of the private bucket (not a local file).
+          docker compose --profile s3 run -T --rm --no-deps --entrypoint sh minio-init -ec \
+            'mc alias set dfn http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls --recursive "dfn/$S3_BUCKET"' \
+            | tee "$RUNNER_TEMP/bucket.txt"
+          test "$(wc -l < "$RUNNER_TEMP/bucket.txt")" -ge 1
+          test -z "$(docker compose exec -T api sh -c 'find /data/storage -type f 2>/dev/null | head -1')"
+      - name: Stack logs
+        if: always()
+        run: docker compose --profile s3 --profile observability logs --no-color --timestamps > compose-profiles.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-compose-profiles-logs
+          path: dfn/compose-profiles.log
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        run: docker compose --profile s3 --profile observability down -v --remove-orphans
+
   containers:
     name: Docker images & compose stack (read-only API, migrate one-shot, BullMQ + Redis)
     runs-on: ubuntu-latest

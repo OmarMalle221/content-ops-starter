@@ -379,6 +379,10 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: 'false'
       GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: 'false'
+      # No outbound calls to grafana.com at start: no background install of the preinstalled apps
+      # (the read-only container could not keep them anyway) and no plugin signing-key download.
+      GF_PLUGINS_PREINSTALL_DISABLED: 'true'
+      GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED: 'true'
       # Console only: the root filesystem is read-only (no /var/log/grafana).
       GF_LOG_MODE: console
       GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_HOST_PORT:-3001}

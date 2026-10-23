@@ -257,7 +257,7 @@ Critères de réussite : code de sortie 0 (« RESTORE DRILL PASSED ») et durée
 | Base de données                          | `AuditLog` (actions sensibles), `MaintenanceRun`, `ReconciliationJob` / `ReconciliationDifference`, `ApiRequestLog`, `WebhookDelivery`.                                                                                                                                                  |
 | Exercices de restauration                | sortie de `restore-test.sh` (durées, comptages, réconciliation) et artefacts de la CI.                                                                                                                                                                                                   |
 
-Latences, taux d'erreur, profondeur des files, état des tâches, des webhooks et des clés se lisent sur `/metrics` (phase 7, ADR-0016) ; règles, seuils et conduite à tenir pour chaque alerte : [`OBSERVABILITY.md`](OBSERVABILITY.md) §5.
+Latences, taux d'erreur, profondeur des files, état des tâches, des webhooks et des clés se lisent sur `/metrics` (phase 7, ADR-0016) ; `infra/ops/check-profiles.sh` vérifie de bout en bout une pile démarrée avec les profils `s3` et `observability` (document stocké sur MinIO, collecte, règles, tableau de bord) ; règles, seuils et conduite à tenir pour chaque alerte : [`OBSERVABILITY.md`](OBSERVABILITY.md) §5.
 
 ## 10. Commandes utiles
 

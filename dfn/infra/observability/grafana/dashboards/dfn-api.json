@@ -164,7 +164,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(dfn_http_requests_total{job=\"dfn-api\", status=~\"5..\"}[5m])) / sum(rate(dfn_http_requests_total{job=\"dfn-api\"}[5m]))",
+          "expr": "(sum(rate(dfn_http_requests_total{job=\"dfn-api\", status=~\"5..\"}[5m])) or vector(0)) / sum(rate(dfn_http_requests_total{job=\"dfn-api\"}[5m]))",
           "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
