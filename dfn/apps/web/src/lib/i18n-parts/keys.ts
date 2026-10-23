@@ -96,7 +96,7 @@ export const keysAdminPart = definePart(
         provider: 'Fournisseur',
         providers: {
           none: 'Aucun',
-          local: 'KMS local du bac à sable',
+          local: 'KMS local simulé (bac à sable)',
           aws: 'AWS KMS',
         },
         providerNotes: {
@@ -298,7 +298,7 @@ export const keysAdminPart = definePart(
         provider: 'Provider',
         providers: {
           none: 'None',
-          local: 'Sandbox local KMS',
+          local: 'Simulated sandbox KMS',
           aws: 'AWS KMS',
         },
         providerNotes: {

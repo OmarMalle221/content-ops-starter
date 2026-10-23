@@ -13,12 +13,12 @@ Monorepo pnpm : **Next.js 15** (web) · **NestJS 11** (API REST + OpenAPI) · **
 | [DATA_MODEL.md](DATA_MODEL.md)                                              | 57 tables, invariants, conservation et anonymisation                                                                    |
 | [SECURITY.md](SECURITY.md) · [docs/security](docs/security)                 | security-by-design, clés API, webhooks, idempotence                                                                     |
 | [ROADMAP.md](ROADMAP.md)                                                    | phases 0–7, état d'avancement, rapports de livraison                                                                    |
-| [docs/operations](docs/operations)                                          | exploitation : runbook, rotation des clés, performances mesurées                                                        |
+| [docs/operations](docs/operations)                                          | exploitation : runbook, rotation des clés, observabilité, performances mesurées                                         |
 | [docs/api](docs/api)                                                        | guide API partenaires + `openapi.json`                                                                                  |
 | [docs/compliance](docs/compliance)                                          | checklists CANAFE, Banque du Canada, AMF Québec, BCEAO, BCRG, KYC/KYB, AML, données, litiges, stablecoin, autorisations |
-| [docs/decisions](docs/decisions)                                            | ADR 0001–0013                                                                                                           |
+| [docs/decisions](docs/decisions)                                            | ADR 0001–0016                                                                                                           |
 
-## Ce qui est livré (phases 0 à 6, sandbox)
+## Ce qui est livré (phases 0 à 7, sandbox)
 
 - **Fondations** : inscription/connexion, sessions serveur en cookie httpOnly, verrouillage après 5 échecs, **MFA TOTP**, organisations personnelles/entreprises, rôles, invitations, **journal d'audit**, notifications, design system, navigation FR/EN.
 - **Diaspora Protect (P0)** : transactions à jalons, invitation du vendeur, **contrat numérique versionné et haché**, acceptation des conditions, **KYC/KYB simulées**, demande de financement, **partenaire simulé** confirmant la réception des fonds fictifs, documents **chiffrés au repos**, soumission/validation des preuves, **libérations fictives** jalon par jalon, **litiges avec gel automatique des libérations**, décisions motivées, appel, remboursement, historique complet.
@@ -65,7 +65,7 @@ pnpm db:seed
 pnpm dev                        # API :4000 (ts-node --watch) + web :3000 (next dev)
 ```
 
-Les variables de `.env` sont lues par l'API ; le web lit `API_INTERNAL_URL` (défaut `http://localhost:4000`), **figée au moment de `next build`** (réécritures `/api/*`). Les variables des phases 3 à 6 (`JOBS_*`, `ANONYMIZE_AFTER_DAYS`, `FX_*`, `SANDBOX_SELF_DEPOSIT_DAILY_LIMIT`, `WEBHOOK_*`, `IDEMPOTENCY_TTL_HOURS`, `ENCRYPTION_KEYRING`, `STORAGE_DRIVER`/`S3_*`, `WEBAUTHN_*`, `JOBS_DRIVER`, `RATE_LIMIT_STORE`, `TRUST_PROXY`, `REQUIRE_STAFF_MFA`, `REVIEW_SLA_HOURS_*`, `STRUCTURING_*`) sont documentées dans `.env.example`.
+Les variables de `.env` sont lues par l'API ; le web lit `API_INTERNAL_URL` (défaut `http://localhost:4000`), **figée au moment de `next build`** (réécriture de `/api/v1/*` seulement : `/metrics` et `/docs` ne passent pas par le web). Les variables des phases 3 à 6 (`JOBS_*`, `ANONYMIZE_AFTER_DAYS`, `FX_*`, `SANDBOX_SELF_DEPOSIT_DAILY_LIMIT`, `WEBHOOK_*`, `IDEMPOTENCY_TTL_HOURS`, `ENCRYPTION_KEYRING`, `STORAGE_DRIVER`/`S3_*`, `WEBAUTHN_*`, `JOBS_DRIVER`, `RATE_LIMIT_STORE`, `TRUST_PROXY`, `REQUIRE_STAFF_MFA`, `REVIEW_SLA_HOURS_*`, `STRUCTURING_*`) sont documentées dans `.env.example`.
 
 ### Comptes de démonstration (seed)
 

@@ -188,6 +188,8 @@ services:
       REDIS_PASSWORD: ''
       MINIO_ROOT_USER: ''
       MINIO_ROOT_PASSWORD: ''
+      GRAFANA_ADMIN_USER: ''
+      GRAFANA_ADMIN_PASSWORD: ''
       REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
       JOBS_DRIVER: bullmq
       RATE_LIMIT_STORE: redis
