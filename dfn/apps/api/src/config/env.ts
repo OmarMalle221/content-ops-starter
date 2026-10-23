@@ -5,9 +5,7 @@ import { isValidStructuringThresholdSpec } from '@dfn/compliance';
 const envSchema = z
   .object({
     DFN_MODE: z.literal('sandbox', {
-      errorMap: () => ({
-        message: 'This build only supports DFN_MODE=sandbox. Live mode requires licensed partners.',
-      }),
+      error: 'This build only supports DFN_MODE=sandbox. Live mode requires licensed partners.',
     }),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     DATABASE_URL: z.string().min(1),

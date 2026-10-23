@@ -10,7 +10,7 @@ export const registerSchema = z.object({
   country: countrySchema,
   locale: localeSchema.default('fr'),
   phone: z.string().trim().max(30).optional(),
-  acceptTerms: z.literal(true, { errorMap: () => ({ message: 'Terms must be accepted' }) }),
+  acceptTerms: z.literal(true, { error: 'Terms must be accepted' }),
   /** Optional transaction invitation token so a seller can register straight from an invite link. */
   invitationToken: z.string().min(16).max(256).optional(),
 });

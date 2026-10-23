@@ -20,7 +20,7 @@ const base64url = (max: number) =>
     .max(max)
     .regex(/^[A-Za-z0-9_-]+={0,2}$/, 'Expected a base64url string');
 
-const clientExtensionResultsSchema = z.record(z.unknown()).default({});
+const clientExtensionResultsSchema = z.record(z.string(), z.unknown()).default({});
 const authenticatorAttachmentSchema = z.enum(['platform', 'cross-platform']).optional();
 
 /** RegistrationResponseJSON as produced by @simplewebauthn/browser `startRegistration()`. */

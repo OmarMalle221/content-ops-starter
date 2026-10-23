@@ -33,7 +33,8 @@ export const createTransactionSchema = z
         governingLaw: z.string().trim().max(120).default('Canada (Québec)'),
         additionalClauses: z.string().trim().max(5000).optional(),
       })
-      .default({}),
+      // prefault: an omitted `terms` is parsed as {} so that each field gets its own default.
+      .prefault({}),
     /** Optional sandbox-only shortcut used by demos & e2e tests. */
     sendInvitation: z.boolean().default(true),
   })
