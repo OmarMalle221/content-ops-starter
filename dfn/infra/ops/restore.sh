@@ -151,7 +151,7 @@ if [[ -n "$NEWER" ]]; then
   count="$(wc -l <<<"$NEWER" | tr -d ' ')"
   case "$NEWER_KEYS" in
     refuse)
-      printf '  %s\n' $NEWER >&2
+      while IFS= read -r key; do printf '  %s\n' "$key" >&2; done <<<"$NEWER"
       die "the target holds $count managed data key(s) the backup does not contain (listed above): restoring would destroy the only copy of each and leave what they sealed unreadable. Re-run with --keep-newer-keys (carried over as DECRYPT_ONLY) or, only if the blobs are restored from before those keys were activated, --discard-newer-keys — RUNBOOK §7"
       ;;
     keep)
