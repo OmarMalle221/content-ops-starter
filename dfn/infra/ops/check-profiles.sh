@@ -13,7 +13,7 @@
 # EXPECTED_ALERT_RULES (default 24).
 #
 # Checks: 1) a document round-trips through the API byte for byte (upload scanned, sealed, stored on
-#            the configured driver — S3/MinIO with the "s3" profile —, downloaded, opened, verified);
+#            the configured driver — S3 (SeaweedFS) with the "s3" profile —, downloaded, opened, verified);
 #         2) Prometheus scrapes every API replica (target up, bearer METRICS_TOKEN accepted), loads
 #            every alert rule without evaluation error, and has scraped the upload's scan outcome;
 #         3) Grafana's provisioned datasource answers and the provisioned dashboard exists, and every

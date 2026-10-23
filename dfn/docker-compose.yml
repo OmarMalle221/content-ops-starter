@@ -6,7 +6,7 @@
 # (see docs/operations/RUNBOOK.md).
 #
 #   docker compose up -d --build                  web http://localhost:3000 · api http://localhost:4000/docs
-#   docker compose --profile s3 up -d --build     + MinIO (set STORAGE_DRIVER=s3, S3_*, MINIO_ROOT_* in .env)
+#   docker compose --profile s3 up -d --build     + SeaweedFS S3 (set STORAGE_DRIVER=s3, S3_* in .env)
 #   docker compose --profile seed run --rm seed   demo data (fictitious)
 #   docker compose --profile observability up -d  + Prometheus http://127.0.0.1:9090 · Grafana http://127.0.0.1:3001
 #                                                 (set METRICS_TOKEN and GRAFANA_ADMIN_PASSWORD in .env;
@@ -85,69 +85,79 @@ services:
     logging: *logging
     restart: unless-stopped
 
-  # Optional S3-compatible document storage (profile "s3"). Image references are overridable
-  # (MINIO_IMAGE / MINIO_MC_IMAGE). Compose interpolates every service, even outside its profile,
-  # so the MinIO credentials are checked when the container starts instead (no default secret:
-  # MinIO would otherwise fall back to its well-known built-in credentials).
-  minio:
-    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z}
+  # Optional S3-compatible document storage (profile "s3"): SeaweedFS (Apache-2.0; MinIO no longer
+  # publishes public images). The image is overridable (S3_SERVER_IMAGE). Compose interpolates every
+  # service, even outside its profile, so the credentials are checked when the container starts
+  # (no default secret). Two identities, generated at start from .env: an administrator
+  # (S3_ADMIN_*) and the API user (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) limited to the objects
+  # of S3_BUCKET; anonymous requests are refused. Only the S3 port is published, on loopback.
+  s3:
+    image: ${S3_SERVER_IMAGE:-chrislusf/seaweedfs:4.48}
     profiles: [s3]
     entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        if [ "$${#MINIO_ROOT_USER}" -lt 3 ] || [ "$${#MINIO_ROOT_PASSWORD}" -lt 12 ]; then
-          echo "MINIO_ROOT_USER (>= 3 chars) and MINIO_ROOT_PASSWORD (>= 12 chars) must be set in .env" >&2
-          exit 1
+        for v in S3_ADMIN_ACCESS_KEY_ID S3_ADMIN_SECRET_ACCESS_KEY S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+          eval "val=\$$$$v"
+          case "$$val" in
+            ''|*[!A-Za-z0-9._~+/=-]*) echo "$$v must be set in .env (profile s3; letters, digits and ._~+/=- only)" >&2; exit 1 ;;
+          esac
+        done
+        if [ "$${#S3_ADMIN_SECRET_ACCESS_KEY}" -lt 12 ] || [ "$${#S3_SECRET_ACCESS_KEY}" -lt 12 ]; then
+          echo "S3_ADMIN_SECRET_ACCESS_KEY and S3_SECRET_ACCESS_KEY must be at least 12 characters" >&2; exit 1
         fi
-        exec minio server /data --console-address :9001
+        if [ "$$S3_ADMIN_ACCESS_KEY_ID" = "$$S3_ACCESS_KEY_ID" ]; then
+          echo "S3_ADMIN_ACCESS_KEY_ID and S3_ACCESS_KEY_ID must differ" >&2; exit 1
+        fi
+        case "$$S3_BUCKET" in
+          ''|*[!a-z0-9.-]*) echo "S3_BUCKET must be a lowercase bucket name" >&2; exit 1 ;;
+        esac
+        umask 077
+        cat > /run/dfn-s3.json <<EOF
+        {"identities":[
+          {"name":"dfn-admin","credentials":[{"accessKey":"$$S3_ADMIN_ACCESS_KEY_ID","secretKey":"$$S3_ADMIN_SECRET_ACCESS_KEY"}],"actions":["Admin","Read","Write","List","Tagging"]},
+          {"name":"dfn-api","credentials":[{"accessKey":"$$S3_ACCESS_KEY_ID","secretKey":"$$S3_SECRET_ACCESS_KEY"}],"actions":["Read:$$S3_BUCKET","Write:$$S3_BUCKET","List:$$S3_BUCKET"]}
+        ]}
+        EOF
+        chown seaweed:seaweed /run/dfn-s3.json
+        unset S3_ADMIN_SECRET_ACCESS_KEY S3_SECRET_ACCESS_KEY
+        exec /entrypoint.sh server -dir=/data -s3 -s3.port=8333 -s3.config=/run/dfn-s3.json
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
-    ports: ['127.0.0.1:9000:9000', '127.0.0.1:9001:9001']
-    volumes: ['miniodata:/data']
+      S3_ADMIN_ACCESS_KEY_ID: ${S3_ADMIN_ACCESS_KEY_ID:-}
+      S3_ADMIN_SECRET_ACCESS_KEY: ${S3_ADMIN_SECRET_ACCESS_KEY:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_BUCKET: ${S3_BUCKET:-dfn-documents}
+    ports: ['127.0.0.1:8333:8333']
+    volumes: ['s3data:/data']
     security_opt: ['no-new-privileges:true']
     healthcheck:
-      test: ['CMD', 'mc', 'ready', 'local']
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8333/healthz']
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
     logging: *logging
     restart: unless-stopped
 
-  # One-shot bucket bootstrap (idempotent): private bucket and a least-privilege API user
-  # (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) limited to the objects of that bucket.
-  minio-init:
-    image: ${MINIO_MC_IMAGE:-quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z}
+  # One-shot bucket bootstrap (idempotent): creates S3_BUCKET through the cluster's internal
+  # shell (not published outside the compose network), then checks it exists.
+  s3-init:
+    image: ${S3_SERVER_IMAGE:-chrislusf/seaweedfs:4.48}
     profiles: [s3]
     depends_on:
-      minio: { condition: service_healthy }
+      s3: { condition: service_healthy }
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
       S3_BUCKET: ${S3_BUCKET:-dfn-documents}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
-      HOME: /tmp
     entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        : "$${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env (profile s3)}"
-        : "$${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env (profile s3)}"
-        : "$${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID must be set in .env (profile s3)}"
-        : "$${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY must be set in .env (profile s3)}"
-        mc alias set dfn http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
-        mc mb --ignore-existing "dfn/$$S3_BUCKET"
-        mc anonymous set none "dfn/$$S3_BUCKET"
-        cat > /tmp/dfn-documents-policy.json <<EOF
-        {"Version":"2012-10-17","Statement":[
-          {"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::$$S3_BUCKET"]},
-          {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$$S3_BUCKET/*"]}
-        ]}
-        EOF
-        mc admin policy create dfn dfn-documents /tmp/dfn-documents-policy.json >/dev/null
-        mc admin user add dfn "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY" >/dev/null
-        mc admin policy attach dfn dfn-documents --user "$$S3_ACCESS_KEY_ID" >/dev/null 2>&1 || true
+        list() { echo "s3.bucket.list" | weed shell -master=s3:9333 2>/dev/null | awk '{print $$1}'; }
+        if ! list | grep -qx "$$S3_BUCKET"; then
+          echo "s3.bucket.create -name $$S3_BUCKET" | weed shell -master=s3:9333
+        fi
+        list | grep -qx "$$S3_BUCKET" || { echo "bucket $$S3_BUCKET could not be created" >&2; exit 1; }
         echo "bucket $$S3_BUCKET ready (private; API user restricted to it)"
+    security_opt: ['no-new-privileges:true']
     restart: 'no'
 
   # One-shot: applies pending Prisma migrations with the API image, then exits 0.
@@ -186,8 +196,8 @@ services:
       POSTGRES_PASSWORD: ''
       POSTGRES_APP_PASSWORD: ''
       REDIS_PASSWORD: ''
-      MINIO_ROOT_USER: ''
-      MINIO_ROOT_PASSWORD: ''
+      S3_ADMIN_ACCESS_KEY_ID: ''
+      S3_ADMIN_SECRET_ACCESS_KEY: ''
       GRAFANA_ADMIN_USER: ''
       GRAFANA_ADMIN_PASSWORD: ''
       REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
@@ -203,7 +213,7 @@ services:
       WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-http://localhost:3000}
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       STORAGE_DIR: /data/storage
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://s3:8333}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:-dfn-documents}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
@@ -219,7 +229,7 @@ services:
       migrate: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      minio-init: { condition: service_completed_successfully, required: false }
+      s3-init: { condition: service_completed_successfully, required: false }
     healthcheck:
       test:
         [
@@ -305,7 +315,7 @@ services:
   # (the API reads the same variable through env_file); Grafana is provisioned with the datasource
   # and the dashboard of infra/observability/grafana. Both listen on loopback only. No default
   # credential: the containers refuse to start without METRICS_TOKEN (Prometheus) and
-  # GRAFANA_ADMIN_PASSWORD (Grafana) — checked at start, like MinIO, because Compose interpolates
+  # GRAFANA_ADMIN_PASSWORD (Grafana) — checked at start, like the S3 server, because Compose interpolates
   # every service even outside its profile. Image references are overridable (PROMETHEUS_IMAGE /
   # GRAFANA_IMAGE).
   #
@@ -408,6 +418,6 @@ volumes:
   pgdata:
   redisdata:
   storage:
-  miniodata:
+  s3data:
   prometheusdata:
   grafanadata:

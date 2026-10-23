@@ -264,7 +264,11 @@ const LIVE_ENV = {
   S3_FORCE_PATH_STYLE: 'true',
 } as const;
 
-/** CreateBucket, tolerating a bucket that already exists (re-runs, shared emulator). */
+/**
+ * CreateBucket, tolerating a bucket that already exists (re-runs, shared emulator) and a
+ * least-privilege user that may not create buckets but reaches a pre-provisioned one (the compose
+ * "s3" profile's API identity).
+ */
 async function ensureLiveBucket() {
   s3.restore();
   const client = new S3Client({
@@ -280,7 +284,8 @@ async function ensureLiveBucket() {
     await client.send(new CreateBucketCommand({ Bucket: LIVE_ENV.S3_BUCKET }));
   } catch (err) {
     const name = (err as { name?: string }).name;
-    if (name !== 'BucketAlreadyOwnedByYou' && name !== 'BucketAlreadyExists') throw err;
+    if (name === 'AccessDenied') await client.send(new HeadBucketCommand({ Bucket: LIVE_ENV.S3_BUCKET }));
+    else if (name !== 'BucketAlreadyOwnedByYou' && name !== 'BucketAlreadyExists') throw err;
   } finally {
     client.destroy();
   }
@@ -332,7 +337,7 @@ describe.skipIf(!LIVE)('STORAGE_MIGRATION against the live endpoint (local → S
   });
   afterAll(async () => {
     await ctx?.close();
-    rmSync(dir, { recursive: true, force: true });
+    if (dir) rmSync(dir, { recursive: true, force: true });
     loadEnv();
   });
 
