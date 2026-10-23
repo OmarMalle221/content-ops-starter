@@ -187,7 +187,7 @@ Règles complémentaires :
   | `GHSA-vfj7-8cjw-p6xm`                        | `braces` (`typescript-eslint` → `micromatch`, lint) | aucun correctif publié ; motifs de fichiers du dépôt uniquement, absent des images d'exécution.                                               |
   | `GHSA-ggr8-5vv4-36mx`                        | `deepmerge-ts` 7 (CLI `prisma` → `@prisma/config`)  | fusionne la configuration Prisma du dépôt (aucune donnée externe) ; correctif en version majeure 8, à reprendre avec la montée de Prisma.     |
 
-- Next.js est maintenu sur la dernière version corrective 15.5.x (15.5.27 : avis critiques d'exécution de code et de contournement du middleware corrigés) ; `postcss` et `sharp` sont forcés aux versions corrigées par `pnpm.overrides`.
+- Next.js est maintenu sur la dernière version corrective 15.5.x (15.5.28 depuis le 2026-10-23 : avis critiques d'exécution de code — dont GHSA-2464-fhr4-w9xw, optimisation d'images SVG — et de contournement du middleware, déni de service des Server Actions, corrigés) ; `postcss` et `sharp` sont forcés aux versions corrigées par `pnpm.overrides`.
 - Versions épinglées dans les `package.json` ; `pnpm-lock.yaml` versionné ; `onlyBuiltDependencies` restreint les scripts post-installation.
 - ESLint (`typescript-eslint`) avec règles de sécurité ; `tsc --strict` ; Prettier.
 - Évolution : CodeQL / Semgrep, SBOM, Renovate avec fenêtre de revue.
