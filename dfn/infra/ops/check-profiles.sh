@@ -2,22 +2,29 @@
 # End-to-end check of the optional compose profiles, against a running stack.
 # SANDBOX ONLY — creates one fictitious user and one fictitious document.
 #
-# Usage: infra/ops/check-profiles.sh [--api URL] [--prometheus URL] [--grafana URL] [--origin ORIGIN]
+# Usage: infra/ops/check-profiles.sh [--api URL] [--prometheus URL] [--grafana URL]
+#                                    [--alertmanager URL] [--origin ORIGIN] [--send-test-alert]
 #
-#   --api URL         API base URL (default http://127.0.0.1:4000)
-#   --prometheus URL  Prometheus of the "observability" profile (default http://127.0.0.1:9090)
-#   --grafana URL     Grafana of the "observability" profile (default http://127.0.0.1:3001)
-#   --origin ORIGIN   browser origin accepted by the API's CSRF guard (default http://localhost:3000)
+#   --api URL           API base URL (default http://127.0.0.1:4000)
+#   --prometheus URL    Prometheus of the "observability" profile (default http://127.0.0.1:9090)
+#   --grafana URL       Grafana of the "observability" profile (default http://127.0.0.1:3001)
+#   --alertmanager URL  Alertmanager of the "observability" profile (default http://127.0.0.1:9093)
+#   --origin ORIGIN     browser origin accepted by the API's CSRF guard (default http://localhost:3000)
+#   --send-test-alert   also send the warning DfnNotificationTest (labelled test="true", "TEST" in
+#                       its summary) to the team receiver and require a successful webhook delivery:
+#                       it reaches ALERT_WEBHOOK_URL, so warn its readers first
 #
 # Environment: GRAFANA_ADMIN_USER (default dfn-admin) and GRAFANA_ADMIN_PASSWORD (required);
-# EXPECTED_ALERT_RULES (default 24).
+# EXPECTED_ALERT_RULES (default 25).
 #
 # Checks: 1) a document round-trips through the API byte for byte (upload scanned, sealed, stored on
 #            the configured driver — S3 (SeaweedFS) with the "s3" profile —, downloaded, opened, verified);
 #         2) Prometheus scrapes every API replica (target up, bearer METRICS_TOKEN accepted), loads
 #            every alert rule without evaluation error, and has scraped the upload's scan outcome;
 #         3) Grafana's provisioned datasource answers and the provisioned dashboard exists, and every
-#            query of that dashboard runs without error through Grafana.
+#            query of that dashboard runs without error through Grafana;
+#         4) Alertmanager is ready, Prometheus sends it the alerts (DfnAlertingWatchdog received) and,
+#            with --send-test-alert, a test alert is routed to the team receiver and delivered.
 set -euo pipefail
 umask 077
 DFN_SCRIPT=check-profiles
@@ -29,19 +36,23 @@ API="http://127.0.0.1:4000"
 PROM="http://127.0.0.1:9090"
 GRAFANA="http://127.0.0.1:3001"
 ORIGIN="http://localhost:3000"
+ALERTMANAGER="http://127.0.0.1:9093"
+SEND_TEST_ALERT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --api) API="$2"; shift 2 ;;
     --prometheus) PROM="$2"; shift 2 ;;
     --grafana) GRAFANA="$2"; shift 2 ;;
     --origin) ORIGIN="$2"; shift 2 ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    --alertmanager) ALERTMANAGER="$2"; shift 2 ;;
+    --send-test-alert) SEND_TEST_ALERT=1; shift ;;
+    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 [[ -n "${GRAFANA_ADMIN_PASSWORD:-}" ]] || die "GRAFANA_ADMIN_PASSWORD is required"
 GUSER="${GRAFANA_ADMIN_USER:-dfn-admin}"
-EXPECTED_RULES="${EXPECTED_ALERT_RULES:-24}"
+EXPECTED_RULES="${EXPECTED_ALERT_RULES:-25}"
 DASHBOARDS_DIR="$DFN_ROOT/infra/observability/grafana/dashboards"
 
 WORK="$(mktemp -d)"
@@ -134,4 +145,67 @@ sys.exit(1 if errors or count == 0 else 0)
 PY
 done
 log "ok   Grafana dashboards provisioned, every query runs"
+
+# ── 4. Alertmanager ──────────────────────────────────────────────────────────
+curl -sf "$ALERTMANAGER/-/ready" >/dev/null || die "Alertmanager at $ALERTMANAGER is not ready"
+prom_json alertmanagers >"$WORK/alertmanagers.json"
+python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["data"]["activeAlertmanagers"] else 1)' \
+  "$WORK/alertmanagers.json" || die "Prometheus has no active Alertmanager (alerting: in prometheus.yml)"
+am_alerts() { curl -sf --get "$ALERTMANAGER/api/v2/alerts" --data-urlencode "filter=alertname=\"$1\""; }
+count_alerts() { python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
+watchdog=0
+for _ in $(seq 1 24); do
+  watchdog=$(am_alerts DfnAlertingWatchdog | count_alerts) || watchdog=0
+  [[ "$watchdog" -ge 1 ]] && break
+  sleep 5
+done
+[[ "$watchdog" -ge 1 ]] || die "DfnAlertingWatchdog never reached Alertmanager: Prometheus does not deliver its alerts"
+log "ok   Alertmanager ready; Prometheus delivers its alerts (DfnAlertingWatchdog received)"
+
+# Webhook requests of the whole Alertmanager (its metrics carry no receiver label): "sent failed".
+am_requests() {
+  curl -sf "$ALERTMANAGER/metrics" | python3 -c '
+import re, sys
+text = sys.stdin.read()
+def total(name):
+    pattern = r"^" + name + r"\{[^}]*integration=\"webhook\"[^}]*\} (\S+)$"
+    return int(sum(float(v) for v in re.findall(pattern, text, re.M)))
+print(total("alertmanager_notification_requests_total"), total("alertmanager_notification_requests_failed_total"))'
+}
+
+if [[ "$SEND_TEST_ALERT" == 1 ]]; then
+  # The entrypoint removes the team webhook when ALERT_WEBHOOK_URL is unset.
+  curl -sf "$ALERTMANAGER/api/v2/status" | python3 -c '
+import json, re, sys
+config = json.load(sys.stdin)["config"]["original"]
+sys.exit(0 if re.search(r"url_file: /run/alertmanager/webhook_url\s*$", config, re.M) else 1)' ||
+    die "the team receiver has no webhook (ALERT_WEBHOOK_URL unset): nothing to deliver the test alert to"
+  read -r sent0 failed0 < <(am_requests)
+  ends=$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) + d.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  printf '[{"labels":{"alertname":"DfnNotificationTest","severity":"warning","service":"dfn-alerting","stack":"dfn-sandbox","test":"true"},"annotations":{"summary":"TEST of the notification path (check-profiles.sh) - no action required","description":"Données fictives - Aucun fonds réel. Sent on purpose to verify that warnings reach their receiver."},"endsAt":"%s"}]' "$ends" >"$WORK/test-alert.json"
+  curl -sf -X POST -H 'Content-Type: application/json' --data @"$WORK/test-alert.json" "$ALERTMANAGER/api/v2/alerts" >/dev/null ||
+    die "Alertmanager refused the test alert"
+  # Grouping is asynchronous: the alert joins its group within a moment of the POST.
+  routed=""
+  for _ in $(seq 1 10); do
+    routed=$(curl -sf "$ALERTMANAGER/api/v2/alerts/groups" | python3 -c '
+import json, sys
+groups = json.load(sys.stdin)
+print(",".join(sorted({g["receiver"]["name"] for g in groups for a in g["alerts"] if a["labels"].get("alertname") == "DfnNotificationTest"})))')
+    [[ -n "$routed" ]] && break
+    sleep 1
+  done
+  [[ "$routed" == team ]] || die "DfnNotificationTest routed to '$routed' instead of team"
+  # Delivered after the route's group_wait (30 s): wait for a success, stop at the first failure.
+  sent=$sent0
+  failed=$failed0
+  for _ in $(seq 1 30); do
+    read -r sent failed < <(am_requests)
+    ((failed > failed0 || sent - failed > sent0 - failed0)) && break
+    sleep 3
+  done
+  ((failed == failed0)) || die "webhook delivery failed ($((failed - failed0)) failed requests): check ALERT_WEBHOOK_URL"
+  ((sent - failed > sent0 - failed0)) || die "no webhook request succeeded within 90 s of the test alert"
+  log "ok   test alert DfnNotificationTest routed to team and delivered by webhook"
+fi
 log "PROFILES CHECK PASSED"

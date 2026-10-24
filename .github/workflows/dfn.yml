@@ -227,7 +227,7 @@ jobs:
         run: bash infra/ops/restore-test.sh
 
   profiles:
-    name: Compose profiles s3 + observability (SeaweedFS S3, Prometheus, Grafana)
+    name: Compose profiles s3 + observability (SeaweedFS S3, Prometheus, Alertmanager, Grafana)
     runs-on: ubuntu-latest
     needs: quality
     timeout-minutes: 40
@@ -249,6 +249,10 @@ jobs:
             echo "S3_ADMIN_SECRET_ACCESS_KEY=$(openssl rand -hex 24)"
             echo "METRICS_TOKEN=$(openssl rand -hex 24)"
             echo "GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+            # Alert destinations: the webhook sink started next to the stack (infra/ci).
+            echo "ALERT_WEBHOOK_URL=http://dfn-alert-sink:8080/team"
+            echo "ALERT_WEBHOOK_URL_CRITICAL=http://dfn-alert-sink:8080/oncall"
+            echo "ALERT_WATCHDOG_URL=http://dfn-alert-sink:8080/watchdog"
           } >> .env
       - name: Validate prometheus.yml and alerts.yml with promtool, and run the rule unit tests
         run: |
@@ -259,8 +263,29 @@ jobs:
           printf x > "$RUNNER_TEMP/prom/token"
           sed -i -e 's#/run/secrets/metrics_token#/t/token#' -e 's#/etc/prometheus/alerts.yml#/t/alerts.yml#' "$RUNNER_TEMP/prom/prometheus.yml"
           docker run --rm --entrypoint /bin/promtool -v "$RUNNER_TEMP/prom:/t:ro" prom/prometheus:v3.5.0 check config /t/prometheus.yml
+      - name: Validate alertmanager.yml (every rendering of the entrypoint) and its routes with amtool
+        run: |
+          src=infra/observability/alertmanager/alertmanager.yml
+          mkdir -p "$RUNNER_TEMP/am" && printf 'https://example.invalid/hook' > "$RUNNER_TEMP/am/url"
+          cp "$src" "$RUNNER_TEMP/am/all.yml"
+          sed '/# webhook$/d; /# webhook-critical$/d' "$src" > "$RUNNER_TEMP/am/watchdog-only.yml"
+          sed '/# watchdog$/d' "$src" > "$RUNNER_TEMP/am/no-watchdog.yml"
+          sed '/# webhook$/d; /# webhook-critical$/d; /# watchdog$/d' "$src" > "$RUNNER_TEMP/am/none.yml"
+          amtool() {
+            docker run --rm --entrypoint /bin/amtool -v "$RUNNER_TEMP/am:/am:ro" \
+              -v "$RUNNER_TEMP/am/url:/run/alertmanager/webhook_url:ro" \
+              -v "$RUNNER_TEMP/am/url:/run/alertmanager/webhook_url_critical:ro" \
+              -v "$RUNNER_TEMP/am/url:/run/alertmanager/watchdog_url:ro" prom/alertmanager:v0.29.0 "$@"
+          }
+          for f in all watchdog-only no-watchdog none; do amtool check-config "/am/$f.yml"; done
+          amtool config routes test --config.file=/am/all.yml --verify.receivers=watchdog alertname=DfnAlertingWatchdog severity=none
+          amtool config routes test --config.file=/am/all.yml --verify.receivers=oncall alertname=DfnApiDown severity=critical
+          amtool config routes test --config.file=/am/all.yml --verify.receivers=team alertname=DfnWebhookBacklog severity=warning
       - name: Build images and start the stack with the s3 and observability profiles
-        run: docker compose --profile s3 --profile observability up -d --build
+        run: |
+          docker compose --profile s3 --profile observability up -d --build
+          docker run -d --name dfn-alert-sink --network dfn-sandbox_default \
+            -v "$PWD/infra/ci:/sink:ro" python:3.13-alpine python -u /sink/webhook-sink.py 8080
       - name: Wait for API, Prometheus and Grafana
         run: |
           for _ in $(seq 1 90); do curl -sf http://127.0.0.1:4000/v1/health > /dev/null && break; sleep 2; done
@@ -268,9 +293,19 @@ jobs:
           for _ in $(seq 1 60); do curl -sf http://127.0.0.1:3001/api/health > /dev/null && break; sleep 2; done
           docker compose --profile s3 --profile observability ps -a
           test "$(docker compose --profile s3 ps -a s3-init --format '{{.ExitCode}}')" = "0"
-      - name: Documents on the S3 server, metrics in Prometheus, dashboards in Grafana
+      - name: Documents on the S3 server, metrics in Prometheus, dashboards in Grafana, alerts delivered
         run: |
-          GRAFANA_ADMIN_PASSWORD="$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)" bash infra/ops/check-profiles.sh
+          GRAFANA_ADMIN_PASSWORD="$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)" bash infra/ops/check-profiles.sh --send-test-alert
+          # Each receiver got its alerts at its own destination: the watchdog sent by Prometheus, the
+          # test warning of check-profiles, and a critical test alert posted here.
+          curl -sf -X POST -H 'Content-Type: application/json' http://127.0.0.1:9093/api/v2/alerts \
+            -d '[{"labels":{"alertname":"DfnCiCriticalTest","severity":"critical","stack":"dfn-sandbox","test":"true"}}]'
+          for _ in $(seq 1 20); do docker logs dfn-alert-sink 2>&1 | grep -q '"/oncall".*DfnCiCriticalTest' && break; sleep 3; done
+          docker logs dfn-alert-sink 2>&1 | tee "$RUNNER_TEMP/sink.log"
+          grep -q '"/watchdog".*DfnAlertingWatchdog' "$RUNNER_TEMP/sink.log"
+          grep -q '"/team".*DfnNotificationTest' "$RUNNER_TEMP/sink.log"
+          grep -q '"/oncall".*DfnCiCriticalTest' "$RUNNER_TEMP/sink.log"
+          if grep -q '"/team".*DfnCiCriticalTest' "$RUNNER_TEMP/sink.log"; then echo "critical alert also sent to team" >&2; exit 1; fi
           # The document of the check is an object of the private bucket (not a local file):
           # listed with the administrator identity (SigV4), refused to an anonymous caller.
           env_val() { grep "^$1=" .env | cut -d= -f2-; }
@@ -284,7 +319,9 @@ jobs:
           test -z "$(docker compose exec -T api sh -c 'find /data/storage -type f 2>/dev/null | head -1')"
       - name: Stack logs
         if: always()
-        run: docker compose --profile s3 --profile observability logs --no-color --timestamps > compose-profiles.log 2>&1 || true
+        run: |
+          docker compose --profile s3 --profile observability logs --no-color --timestamps > compose-profiles.log 2>&1 || true
+          docker logs dfn-alert-sink >> compose-profiles.log 2>&1 || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -293,7 +330,9 @@ jobs:
           retention-days: 7
       - name: Tear down
         if: always()
-        run: docker compose --profile s3 --profile observability down -v --remove-orphans
+        run: |
+          docker rm -f dfn-alert-sink || true
+          docker compose --profile s3 --profile observability down -v --remove-orphans
 
   containers:
     name: Docker images & compose stack (read-only API, migrate one-shot, BullMQ + Redis)

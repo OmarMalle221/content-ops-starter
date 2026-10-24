@@ -8,7 +8,7 @@
 #   docker compose up -d --build                  web http://localhost:3000 · api http://localhost:4000/docs
 #   docker compose --profile s3 up -d --build     + SeaweedFS S3 (set STORAGE_DRIVER=s3, S3_* in .env)
 #   docker compose --profile seed run --rm seed   demo data (fictitious)
-#   docker compose --profile observability up -d  + Prometheus http://127.0.0.1:9090 · Grafana http://127.0.0.1:3001
+#   docker compose --profile observability up -d  + Prometheus http://127.0.0.1:9090 · Alertmanager :9093 · Grafana :3001
 #                                                 (set METRICS_TOKEN and GRAFANA_ADMIN_PASSWORD in .env;
 #                                                 docs/operations/OBSERVABILITY.md)
 #
@@ -200,6 +200,9 @@ services:
       S3_ADMIN_SECRET_ACCESS_KEY: ''
       GRAFANA_ADMIN_USER: ''
       GRAFANA_ADMIN_PASSWORD: ''
+      ALERT_WEBHOOK_URL: ''
+      ALERT_WEBHOOK_URL_CRITICAL: ''
+      ALERT_WATCHDOG_URL: ''
       REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
       JOBS_DRIVER: bullmq
       RATE_LIMIT_STORE: redis
@@ -359,8 +362,78 @@ services:
     ports: ['127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090']
     depends_on:
       api: { condition: service_healthy }
+      alertmanager: { condition: service_healthy }
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:9090/-/healthy']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *logging
+    restart: unless-stopped
+
+  # Notifications of the alerts (routing: infra/observability/alertmanager/alertmanager.yml).
+  # Destinations come from .env and are written to tmpfs files at start (never into the config):
+  # ALERT_WEBHOOK_URL (team), ALERT_WEBHOOK_URL_CRITICAL (on call, default ALERT_WEBHOOK_URL) and
+  # ALERT_WATCHDOG_URL (dead man's switch). An unset destination removes its webhook from the
+  # rendered config: alerts stay visible at http://127.0.0.1:9093 and the container states at start
+  # that nobody is notified. Single instance (no cluster gossip). Image overridable
+  # (ALERTMANAGER_IMAGE).
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.29.0}
+    profiles: [observability]
+    <<: *hardening
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        check_url() {
+          case "$$2" in
+            http://?*|https://?*) ;;
+            *) echo "$$1 must be an http(s) URL" >&2; exit 1 ;;
+          esac
+        }
+        umask 077
+        drop=''
+        if [ -n "$$ALERT_WEBHOOK_URL" ]; then
+          check_url ALERT_WEBHOOK_URL "$$ALERT_WEBHOOK_URL"
+          printf '%s' "$$ALERT_WEBHOOK_URL" > /run/alertmanager/webhook_url
+          critical="$${ALERT_WEBHOOK_URL_CRITICAL:-$$ALERT_WEBHOOK_URL}"
+          check_url ALERT_WEBHOOK_URL_CRITICAL "$$critical"
+          printf '%s' "$$critical" > /run/alertmanager/webhook_url_critical
+        else
+          if [ -n "$$ALERT_WEBHOOK_URL_CRITICAL" ]; then
+            echo "ALERT_WEBHOOK_URL_CRITICAL is set without ALERT_WEBHOOK_URL" >&2; exit 1
+          fi
+          echo "WARNING: ALERT_WEBHOOK_URL is not set: alerts are shown at http://127.0.0.1:9093 but NOBODY IS NOTIFIED" >&2
+          drop="$$drop/# webhook$$/d;/# webhook-critical$$/d;"
+        fi
+        if [ -n "$$ALERT_WATCHDOG_URL" ]; then
+          check_url ALERT_WATCHDOG_URL "$$ALERT_WATCHDOG_URL"
+          printf '%s' "$$ALERT_WATCHDOG_URL" > /run/alertmanager/watchdog_url
+        else
+          echo "WARNING: ALERT_WATCHDOG_URL is not set: no dead man's switch watches the alerting pipeline" >&2
+          drop="$$drop/# watchdog$$/d;"
+        fi
+        sed "$$drop" /etc/alertmanager/alertmanager.yml > /run/alertmanager/alertmanager.yml
+        unset ALERT_WEBHOOK_URL ALERT_WEBHOOK_URL_CRITICAL ALERT_WATCHDOG_URL critical
+        exec /bin/alertmanager \
+          --config.file=/run/alertmanager/alertmanager.yml \
+          --storage.path=/alertmanager \
+          --web.listen-address=0.0.0.0:9093 \
+          --web.external-url=http://127.0.0.1:$${ALERTMANAGER_HOST_PORT} \
+          --cluster.listen-address=
+    environment:
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_URL_CRITICAL: ${ALERT_WEBHOOK_URL_CRITICAL:-}
+      ALERT_WATCHDOG_URL: ${ALERT_WATCHDOG_URL:-}
+      ALERTMANAGER_HOST_PORT: ${ALERTMANAGER_HOST_PORT:-9093}
+    # Writable by the image's user (nobody); the files are 0600 (umask above).
+    tmpfs: ['/run/alertmanager:size=64k,mode=1777']
+    volumes:
+      - ./infra/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanagerdata:/alertmanager
+    ports: ['127.0.0.1:${ALERTMANAGER_HOST_PORT:-9093}:9093']
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:9093/-/healthy']
       interval: 10s
       timeout: 5s
       retries: 12
@@ -420,4 +493,5 @@ volumes:
   storage:
   s3data:
   prometheusdata:
+  alertmanagerdata:
   grafanadata:

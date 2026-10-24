@@ -1097,15 +1097,23 @@ describe('observability (metrics, gauges, traces)', () => {
         names.add(alert);
         const expr = rule.expr as string;
         expect(typeof expr === 'string' && expr.trim().length > 0, alert).toBe(true);
-        for (const metric of new Set(expr.match(/\bdfn_[a-z0-9_]+\b/g) ?? [])) {
-          expect(exposed.has(metric), `${alert}: ${metric} is not exposed by /metrics`).toBe(true);
-        }
-        // Either a dfn_* metric or Prometheus' own `up` must be involved.
-        expect(/\bdfn_[a-z0-9_]+\b/.test(expr) || /\bup\{/.test(expr), alert).toBe(true);
-        if (rule.for !== undefined) expect(rule.for, alert).toMatch(/^\d+[smhd]$/);
         const labels = rule.labels as { [key: string]: YamlValue };
-        expect(['critical', 'warning'], alert).toContain(labels.severity);
-        expect(labels.service, alert).toBe('dfn-api');
+        // The dead man's switch is the one rule that fires by design: no metric, no severity, routed
+        // to the watchdog receiver only (infra/observability/alertmanager/alertmanager.yml).
+        if (alert === 'DfnAlertingWatchdog') {
+          expect(expr.trim()).toBe('vector(1)');
+          expect(rule.for).toBeUndefined();
+          expect(labels).toMatchObject({ severity: 'none', service: 'dfn-alerting' });
+        } else {
+          for (const metric of new Set(expr.match(/\bdfn_[a-z0-9_]+\b/g) ?? [])) {
+            expect(exposed.has(metric), `${alert}: ${metric} is not exposed by /metrics`).toBe(true);
+          }
+          // Either a dfn_* metric or Prometheus' own `up` must be involved.
+          expect(/\bdfn_[a-z0-9_]+\b/.test(expr) || /\bup\{/.test(expr), alert).toBe(true);
+          if (rule.for !== undefined) expect(rule.for, alert).toMatch(/^\d+[smhd]$/);
+          expect(['critical', 'warning'], alert).toContain(labels.severity);
+          expect(labels.service, alert).toBe('dfn-api');
+        }
         const annotations = rule.annotations as { [key: string]: YamlValue };
         for (const key of ['summary', 'description', 'runbook_url']) {
           expect(
@@ -1123,6 +1131,7 @@ describe('observability (metrics, gauges, traces)', () => {
       }
     }
     for (const required of [
+      'DfnAlertingWatchdog',
       'DfnApiDown',
       'DfnApiAbsent',
       'DfnApiHigh5xxRatio',

@@ -305,3 +305,19 @@ groups:
           summary: 'Domain gauges of {{ $labels.instance }} are not refreshed ({{ $labels.collector }})'
           description: 'The {{ $labels.collector }} collector failed or timed out on every scrape for 15 minutes: its gauges are absent, the database is slow or unreachable from this replica.'
           runbook_url: docs/operations/OBSERVABILITY.md#dfnmetricscollecterrors
+
+  - name: dfn-alerting
+    rules:
+      # Dead man's switch: always firing while Prometheus evaluates its rules and reaches
+      # Alertmanager, which forwards it to ALERT_WATCHDOG_URL only (never to people). The external
+      # switch pages when the heartbeat stops: Prometheus down, rules not evaluated, Alertmanager
+      # down or unreachable, or no outbound route to the notification service.
+      - alert: DfnAlertingWatchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          service: dfn-alerting
+        annotations:
+          summary: 'Alerting pipeline heartbeat (always firing)'
+          description: 'Fires continuously by design: when the external dead man switch stops receiving it, alerts can no longer be delivered.'
+          runbook_url: docs/operations/OBSERVABILITY.md#dfnalertingwatchdog

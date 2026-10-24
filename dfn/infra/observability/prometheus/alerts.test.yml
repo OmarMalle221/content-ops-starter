@@ -307,3 +307,17 @@ tests:
               description: 'The webhooks collector failed or timed out on every scrape for 15 minutes: its gauges are absent, the database is slow or unreachable from this replica.'
               runbook_url: 'docs/operations/OBSERVABILITY.md#dfnmetricscollecterrors'
               summary: 'Domain gauges of api:4000 are not refreshed (webhooks)'
+  # The watchdog fires from the first evaluation, without any input series
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: DfnAlertingWatchdog
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-alerting'
+              severity: 'none'
+            exp_annotations:
+              description: 'Fires continuously by design: when the external dead man switch stops receiving it, alerts can no longer be delivered.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnalertingwatchdog'
+              summary: 'Alerting pipeline heartbeat (always firing)'
