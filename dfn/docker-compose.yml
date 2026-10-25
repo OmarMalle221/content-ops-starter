@@ -444,9 +444,10 @@ services:
   # Trace backend: Jaeger all-in-one, in-memory storage (traces are lost at restart: sandbox
   # only). OTLP/HTTP is received on the compose network only (http://jaeger:4318, not published);
   # the API exports there when OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 is set in .env.
-  # UI and query API on loopback (JAEGER_HOST_PORT). Image overridable (JAEGER_IMAGE).
+  # UI and query API on loopback (JAEGER_HOST_PORT). Image overridable (JAEGER_IMAGE); 2.20 is the
+  # last release serving the HTTP query API Grafana's Jaeger datasource uses (2.21 answers 404).
   jaeger:
-    image: ${JAEGER_IMAGE:-jaegertracing/jaeger:2.21.0}
+    image: ${JAEGER_IMAGE:-jaegertracing/jaeger:2.20.0}
     profiles: [observability]
     <<: *hardening
     tmpfs: ['/tmp:size=16m']

@@ -34,7 +34,7 @@ Contraintes : bac à sable (ADR-0003 — rien ne doit laisser croire à une surv
 - `traceparent` entrant valide (niveau 1, identifiants non nuls, hexadécimal minuscule, version ≠ `ff`, versions futures lues sur leurs quatre premiers champs) → même `trace_id`, nouveau `span_id`, seul le bit « échantillonné » conservé ; sinon nouvelle trace échantillonnée. Contexte mémorisé sur la requête (`WeakMap`) et porté par `AsyncLocalStorage` pour tout ce que la requête déclenche, réponse comprise.
 - Renvoyé en en-tête de réponse sur toute réponse ; `trace_id` / `span_id` liés au journal de requête pino (`customProps`) donc présents sur chaque ligne de la requête ; `X-Request-Id` / `req.id` conservés.
 - Webhooks sortants : `traceparent` avec un span enfant du contexte courant, ou une nouvelle trace hors requête (nouvelles tentatives du planificateur) ; un appelant peut fournir le sien. Un partenaire corrèle ainsi ses journaux aux nôtres sans infrastructure commune.
-- Aucun export : un collecteur OpenTelemetry pourra plus tard lire les mêmes identifiants (SDK Node avec le propagateur W3C, journaux pino) sans changer clients ni partenaires (OBSERVABILITY.md §4).
+- Export (ajouté le 2026-10-25) : spans serveur et client envoyés en OTLP/HTTP JSON par un exportateur interne (`trace-exporter.service.ts`) qui réutilise les identifiants déjà journalisés et propagés — pas de SDK : aucune dépendance de plus, compatible avec le build groupé, et pas de second jeu d'identifiants à réconcilier avec ceux transmis aux partenaires. File bornée, pertes comptées, désactivé par défaut ; Jaeger 2.20 dans le profil `observability` (OBSERVABILITY.md §4).
 
 ### 4. Alertes, collecte et tableau de bord dans le dépôt
 

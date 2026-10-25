@@ -231,7 +231,9 @@ if [[ "$TRACES" == 1 ]]; then
 import json, sys
 spans = [s for t in json.load(open(sys.argv[1])).get("data", []) for s in t["spans"]]
 tags = {t["key"]: t["value"] for s in spans if s["operationName"] == "POST /v1/documents" for t in s["tags"]}
-print("yes" if tags.get("http.route") == "/v1/documents" and str(tags.get("http.response.status_code")) == "201" else "")' "$WORK/trace.json")
+# Jaeger reports http.response.status_code under its older name, http.status_code.
+status = tags.get("http.response.status_code", tags.get("http.status_code"))
+print("yes" if tags.get("http.route") == "/v1/documents" and str(status) == "201" else "")' "$WORK/trace.json")
     fi
     [[ -n "$found" ]] && break
     sleep 5
