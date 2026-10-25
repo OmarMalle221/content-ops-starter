@@ -96,8 +96,16 @@ export const ResourceSchema = z.object({
 });
 export type Resource = z.infer<typeof ResourceSchema>;
 
-/** Catégories affichées sur l'écran d'urgence et la page « Aide immédiate ». */
-export const HELP_CATEGORIES = ['emergency', 'crisis_line', 'psychosocial_line', 'health_line'] as const;
+/** Catégories affichées sur la page « Aide immédiate » (l'écran d'urgence en choisit une partie). */
+export const HELP_CATEGORIES = [
+    'emergency',
+    'crisis_line',
+    'psychosocial_line',
+    'health_line',
+    'caregiver_support',
+    'respite',
+    'elder_abuse'
+] as const;
 
 /** Copie de secours tirée de la même source que la table `resources` (jamais d'un texte généré). */
 export const EMERGENCY_SNAPSHOT: Resource[] = z.array(ResourceSchema).parse(emergencySnapshot);

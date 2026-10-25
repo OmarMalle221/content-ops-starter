@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router';
 import { buttonClass, Loading, Notice } from '../../components/ui';
+import { benefits as tbf } from '../../i18n/benefits.fr';
 import { documents as td } from '../../i18n/documents.fr';
 import { files as tf } from '../../i18n/files.fr';
 import { logFileOpened, type CareFile } from '../../lib/careFiles';
@@ -64,6 +65,7 @@ export function FileLayout() {
                   { to: 'chronologie', label: td.timelineTab }
               ]
             : []),
+        ...(access.canRead('benefits') ? [{ to: 'droits', label: tbf.tab }] : []),
         { to: 'consentement', label: tf.tabs.consent },
         { to: 'membres', label: tf.tabs.members },
         ...(isOwner

@@ -513,9 +513,14 @@ async function handleRest(req, res, url) {
 }
 
 // ------------------------------------------------------------------------------------- outils de test
+const REFERENCE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../supabase/reference');
+
 async function resetData() {
     await pool.query('truncate auth.users cascade');
     await pool.query('truncate public.access_log, public.ai_calls, public.storage_deletion_queue restart identity');
+    // Fiches et ressources modifiées par un test d'administration : retour aux données de référence.
+    await pool.query('truncate public.programs, public.resources cascade');
+    for (const file of ['02_resources.sql', '03_programs.sql']) await pool.query(await readFile(join(REFERENCE_DIR, file), 'utf8'));
     await pool.query('truncate storage.objects');
     await rm(STORAGE_DIR, { recursive: true, force: true });
     signedUrls.clear();
@@ -558,6 +563,15 @@ async function state() {
         storageObjects: (await q(`select name from storage.objects where bucket_id = 'documents' order by name`)).map((r) => r.name),
         storageFiles: await storedFiles(),
         deletionQueue: (await q('select object_path from public.storage_deletion_queue order by id')).map((r) => r.object_path),
+        programs: await q(
+            'select id, slug, summary, verification_status, verified_on, verified_by, version from public.programs order by sort_order'
+        ),
+        filePrograms: await q(
+            'select p.slug, f.care_file_id, f.match_level, f.status, f.letter_draft, f.requested_at, f.decided_at from public.care_file_programs f join public.programs p on p.id = f.program_id order by p.sort_order'
+        ),
+        checklist: await q('select label, origin, is_done from public.program_checklist_items order by position, label'),
+        explanations: await q('select program_id, program_version from public.program_explanations'),
+        resources: await q('select slug, phone, verification_status, verified_by from public.resources order by sort_order'),
         aiCalls: await q('select * from public.ai_calls order by created_at'),
         llmInputs: [...llm.inputs],
         accessLog: await q('select * from public.access_log order by id')

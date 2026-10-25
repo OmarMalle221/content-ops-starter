@@ -58,3 +58,11 @@ import_map = "./functions/import_map.json"
 [functions.delete-care-file]
 verify_jwt = true
 import_map = "./functions/import_map.json"
+
+[functions.explain-program]
+verify_jwt = true
+import_map = "./functions/import_map.json"
+
+[functions.draft-letter]
+verify_jwt = true
+import_map = "./functions/import_map.json"

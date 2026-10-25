@@ -50,5 +50,44 @@
         "hours": "24 h sur 24, 7 jours sur 7",
         "source_url": null,
         "sort_order": 40
+    },
+    {
+        "slug": "info-aidant",
+        "category": "caregiver_support",
+        "name": "Info-aidant (L’Appui)",
+        "organization": "L’Appui pour les proches aidants",
+        "phone": "1 855 852-7784",
+        "sms": null,
+        "url": "https://www.lappui.org/",
+        "description": "Écoute, information et références pour les personnes proches aidantes. Gratuit et confidentiel.",
+        "hours": null,
+        "source_url": "https://www.lappui.org/",
+        "sort_order": 50
+    },
+    {
+        "slug": "repertoire-repit-lappui",
+        "category": "respite",
+        "name": "Trouver du répit près de chez vous",
+        "organization": "L’Appui pour les proches aidants",
+        "phone": null,
+        "sms": null,
+        "url": "https://www.lappui.org/",
+        "description": "Répertoire des services de répit et de soutien aux proches aidants, par région.",
+        "hours": null,
+        "source_url": "https://www.lappui.org/",
+        "sort_order": 60
+    },
+    {
+        "slug": "ligne-aide-abus-aines",
+        "category": "elder_abuse",
+        "name": "Ligne Aide Abus Aînés",
+        "organization": null,
+        "phone": "1 888 489-2287",
+        "sms": null,
+        "url": "https://www.aideabusaines.ca/",
+        "description": "Si vous pensez qu’une personne aînée subit de la maltraitance. Gratuit, confidentiel et bilingue.",
+        "hours": null,
+        "source_url": "https://www.aideabusaines.ca/",
+        "sort_order": 70
     }
 ]

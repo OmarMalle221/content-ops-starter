@@ -20,6 +20,11 @@ vi.mock('../../src/lib/documents', async (importOriginal) => {
     const { documentsApi } = await import('./backend');
     return { ...actual, ...documentsApi };
 });
+vi.mock('../../src/lib/benefits', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/benefits')>();
+    const { benefitsApi } = await import('./backend');
+    return { ...actual, ...benefitsApi };
+});
 vi.mock('../../src/lib/supabase', async () => {
     const { auth } = await import('./backend');
     return { supabase: () => ({ auth }) };

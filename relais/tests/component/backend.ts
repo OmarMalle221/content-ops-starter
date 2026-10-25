@@ -5,6 +5,9 @@ import { vi } from 'vitest';
 import type { Profile, Resource } from '../../src/lib/api';
 import type { FileConsent, Membership } from '../../src/lib/careFiles';
 import type { CareDocument, Extraction, MedicationMention, TimelineEvent } from '../../src/lib/documents';
+import type { FileProgram, Program } from '../../src/lib/benefits';
+import type { BenefitAnswers } from '../../src/shared/benefits/engine';
+import programsJson from '../../src/content/programs.fr.json';
 import type { ConsentRecord, UserConsentType } from '../../src/lib/consents';
 import snapshot from '../../src/content/emergency-resources.json';
 
@@ -31,9 +34,20 @@ interface FileState {
     extraction: Extraction | null;
     timeline: TimelineEvent[];
     medications: MedicationMention[];
+    answers: { answers: BenefitAnswers; created_at: string } | null;
+    programs: FileProgram[];
 }
 
-const emptyFile = (): FileState => ({ members: [], consents: [], documents: [], extraction: null, timeline: [], medications: [] });
+const emptyFile = (): FileState => ({
+    members: [],
+    consents: [],
+    documents: [],
+    extraction: null,
+    timeline: [],
+    medications: [],
+    answers: null,
+    programs: []
+});
 
 interface BackendState {
     session: Session | null;
@@ -42,6 +56,7 @@ interface BackendState {
     resources: Resource[];
     failResources: boolean;
     file: FileState;
+    programs: Program[];
 }
 
 export const backend: BackendState = {
@@ -50,7 +65,8 @@ export const backend: BackendState = {
     consents: [],
     resources: [],
     failResources: false,
-    file: emptyFile()
+    file: emptyFile(),
+    programs: []
 };
 
 export function resetBackend(): void {
@@ -63,6 +79,8 @@ export function resetBackend(): void {
     for (const fn of Object.values(api)) fn.mockClear();
     for (const fn of Object.values(careFilesApi)) fn.mockClear();
     for (const fn of Object.values(documentsApi)) fn.mockClear();
+    for (const fn of Object.values(benefitsApi)) fn.mockClear();
+    backend.programs = catalog();
 }
 
 let nextId = 1;
@@ -198,4 +216,35 @@ export const documentsApi = {
     createTimelineEvent: vi.fn(async () => undefined),
     deleteTimelineEvent: vi.fn(async () => undefined),
     deleteMedication: vi.fn(async () => undefined)
+};
+
+/** Catalogue de départ (programs.fr.json), avec des identifiants stables. */
+export function catalog(): Program[] {
+    return programsJson.map((p, i) => ({
+        ...p,
+        id: `b1000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`,
+        criteria: p.criteria as Program['criteria'],
+        verification_status: 'to_verify' as const,
+        verified_on: null,
+        verified_by: null,
+        version: 1,
+        is_active: true
+    }));
+}
+
+export const benefitsApi = {
+    listPrograms: vi.fn(async () => [...backend.programs]),
+    getLatestAnswers: vi.fn(async () => backend.file.answers),
+    listFilePrograms: vi.fn(async () => [...backend.file.programs]),
+    saveAssessment: vi.fn(async () => undefined),
+    updateFileProgram: vi.fn(async () => undefined),
+    setChecklistItemDone: vi.fn(async () => undefined),
+    addChecklistItem: vi.fn(async () => undefined),
+    deleteChecklistItem: vi.fn(async () => undefined),
+    explainProgram: vi.fn(async () => null as unknown),
+    draftLetter: vi.fn(async () => null as string | null),
+    createProgram: vi.fn(async () => undefined),
+    updateProgram: vi.fn(async () => undefined),
+    listResourcesForAdmin: vi.fn(async () => []),
+    updateResource: vi.fn(async () => undefined)
 };

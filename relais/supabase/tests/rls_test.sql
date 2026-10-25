@@ -183,7 +183,7 @@ select tst.eq('profils créés par le déclencheur', (select count(*) from publi
 
 begin;
 set local role anon;
-select tst.eq('anon lit les ressources actives', tst.cnt('select 1 from public.resources'), 4);
+select tst.eq('anon lit les ressources actives', tst.cnt('select 1 from public.resources'), 7);
 select tst.eq('anon lit les versions de consentement', tst.cnt('select 1 from public.consent_texts'), 6);
 select tst.denied('anon ne lit pas users', 'select 1 from public.users');
 select tst.denied('anon ne lit pas consents', 'select 1 from public.consents');
@@ -292,7 +292,7 @@ rollback;
 begin;
 select set_config('request.jwt.claims', '{"sub":"a0000000-0000-4000-8000-00000000000a","role":"authenticated","aal":"aal2"}', true);
 set local role authenticated;
-select tst.eq('membre : ressources actives seulement', tst.cnt('select 1 from public.resources'), 4);
+select tst.eq('membre : ressources actives seulement', tst.cnt('select 1 from public.resources'), 7);
 select tst.denied('membre : pas d''ajout de ressource', $$insert into public.resources (slug, category, name, phone) values ('x', 'info', 'X', '1')$$);
 select tst.eq('membre : pas de modification de ressource', tst.affected($$update public.resources set name = 'X'$$), 0);
 select tst.eq('membre : aucun appel IA visible', tst.cnt('select 1 from public.ai_calls'), 0);
@@ -306,7 +306,7 @@ select tst.denied('admin sans MFA : pas d''ajout', $$insert into public.resource
 select tst.eq('admin sans MFA : aucun appel IA visible', tst.cnt('select 1 from public.ai_calls'), 0);
 select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","aal":"aal2"}', true);
 select tst.ok('admin avec MFA', private.is_admin());
-select tst.eq('admin voit les ressources inactives', tst.cnt('select 1 from public.resources'), 5);
+select tst.eq('admin voit les ressources inactives', tst.cnt('select 1 from public.resources'), 8);
 insert into public.resources (slug, category, name, phone) values ('repit-test', 'respite', 'Répit test', '5551234');
 select tst.fails('ressource vérifiée sans date refusée', $$update public.resources set verification_status = 'verified' where slug = 'repit-test'$$, '23514');
 select tst.eq('admin vérifie une ressource', tst.affected($$update public.resources set verification_status = 'verified', verified_on = current_date, verified_by = 'TS' where slug = 'repit-test'$$), 1);
@@ -598,7 +598,7 @@ select tst.ok('journal : arrivées, changement de niveau, retrait', (
     from public.access_log where care_file_id = :'file_id'));
 select tst.fails('suppression du compte refusée tant qu''elle est propriétaire', 'select public.delete_my_account()', '55006');
 select public.export_care_file(:'file_id') as file_export \gset
-select tst.ok('export : format et contenu', (:'file_export'::jsonb ->> 'format') = 'relais-dossier/2'
+select tst.ok('export : format et contenu', (:'file_export'::jsonb ->> 'format') = 'relais-dossier/3'
     and (:'file_export'::jsonb #>> '{care_recipient,first_name}') = 'Louise'
     and jsonb_array_length(:'file_export'::jsonb -> 'contacts') = 2
     and jsonb_array_length(:'file_export'::jsonb -> 'members') = 5);
@@ -903,7 +903,7 @@ select tst.eq('ses médicaments et événements partent avec lui', (
     + (select count(*) from public.timeline_events where source_document_id = :'doc2')
     + (select count(*) from public.document_extractions where document_id = :'doc2')), 0);
 select public.export_care_file(:'file2') as export2 \gset
-select tst.ok('export : documents, médicaments et chronologie', (:'export2'::jsonb ->> 'format') = 'relais-dossier/2'
+select tst.ok('export : documents, médicaments et chronologie', (:'export2'::jsonb ->> 'format') = 'relais-dossier/3'
     and jsonb_array_length(:'export2'::jsonb -> 'documents') = 2
     and jsonb_array_length(:'export2'::jsonb -> 'medications_as_written') = 2
     and jsonb_array_length(:'export2'::jsonb -> 'timeline_events') = 2
@@ -923,6 +923,191 @@ select tst.eq('tous les fichiers du dossier sont à effacer de Storage', (
     select count(*) from public.storage_deletion_queue where object_path like :'file2' || '/%'), 3);
 select tst.ok('le journal ne garde que la trace', (
     select count(*) = 1 and bool_and(action = 'care_file_deleted') from public.access_log where care_file_id = :'file2'));
+
+\o
+\echo '== étape 4 : catalogue des programmes'
+\o /dev/null
+
+select tst.eq('8 fiches de départ, toutes à vérifier', (select count(*) from public.programs where verification_status = 'to_verify'), 8);
+select tst.eq('aucun montant ni pourcentage dans les fiches', (
+    select count(*) from public.programs
+    where (name || summary || coalesce(how_to_apply, '') || required_documents::text) ~ '(\$|%|dollar)'), 0);
+select tst.ok('cache IA : écriture réservée au serveur',
+    not has_function_privilege('authenticated', 'public.save_program_explanation(uuid,integer,jsonb,text)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.save_program_letter_template(uuid,integer,text,text,text)', 'EXECUTE')
+    and not has_table_privilege('authenticated', 'public.program_explanations', 'INSERT'));
+select tst.ok('programmes du dossier : ajout par RPC, niveau de correspondance non modifiable',
+    not has_table_privilege('authenticated', 'public.care_file_programs', 'INSERT')
+    and not has_column_privilege('authenticated', 'public.care_file_programs', 'match_level', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.care_file_programs', 'requested_at', 'UPDATE'));
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"a0000000-0000-4000-8000-00000000000a","role":"authenticated","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('membre : fiches actives visibles', tst.cnt('select 1 from public.programs'), 8);
+select tst.denied('membre : pas d''ajout de fiche',
+    $$insert into public.programs (slug, name, organization, summary, criteria, source_label) values ('x', 'X', 'X', 'X', '{}', 'X')$$);
+select tst.eq('membre : pas de modification de fiche', tst.affected($$update public.programs set name = 'X'$$), 0);
+select tst.ok('fiche pour l''IA : aucune donnée personnelle, version incluse', (
+    select (j ? 'version') and not (j ? 'care_file_id') and (j ->> 'cached_explanation') is null
+    from (select public.program_for_ai((select id from public.programs where slug = 'credit-impot-personnes-handicapees')) as j) s));
+rollback;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","aal":"aal1"}', true);
+set local role authenticated;
+select tst.denied('admin sans MFA : pas d''ajout de fiche',
+    $$insert into public.programs (slug, name, organization, summary, criteria, source_label) values ('x', 'X', 'X', 'X', '{}', 'X')$$);
+rollback;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","aal":"aal2"}', true);
+set local role authenticated;
+insert into public.programs (slug, name, organization, summary, criteria, source_label)
+    values ('programme-test', 'Programme test', 'Organisme', 'Résumé factuel.', '{"all": []}', 'Organisme — page du programme');
+select tst.fails('montant refusé', $$update public.programs set summary = 'Jusqu''à 1 494 $ par année.' where slug = 'programme-test'$$, '23514');
+select tst.fails('pourcentage refusé', $$update public.programs set summary = '39 % des dépenses.' where slug = 'programme-test'$$, '23514');
+select tst.fails('montant refusé dans les pièces à fournir',
+    $$update public.programs set required_documents = '["Reçus de plus de 100 dollars"]' where slug = 'programme-test'$$, '23514');
+select tst.fails('fiche vérifiée sans lien officiel refusée',
+    $$update public.programs set verification_status = 'verified', verified_on = current_date - 2, verified_by = 'AB' where slug = 'programme-test'$$, '23514');
+update public.programs set official_url = 'https://example.org/programme' where slug = 'programme-test';
+update public.programs set verification_status = 'verified', verified_on = current_date - 2, verified_by = 'AB'
+    where slug = 'programme-test';
+select tst.ok('fiche vérifiée avec lien, date et auteur ; nouvelle version', (
+    select verification_status = 'verified' and version = 2 from public.programs where slug = 'programme-test'));
+update public.programs set summary = 'Résumé modifié.' where slug = 'programme-test';
+select tst.ok('modifiée sans nouvelle vérification : redevient à vérifier', (
+    select verification_status = 'to_verify' and verified_on is null and verified_by is null and version = 3
+    from public.programs where slug = 'programme-test'));
+update public.programs set is_active = false where slug = 'programme-test';
+select tst.ok('désactivation : même version', (select version = 3 from public.programs where slug = 'programme-test'));
+update public.programs set summary = 'Résumé corrigé.', official_url = 'https://example.org/programme',
+    verification_status = 'verified', verified_on = current_date, verified_by = 'CD' where slug = 'programme-test';
+update public.programs set how_to_apply = 'Par téléphone.' where slug = 'programme-test';
+select tst.ok('une vérification datée du jour couvre les corrections du jour', (
+    select verification_status = 'verified' and verified_by = 'CD' and version = 5 from public.programs where slug = 'programme-test'));
+update public.resources set verification_status = 'verified', verified_on = current_date - 2, verified_by = 'TS' where slug = 'info-aidant';
+update public.resources set phone = '1 855 000-0000' where slug = 'info-aidant';
+select tst.ok('ressource modifiée sans nouvelle vérification : redevient à vérifier', (
+    select verification_status = 'to_verify' and verified_on is null from public.resources where slug = 'info-aidant'));
+rollback;
+
+\o
+\echo '== étape 4 : programmes du dossier (« Grand-maman »)'
+\o /dev/null
+
+\set file3 'f3000000-0000-4000-8000-000000000003'
+insert into public.care_files (id, owner_id, title) values (:'file3', 'c0000000-0000-4000-8000-00000000000c', 'Grand-maman');
+insert into public.care_file_members (care_file_id, user_id, role, access_level) values
+    (:'file3', 'd0000000-0000-4000-8000-00000000000d', 'family_member', 'full'),
+    (:'file3', 'e0000000-0000-4000-8000-00000000000e', 'family_member', 'coordination'),
+    (:'file3', '70000000-0000-4000-8000-000000000007', 'family_member', 'read_only');
+insert into public.consents (user_id, care_file_id, consent_type, text_version, granted_by, legal_basis)
+    values ('c0000000-0000-4000-8000-00000000000c', :'file3', 'care_recipient_data', '2026-10-27',
+            'care_recipient_signed_form', 'person_consents');
+select id as p_maintien from public.programs where slug = 'credit-maintien-domicile-aines' \gset
+select id as p_ciph from public.programs where slug = 'credit-impot-personnes-handicapees' \gset
+select id as p_pad from public.programs where slug = 'programme-adaptation-domicile' \gset
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select public.save_benefit_assessment(:'file3', '{"recipient_age": 82, "living_setting": "home"}', format($$[
+    {"program_id": %s, "match_level": "likely", "match_reasons": [{"label": "70 ans ou plus", "status": "met"}]},
+    {"program_id": %s, "match_level": "possible", "match_reasons": []},
+    {"program_id": %s, "match_level": "unlikely", "match_reasons": []}]$$,
+    to_jsonb(:'p_maintien'::text), to_jsonb(:'p_ciph'::text), to_jsonb(:'p_pad'::text))::jsonb) as assessment1 \gset
+select tst.eq('probables et possibles ajoutés au dossier, pas les peu probables', tst.cnt('select 1 from public.care_file_programs'), 2);
+select tst.eq('pièces à fournir reprises des fiches', tst.cnt($$select 1 from public.program_checklist_items where origin = 'program'$$), 3);
+select tst.ok('auteur de l''évaluation imposé', (select created_by = auth.uid() from public.benefit_assessments));
+select tst.denied('pas d''ajout direct d''un programme au dossier',
+    format($$insert into public.care_file_programs (care_file_id, program_id, match_level) values (%L, %L, 'likely')$$, :'file3', :'p_pad'));
+select tst.denied('le niveau de correspondance ne se modifie pas à la main', $$update public.care_file_programs set match_level = 'likely'$$);
+update public.care_file_programs set status = 'in_progress' where program_id = :'p_maintien';
+select tst.ok('demande en cours : date de demande notée', (
+    select requested_at is not null and decided_at is null and updated_by = auth.uid()
+    from public.care_file_programs where program_id = :'p_maintien'));
+update public.care_file_programs set status = 'obtained' where program_id = :'p_maintien';
+select tst.ok('obtenu : date de décision notée', (
+    select decided_at is not null from public.care_file_programs where program_id = :'p_maintien'));
+-- Nouvelle évaluation : le CIPH devient peu probable (gardé, statut conservé), le PAD probable (ajouté).
+select public.save_benefit_assessment(:'file3', '{"recipient_age": 82}', format($$[
+    {"program_id": %s, "match_level": "likely", "match_reasons": []},
+    {"program_id": %s, "match_level": "unlikely", "match_reasons": []},
+    {"program_id": %s, "match_level": "likely", "match_reasons": []}]$$,
+    to_jsonb(:'p_maintien'::text), to_jsonb(:'p_ciph'::text), to_jsonb(:'p_pad'::text))::jsonb);
+select tst.ok('réévaluation : statuts conservés, niveaux mis à jour', (
+    select count(*) = 3
+       and bool_and(case program_id when :'p_maintien' then status = 'obtained' else status = 'to_explore' end)
+       and bool_or(program_id = :'p_ciph' and match_level = 'unlikely')
+    from public.care_file_programs));
+select tst.eq('pièces du nouveau programme ajoutées une seule fois', tst.cnt('select 1 from public.program_checklist_items'), 5);
+update public.program_checklist_items set is_done = true where position = 0 and origin = 'program';
+select tst.ok('pièce cochée : qui et quand', (
+    select bool_and(done_by = auth.uid() and done_at is not null) from public.program_checklist_items where is_done));
+insert into public.program_checklist_items (care_file_program_id, care_file_id, label)
+    select id, care_file_id, 'Photocopie du bail' from public.care_file_programs where program_id = :'p_pad';
+select tst.denied('pas d''ajout d''une pièce « officielle » à la main',
+    format($$insert into public.program_checklist_items (care_file_program_id, care_file_id, label, origin)
+             select id, care_file_id, 'X', 'program' from public.care_file_programs where program_id = %L$$, :'p_pad'));
+select tst.eq('une pièce tirée de la fiche ne se supprime pas', tst.affected($$delete from public.program_checklist_items where origin = 'program'$$), 0);
+select tst.eq('une pièce ajoutée à la main se supprime', tst.affected($$delete from public.program_checklist_items where origin = 'custom'$$), 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"e0000000-0000-4000-8000-00000000000e","role":"authenticated","email":"emma@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('coordination : droits invisibles', tst.cnt('select 1 from public.care_file_programs')
+    + tst.cnt('select 1 from public.benefit_assessments') + tst.cnt('select 1 from public.program_checklist_items'), 0);
+select tst.fails('coordination : pas d''évaluation', format($$select public.save_benefit_assessment(%L, '{}', '[]')$$, :'file3'), '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"70000000-0000-4000-8000-000000000007","role":"authenticated","email":"gilles@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('lecture seule : voit les programmes', tst.cnt('select 1 from public.care_file_programs'), 3);
+select tst.eq('lecture seule : ne change pas un statut', tst.affected($$update public.care_file_programs set status = 'refused'$$), 0);
+select tst.fails('lecture seule : pas d''évaluation', format($$select public.save_benefit_assessment(%L, '{}', '[]')$$, :'file3'), '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"d0000000-0000-4000-8000-00000000000d","role":"authenticated","email":"denis@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('accès complet : note sur un programme', tst.affected(format($$update public.care_file_programs set notes = 'Appeler mardi' where program_id = %L$$, :'p_pad')), 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"60000000-0000-4000-8000-000000000006","role":"authenticated","email":"olivier@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('personne extérieure : rien', tst.cnt('select 1 from public.care_file_programs'), 0);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select public.save_program_explanation(:'p_ciph', 1, '{"plain_explanation": "Explication."}', 'simulated');
+select public.save_program_explanation(:'p_ciph', 1, '{"plain_explanation": "Autre."}', 'simulated');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.ok('explication en cache pour la version de la fiche (la première gardée)', (
+    select (public.program_for_ai(:'p_ciph') #>> '{cached_explanation,plain_explanation}') = 'Explication.'));
+select public.export_care_file(:'file3') as export3 \gset
+select tst.ok('export : réponses et programmes', (:'export3'::jsonb ->> 'format') = 'relais-dossier/3'
+    and jsonb_array_length(:'export3'::jsonb -> 'programs') = 3
+    and (:'export3'::jsonb #>> '{benefit_answers,recipient_age}') = '82');
+select public.delete_care_file(:'file3') as deleted3 \gset
+select tst.ok('suppression : nombre de programmes noté', (:'deleted3'::jsonb ->> 'programs')::int = 3);
+commit;
+
+select tst.eq('dossier « Grand-maman » entièrement effacé', (
+    (select count(*) from public.care_file_programs where care_file_id = :'file3')
+    + (select count(*) from public.benefit_assessments where care_file_id = :'file3')
+    + (select count(*) from public.program_checklist_items where care_file_id = :'file3')), 0);
+select tst.eq('les fiches du catalogue restent', (select count(*) from public.programs), 8);
 
 \o
 \echo 'RLS OK'

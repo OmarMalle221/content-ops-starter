@@ -33,8 +33,9 @@ export interface ExtractionStart {
 
 export interface AiCallRow {
     user_id: string;
-    care_file_id: string;
-    purpose: 'document_extraction';
+    /** Null pour une explication ou une lettre (tirées de la fiche seule, sans dossier). */
+    care_file_id: string | null;
+    purpose: 'document_extraction' | 'program_explanation' | 'letter_draft';
     provider: string;
     model: string;
     status: LlmStatus | 'guard_flagged';

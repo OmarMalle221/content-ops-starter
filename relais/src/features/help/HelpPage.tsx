@@ -20,6 +20,13 @@ export function HelpPage() {
                 <p>{fr.help.healthText}</p>
                 <HelpResourceList resources={resources} categories={['health_line']} headingLevel="h3" />
             </section>
+            <section aria-labelledby="caregiver-title" className="flex flex-col gap-3">
+                <h2 id="caregiver-title" className="text-2xl font-bold">
+                    {fr.help.caregiverTitle}
+                </h2>
+                <p>{fr.help.caregiverText}</p>
+                <HelpResourceList resources={resources} categories={['caregiver_support', 'respite', 'elder_abuse']} headingLevel="h3" />
+            </section>
         </div>
     );
 }

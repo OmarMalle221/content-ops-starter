@@ -5,8 +5,10 @@
 -- étape 1 (users, consent_texts, consents, resources, access_log, ai_calls), étape 2 (care_files,
 -- care_file_members, care_file_invitations, care_recipients, care_needs, contacts) et étape 3 (documents,
 -- document_extractions, medication_mentions, timeline_events, storage_deletion_queue, bucket `documents`,
--- fonctions register_document … confirm_document). Pour ces tables, la migration l'emporte sur ce fichier,
--- qui décrit surtout la cible des étapes 4 à 6. Les tests automatisés sont dans
+-- fonctions register_document … confirm_document) et étape 4 (programs, program_explanations,
+-- program_letter_templates, benefit_assessments, care_file_programs, program_checklist_items, contrôle
+-- « aucun montant », versionnage des fiches, save_benefit_assessment). Pour ces tables, la migration
+-- l'emporte sur ce fichier, qui décrit surtout la cible des étapes 5 et 6. Les tests automatisés sont dans
 -- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
 -- Principes
@@ -381,6 +383,8 @@ create index journal_entries_file on public.journal_entries (care_file_id, creat
 -- -----------------------------------------------------------------------------------------------------
 -- Navigateur de droits
 -- -----------------------------------------------------------------------------------------------------
+-- Livré à l'étape 4 : voir supabase/migrations/20261029000001_benefits.sql, qui fait foi (lien officiel
+-- facultatif tant que la fiche est « à vérifier », contrôle « aucun montant » par la base, versionnage).
 -- Catalogue géré par l'admin. Aucun montant. Chaque fiche porte sa source et son état de vérification.
 create table public.programs (
     id                  uuid primary key default gen_random_uuid(),
@@ -391,7 +395,7 @@ create table public.programs (
     criteria            jsonb not null,          -- critères structurés pour le moteur de règles (sans IA)
     required_documents  jsonb not null default '[]' check (jsonb_typeof(required_documents) = 'array'),
     how_to_apply        text,
-    official_url        text not null check (official_url ~ '^https://'),
+    official_url        text check (official_url ~ '^https://'),
     source_label        text not null,           -- ex. « Revenu Québec — page du crédit »
     verification_status public.verification_status not null default 'to_verify',
     verified_on         date,
@@ -400,7 +404,9 @@ create table public.programs (
     is_active           boolean not null default true,
     created_at          timestamptz not null default now(),
     updated_at          timestamptz not null default now(),
-    check ((verification_status = 'verified') = (verified_on is not null))
+    sort_order          integer not null default 100,
+    check ((verification_status = 'verified') = (verified_on is not null and verified_by is not null)),
+    check (verification_status = 'to_verify' or official_url is not null)
 );
 
 -- Explications IA mises en cache : produites à partir de la seule fiche (aucune donnée personnelle).
@@ -413,10 +419,21 @@ create table public.program_explanations (
     primary key (program_id, program_version)
 );
 
+-- Modèles de lettre à espaces réservés, mis en cache par version de fiche (aucun nom).
+create table public.program_letter_templates (
+    program_id      uuid not null references public.programs (id) on delete cascade,
+    program_version integer not null,
+    kind            text not null check (kind in ('information_request', 'application_follow_up')),
+    template        text not null check (char_length(template) between 1 and 6000),
+    model           text not null,
+    created_at      timestamptz not null default now(),
+    primary key (program_id, program_version, kind)
+);
+
 create table public.benefit_assessments (
     id           uuid primary key default gen_random_uuid(),
     care_file_id uuid not null references public.care_files (id) on delete cascade,
-    answers      jsonb not null,  -- âge, milieu de vie, tranche de revenu, dépenses d'aide, besoins d'adaptation
+    answers      jsonb not null,  -- âge, milieu de vie, services payés, aide domestique, incapacité, cohabitation…
     created_by   uuid references public.users (id) on delete set null,
     created_at   timestamptz not null default now(),
     unique (id, care_file_id)
@@ -985,7 +1002,7 @@ revoke all on all tables in schema public from anon, authenticated;
 grant all on all tables in schema public to service_role;
 
 grant select on public.resources to anon, authenticated;
-grant select on public.programs, public.program_explanations to authenticated;
+grant select on public.programs, public.program_explanations, public.program_letter_templates to authenticated;
 grant insert, update, delete on public.programs, public.resources to authenticated;  -- RLS : admin seulement
 
 grant select on public.users to authenticated;
@@ -1129,6 +1146,7 @@ create policy programs_admin_update on public.programs for update to authenticat
     using (private.is_admin()) with check (private.is_admin());
 create policy programs_admin_delete on public.programs for delete to authenticated using (private.is_admin());
 create policy program_explanations_select on public.program_explanations for select to authenticated using (true);
+create policy program_letter_templates_select on public.program_letter_templates for select to authenticated using (true);
 
 create policy resources_select_anon on public.resources for select to anon using (is_active);
 create policy resources_select on public.resources for select to authenticated

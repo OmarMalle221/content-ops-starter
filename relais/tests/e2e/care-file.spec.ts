@@ -214,7 +214,7 @@ test('paramètres : export du dossier, refus de supprimer le compte, suppression
     const file = await download;
     const chunks = await (await file.createReadStream()).toArray();
     const content = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    expect(content).toMatchObject({ format: 'relais-dossier/2', care_recipient: { first_name: 'Louise' } });
+    expect(content).toMatchObject({ format: 'relais-dossier/3', care_recipient: { first_name: 'Louise' } });
 
     await page.getByLabel('Je comprends que la suppression est définitive.').check();
     await page.getByRole('button', { name: 'Supprimer le dossier' }).click();

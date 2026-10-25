@@ -1,6 +1,6 @@
 # Relais — PROGRESS
 
-Dernière mise à jour : 2026-10-25 (étape 3)
+Dernière mise à jour : 2026-10-25 (étape 4)
 
 ## Fait
 
@@ -124,9 +124,60 @@ Dernière mise à jour : 2026-10-25 (étape 3)
   la pseudonymisation (trouvé par les tests de bout en bout) ; un brouillon rejeté ou remplacé était
   conservé : il est maintenant effacé.
 
+### Étape 4 — Navigateur de droits (livrée)
+
+- **Base de données** (`supabase/migrations/20261029000001_benefits.sql`) : `programs` (catalogue,
+  version, source, état de vérification), `program_explanations` et `program_letter_templates` (cache de
+  l'IA par version de fiche), `benefit_assessments` (réponses au questionnaire), `care_file_programs`
+  (démarches du dossier : niveau, raisons, statut `to_explore` / `in_progress` / `obtained` / `refused`,
+  notes, lettre, dates repéré → demandé → décision posées par la base), `program_checklist_items` (pièces
+  à fournir : de la fiche ou ajoutées par la famille). Contrôles de la base : **aucun montant** dans une
+  fiche (`$`, `%`, `€`, « dollars », « cents », « taux » refusés), fiche vérifiée = lien officiel + date +
+  initiales, tout changement de contenu → nouvelle version « à vérifier » (sauf vérification du jour).
+  Fonctions `save_benefit_assessment`, `program_for_ai` et, pour le serveur seulement,
+  `save_program_explanation`, `save_program_letter_template`. `delete_care_file` et `export_care_file`
+  (format `relais-dossier/3`) étendues aux démarches.
+- **8 fiches « À VÉRIFIER », sans montant** (`src/content/programs.fr.json` → `supabase/reference/`) :
+  crédit pour maintien à domicile des aînés, crédit pour personne aidante, PEFSAD, montant canadien pour
+  aidant naturel, CIPH, programme d'adaptation de domicile, soutien à domicile du CLSC, Info-aidant et
+  répit (L'Appui). Ressources ajoutées : Info-aidant, répertoire de répit de L'Appui, Ligne Aide Abus Aînés
+  (section « Pour les proches aidants » de la page d'aide).
+- **Moteur de règles sans IA** (`src/shared/benefits/engine.ts`) : critères JSON validés, logique à trois
+  valeurs (« Je ne sais pas » → « à vérifier » plutôt qu'une exclusion), raisons = libellés de la fiche.
+- **Fonctions serveur** `explain-program` et `draft-letter` : l'IA ne reçoit que la fiche ; garde-fous
+  (aucun montant, aucun chiffre absent de la fiche, espaces réservés connus seulement) ; cache par version
+  de fiche ; une sortie refusée n'est jamais mise en cache et l'écran dit « Je ne sais pas ».
+- **PWA** : onglet « Droits » (questionnaire prérempli par le profil ; liste en trois groupes, les
+  programmes peu probables repliés ; chaque carte porte la source, la date de vérification ou « Fiche À
+  VÉRIFIER » et « Admissibilité à confirmer auprès de… ») ; fiche d'un programme (conditions, démarche,
+  statut, pièces à cocher ou à ajouter, notes, explication simple, lettre dont les noms et la date sont
+  ajoutés sur le téléphone) ; administration (`/admin`, rôle admin + vérification en deux étapes) des
+  fiches (critères JSON vérifiés à la saisie, vérification datée avec initiales) et des ressources d'aide.
+- **Familles fictives de démonstration** (`supabase/seed/demo_families.sql`, générées par le vrai moteur) :
+  Claire et Marc pour Louise, 82 ans, à domicile ; Denis pour Roger, 79 ans, en RPA, en attente de CHSLD.
+  Démonstration locale : `RELAIS_DEMO_SEED=1 bash scripts/test-db.sh --serve node
+tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo@example.test` (code
+  `123456`). Jamais en production.
+- **Tests, tous verts en local** :
+  - Base : 292 vérifications RLS (48 de plus : catalogue en lecture seule pour les familles, écriture admin
+    avec MFA seulement, montants refusés, versionnage et vérification, évaluations et démarches par niveau
+    d'accès, pièces de la fiche non supprimables, cache IA réservé au serveur, export et suppression) ;
+    familles de démonstration appliquées par les vraies fonctions puis vérifiées (`demo_seed_test.sql`).
+  - Unitaires et composants : 310 tests, dont moteur de règles en tables de vérité et les deux familles
+    (12), garde-fous d'explication et de lettre (8), fonctions serveur avec IA simulée (7), écrans (8).
+  - Bout en bout : 20 parcours, dont 3 pour l'étape 4 (famille A : questionnaire → 8 cartes sourcées,
+    statut, pièces, explication puis cache, lettre sans aucun nom envoyé ; famille B : programmes peu
+    probables repliés mais sourcés ; administration : montant refusé, vérification datée et signée,
+    ressource vérifiée, « je ne sais pas » quand l'IA invente un montant).
+  - Lighthouse accessibilité mobile : 100 sur les 28 pages auditées (dont droits, fiche d'un programme et
+    les 5 pages d'administration).
+- **Corrigé en route** : le statut d'une démarche et les cases des pièces ne changeaient qu'après la
+  réponse du serveur (trouvé par les tests de bout en bout) ; ils changent tout de suite et reviennent en
+  arrière si l'enregistrement échoue.
+
 ## En cours
 
-- Rien. **Prochaine étape : 4 — Navigateur de droits**, à lancer sur ton feu vert.
+- Rien. **Prochaine étape : 5 — Coordination et rendez-vous**, à lancer sur ton feu vert.
 
 ## Décisions
 
@@ -171,6 +222,14 @@ Dernière mise à jour : 2026-10-25 (étape 3)
 | D37 | Logique des fonctions serveur sans dépendance à Deno ; le faux Supabase exécute ce même code avec une IA simulée                                                                             | Les parcours e2e testent le vrai code serveur, sans réseau ni clé                               |
 | D38 | Brouillon rejeté ou remplacé effacé (une seule extraction par document)                                                                                                                      | Minimisation                                                                                    |
 | D39 | Photos réduites à 2000 px et réencodées en JPEG sur le téléphone ; PDF envoyés tels quels                                                                                                    | Aucune métadonnée (GPS, appareil) ne quitte le téléphone ; PDF lisibles par le serveur          |
+| D40 | Moteur de règles en TypeScript pur, sur le téléphone ; critères JSON validés dans chaque fiche ; « Je ne sais pas » rend un critère inconnu (→ « possible »)                                 | Règle 3 : aucune IA pour choisir ; ne pas exclure une aide faute d'information                  |
+| D41 | Seuls les programmes probables ou possibles entrent dans les démarches ; refaire le questionnaire met à jour le niveau sans toucher au statut ni aux pièces                                  | Les démarches en cours ne disparaissent pas quand une réponse change                            |
+| D42 | Aucun montant dans une fiche, contrôlé par la base ; l'explication renvoie le montant à l'organisme                                                                                          | Règle 3 ; les montants changent chaque année et dépendent du revenu                             |
+| D43 | Fiche modifiée → nouvelle version « à vérifier », sauf vérification datée du jour (heure du Québec) ; fiche vérifiée = lien, date, initiales                                                 | Une vérification ne vaut que pour le contenu vérifié ; trace de qui a vérifié                   |
+| D44 | Explication et lettre produites à partir de la seule fiche, mises en cache par version ; `ai_calls` sans dossier                                                                             | Règles 3 et 6 ; coût et délai réduits ; aucune donnée du dossier vers l'IA                      |
+| D45 | Lettre à espaces réservés fixes, remplis sur le téléphone ; tout autre crochet devient « [À COMPLÉTER] »                                                                                     | Aucun nom envoyé ; rien n'est rempli au hasard                                                  |
+| D46 | Aucune question sur le revenu en v0.1                                                                                                                                                        | Minimisation ; les fiches disent quand le revenu compte et l'organisme tranche                  |
+| D47 | Familles fictives générées par le vrai moteur, appliquées par les fonctions et la RLS de l'application, démonstration locale seulement                                                       | La démonstration ne peut pas diverger des fiches ; aucun compte fictif en production            |
 
 ### Hypothèses appliquées en attendant les réponses aux questions bloquantes
 
@@ -215,6 +274,21 @@ Dernière mise à jour : 2026-10-25 (étape 3)
   politique de confidentialité (règle 6, A3, A17).
 - Tâche planifiée (`pg_cron` → fonction) qui reprend `storage_deletion_queue` et efface les dépôts
   abandonnés (`pending_upload` de plus de 24 h).
+- Compte admin de l'équipe Relais : rôle `admin` à attribuer par SQL (`public.users.app_role`), MFA
+  obligatoire à la première connexion.
+
+### Avant le pilote : vérifier les 8 fiches à la source
+
+Les fiches ont été rédigées à partir des pages officielles trouvées par recherche web (les sites de Revenu
+Québec, de la RAMQ, de l'ARC et de la SHQ ne sont pas joignables depuis cet environnement). Une personne de
+l'équipe doit relire chacune à la source, puis la marquer vérifiée dans `/admin/programmes` (initiales).
+Points précis :
+
+- PEFSAD : le lien pointe vers un dépliant PDF de la RAMQ ; trouver la page de référence.
+- Montant canadien pour aidant naturel : lien vers la page anglaise de l'ARC ; trouver la page française.
+- Programme d'adaptation de domicile : Montréal gère sa propre version ; décider s'il faut une fiche à part.
+- Critères simplifiés volontairement (pas de revenu, pas de durée d'aide de 365 jours posée en question) :
+  à valider par la travailleuse sociale (B8) avec les conditions exactes de chaque fiche.
 
 ### Non bloquantes
 
@@ -223,8 +297,10 @@ Dernière mise à jour : 2026-10-25 (étape 3)
   valider et compléter par la travailleuse sociale (B1).
 - Textes de consentement (`src/content/consent-texts.fr.json`) : à faire valider par le juriste ;
   coordonnées de la personne responsable des renseignements personnels à fournir.
-- Taille de l'application : 229 ko compressés au premier chargement (215 avant l'étape 3) ; découpage par
-  page prévu à la passe de performance de l'étape 6.
+- Taille de l'application : 245 ko compressés au premier chargement (229 avant l'étape 4) ;
+  découpage par page prévu à la passe de performance de l'étape 6.
+- Revérification périodique des fiches (ex. rappel aux admins pour toute fiche vérifiée il y a plus de
+  12 mois) : à ajouter avec les rappels de l'étape 5.
 - Documents qui évoquent une crise (B5) : l'écran d'urgence ne se déclenche que sur ce que la famille tape,
   pas sur le contenu des documents lus. À trancher avec la travailleuse sociale.
 - Les « à faire » tirés d'un document restent avec le document ; ils deviendront des tâches partagées à

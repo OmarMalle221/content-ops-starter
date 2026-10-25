@@ -49,6 +49,11 @@ export function HelpResourceList({
                                 {fr.help.text(formatPhone(resource.sms))}
                             </a>
                         )}
+                        {resource.url && !resource.phone && (
+                            <a href={resource.url} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary')}>
+                                {fr.help.website(resource.name)}
+                            </a>
+                        )}
                     </div>
                 </li>
             ))}

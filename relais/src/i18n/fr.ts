@@ -160,7 +160,10 @@ export const fr = {
         healthText: 'Relais ne donne aucun conseil médical. Une infirmière ou un infirmier peut vous répondre en tout temps.',
         call: (phone: string) => `Appeler le ${phone}`,
         text: (phone: string) => `Texto au ${phone}`,
-        hours: 'Heures :'
+        hours: 'Heures :',
+        caregiverTitle: 'Pour vous, personne proche aidante',
+        caregiverText: 'Écoute et information, répit près de chez vous, et aide si vous pensez qu’une personne aînée est maltraitée.',
+        website: (name: string) => `Site de ${name}`
     },
     distress: {
         headingDanger: 'Si quelqu’un est en danger, appelez le 911 maintenant.',

@@ -6,6 +6,9 @@ import { HelpPage } from '../features/help/HelpPage';
 import { HomePage } from '../features/home/HomePage';
 import { LandingPage } from '../features/landing/LandingPage';
 import { MfaPage } from '../features/mfa/MfaPage';
+import { AdminHomePage, AdminProgramEditPage, AdminProgramsPage, AdminResourcesPage } from '../features/admin/AdminPages';
+import { BenefitsPage } from '../features/benefits/BenefitsPage';
+import { ProgramPage } from '../features/benefits/ProgramPage';
 import { DocumentPage } from '../features/documents/DocumentPage';
 import { FileDocumentsPage } from '../features/documents/FileDocumentsPage';
 import { TimelinePage } from '../features/documents/TimelinePage';
@@ -50,6 +53,10 @@ export const routes = [
                                     { path: '/accueil', element: <HomePage /> },
                                     { path: '/mes-consentements', element: <MyConsentsPage /> },
                                     { path: '/compte', element: <AccountPage /> },
+                                    { path: '/admin', element: <AdminHomePage /> },
+                                    { path: '/admin/programmes', element: <AdminProgramsPage /> },
+                                    { path: '/admin/programmes/:programId', element: <AdminProgramEditPage /> },
+                                    { path: '/admin/ressources', element: <AdminResourcesPage /> },
                                     { path: '/dossiers/nouveau', element: <NewCareFilePage /> },
                                     { path: '/dossiers/:fileId/formulaire-consentement', element: <ConsentFormPage /> },
                                     {
@@ -62,6 +69,8 @@ export const routes = [
                                             { path: 'documents', element: <FileDocumentsPage /> },
                                             { path: 'documents/:documentId', element: <DocumentPage /> },
                                             { path: 'chronologie', element: <TimelinePage /> },
+                                            { path: 'droits', element: <BenefitsPage /> },
+                                            { path: 'droits/:programSlug', element: <ProgramPage /> },
                                             { path: 'consentement', element: <FileConsentPage /> },
                                             { path: 'membres', element: <FileMembersPage /> },
                                             { path: 'journal', element: <FileLogPage /> },

@@ -2,7 +2,8 @@
 // Elle lit le texte pseudonymisé comme le ferait le modèle et produit une sortie du schéma v1.
 // Marqueur « TEST-CONSEIL » dans le document : elle ajoute volontairement un conseil et un médicament
 // inventé, pour montrer les garde-fous.
-import type { LlmClient, LlmExtractionResult } from '../../supabase/functions/_shared/llm.ts';
+import type { LlmClient, LlmResult } from '../../supabase/functions/_shared/llm.ts';
+import type { ExplanationOutput, LetterKind, LetterOutput, ProgramFiche } from '../../src/shared/benefits/ai.ts';
 import type { ModelOutput } from '../../src/shared/extraction/schema.ts';
 
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
@@ -102,6 +103,43 @@ export function simulateExtraction(text: string): ModelOutput {
     };
 }
 
+/** Explication tirée de la fiche. Marqueur « TEST-INVENTION » : ajoute un montant inventé (garde-fou). */
+export function simulateExplanation(fiche: ProgramFiche): ExplanationOutput {
+    const firstSentences = fiche.summary
+        .split(/(?<=\.)\s+/)
+        .slice(0, 2)
+        .join(' ');
+    return {
+        plain_explanation: `${firstSentences}${fiche.summary.includes('TEST-INVENTION') ? ' Vous recevrez jusqu’à 1 494 $ par année.' : ''}`,
+        who_it_may_help: fiche.criteria_labels,
+        steps: fiche.how_to_apply ? [fiche.how_to_apply] : [],
+        not_in_fiche: ['La fiche ne précise pas le montant de l’aide.', 'La fiche ne précise pas le délai de réponse.']
+    };
+}
+
+export function simulateLetter(fiche: ProgramFiche, kind: LetterKind): LetterOutput {
+    const purpose =
+        kind === 'information_request'
+            ? 'obtenir de l’information sur ce programme et savoir comment faire une demande'
+            : 'savoir où en est la demande que nous avons envoyée';
+    return {
+        letter: [
+            '[DATE]',
+            '',
+            `Objet : ${fiche.name}`,
+            '',
+            'Madame, Monsieur,',
+            '',
+            `Je vous écris au nom de [NOM DE LA PERSONNE AIDÉE], dont je suis la personne proche aidante. Nous aimerions ${purpose}.`,
+            '',
+            'Vous pouvez me joindre au [VOTRE TÉLÉPHONE]. Merci de votre attention.',
+            '',
+            '[VOTRE NOM]',
+            '[VOTRE ADRESSE]'
+        ].join('\n')
+    };
+}
+
 export class SimulatedLlm implements LlmClient {
     readonly provider = 'anthropic' as const;
     readonly model = 'simulated';
@@ -109,12 +147,24 @@ export class SimulatedLlm implements LlmClient {
     readonly inputs: string[] = [];
     mode: 'ok' | 'refusal' | 'schema_error' | 'error' = 'ok';
 
-    async extractDocument(input: { text: string; pageCount: number }): Promise<LlmExtractionResult> {
-        this.inputs.push(input.text);
-        const usage = { model: this.model, inputTokens: Math.ceil(input.text.length / 4), outputTokens: 400 };
+    #respond<T>(input: string, produce: () => T): LlmResult<T> {
+        this.inputs.push(input);
+        const usage = { model: this.model, inputTokens: Math.ceil(input.length / 4), outputTokens: 400 };
         if (this.mode === 'error')
             return { status: 'error', output: null, model: this.model, inputTokens: null, outputTokens: null, errorCode: 'timeout' };
         if (this.mode !== 'ok') return { status: this.mode, output: null, ...usage };
-        return { status: 'ok', output: simulateExtraction(input.text), ...usage };
+        return { status: 'ok', output: produce(), ...usage };
+    }
+
+    async extractDocument(input: { text: string; pageCount: number }): Promise<LlmResult<ModelOutput>> {
+        return this.#respond(input.text, () => simulateExtraction(input.text));
+    }
+
+    async explainProgram(fiche: ProgramFiche): Promise<LlmResult<ExplanationOutput>> {
+        return this.#respond(JSON.stringify(fiche), () => simulateExplanation(fiche));
+    }
+
+    async draftLetter(fiche: ProgramFiche, kind: LetterKind): Promise<LlmResult<LetterOutput>> {
+        return this.#respond(JSON.stringify(fiche), () => simulateLetter(fiche, kind));
     }
 }

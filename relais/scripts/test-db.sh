@@ -130,6 +130,10 @@ for f in "$SUPABASE_DIR"/reference/*.sql; do
 done
 
 if [[ "$SERVE" == 1 ]]; then
+    # Démonstration locale : deux familles fictives (jamais en production).
+    if [[ "${RELAIS_DEMO_SEED:-0}" == 1 ]]; then
+        run_sql "$SUPABASE_DIR/seed/demo_families.sql"
+    fi
     if [[ -z "${DATABASE_URL:-}" ]]; then
         export DATABASE_URL="postgresql://postgres@/$DB_NAME?host=$SOCK_DIR&port=$PORT"
     fi
@@ -144,6 +148,11 @@ fi
 
 log "running rls_test.sql"
 "$PSQL_BIN" -X -q "${CONN[@]}" -v ON_ERROR_STOP=1 -f "$SUPABASE_DIR/tests/rls_test.sql"
+
+# The demo families go through the real functions and RLS; check the result.
+run_sql "$SUPABASE_DIR/seed/demo_families.sql"
+log "running demo_seed_test.sql"
+"$PSQL_BIN" -X -q "${CONN[@]}" -v ON_ERROR_STOP=1 --single-transaction -f "$SUPABASE_DIR/tests/demo_seed_test.sql"
 
 # A published consent text version cannot change content: once a stored hash differs, the reference
 # script must refuse to run (it would otherwise silently keep the old proof of consent).

@@ -76,7 +76,10 @@ service de santé ni un service de crise.
 7. **Ton et lisibilité.** Relecture des textes : accueil, consentements, résumés, écrans d'erreur et
    d'urgence.
 8. **Navigateur de droits.** Éviter les faux espoirs (« admissibilité à confirmer »), rôle de
-   l'évaluation du CLSC, pièces à fournir présentées simplement.
+   l'évaluation du CLSC, pièces à fournir présentées simplement. Questionnaire volontairement court (six
+   questions, sans revenu) : formulation des questions et conditions simplifiées de chaque fiche
+   (`src/content/programs.fr.json`) à confirmer, ainsi que le regroupement « probable / à vérifier / peu
+   probable ».
 9. **Dynamiques familiales.** Niveaux d'accès adaptés aux conflits (retrait d'un membre, visibilité),
    place de la personne aidée (dignité, autodétermination, accès en lecture).
 10. **Préparer un rendez-vous.** Contenu de la page imprimable et exemples de questions à poser, sans

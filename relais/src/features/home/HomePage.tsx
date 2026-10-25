@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { useMyConsents, useProfile } from '../../app/queries';
 import { buttonClass, Card, Loading, Notice, PageTitle } from '../../components/ui';
+import { benefits as tb } from '../../i18n/benefits.fr';
 import { fr } from '../../i18n/fr';
 import { ACCESS_LABELS, files as tf, ROLE_LABELS } from '../../i18n/files.fr';
 import { activeConsent } from '../../lib/consents';
@@ -27,6 +28,12 @@ export function HomePage() {
                         {tf.seeInvitation}
                     </Link>
                 </Notice>
+            )}
+
+            {profile.data?.app_role === 'admin' && (
+                <Link to="/admin" className={buttonClass('secondary')}>
+                    {tb.adminTitle}
+                </Link>
             )}
 
             <section aria-labelledby="files-title" className="flex flex-col gap-3">

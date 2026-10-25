@@ -70,7 +70,34 @@ export interface BackendState {
     storageObjects: string[];
     storageFiles: string[];
     deletionQueue: string[];
-    aiCalls: Array<{ status: string; model: string; pseudonymized_counts: Record<string, number> }>;
+    programs: Array<{
+        id: string;
+        slug: string;
+        summary: string;
+        verification_status: string;
+        verified_on: string | null;
+        verified_by: string | null;
+        version: number;
+    }>;
+    filePrograms: Array<{
+        slug: string;
+        care_file_id: string;
+        match_level: string;
+        status: string;
+        letter_draft: string | null;
+        requested_at: string | null;
+        decided_at: string | null;
+    }>;
+    checklist: Array<{ label: string; origin: string; is_done: boolean }>;
+    explanations: Array<{ program_id: string; program_version: number }>;
+    resources: Array<{ slug: string; phone: string | null; verification_status: string; verified_by: string | null }>;
+    aiCalls: Array<{
+        status: string;
+        model: string;
+        purpose: string;
+        care_file_id: string | null;
+        pseudonymized_counts: Record<string, number>;
+    }>;
     llmInputs: string[];
 }
 

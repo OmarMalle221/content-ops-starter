@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DISCHARGE_SUMMARY_PAGES } from '../support/documents';
 import { buildTextPdf } from '../support/pdf';
-import { resetBackend, signIn, waitForTitle } from './helpers';
+import { resetBackend, signIn, TOTP_CODE, waitForTitle } from './helpers';
 
 const APP = 'http://127.0.0.1:4173';
 const PORT = 9333;
@@ -92,6 +92,38 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         await expect(page.getByRole('heading', { name: 'Vérifier le brouillon' })).toBeVisible();
         const documentPath = new URL(page.url()).pathname;
         for (const path of [`${fileUrl}/documents`, documentPath, `${fileUrl}/chronologie`]) await audit(path);
+
+        // Étape 4 : questionnaire, liste personnalisée, fiche d'un programme (avec son explication).
+        await page.goto(`${APP}${fileUrl}/droits`);
+        await waitForTitle(page, 'Aides et programmes');
+        await audit(`${fileUrl}/droits`);
+        await page.getByRole('button', { name: 'Voir les aides possibles' }).click();
+        await expect(page.getByRole('heading', { name: 'Vous pourriez y avoir droit' })).toBeVisible();
+        await audit(`${fileUrl}/droits`);
+        await audit(`${fileUrl}/droits/soutien-domicile-clsc`);
+        await audit('/aide');
+
+        // Administration : autre compte (rôle admin, vérification en deux étapes).
+        await context.clearCookies();
+        await page.evaluate(() => {
+            localStorage.clear();
+            sessionStorage.clear();
+        });
+        await signIn(page, 'admin.lighthouse@example.test');
+        await waitForTitle(page, 'Vérification en deux étapes');
+        await page.getByLabel('Code de l’application (6 chiffres)').fill(TOTP_CODE);
+        await page.getByRole('button', { name: 'Vérifier' }).click();
+        await waitForTitle(page, 'Bienvenue dans Relais');
+        await page.getByLabel(/J’accepte : Comment Relais protège vos renseignements/).check();
+        await page.getByRole('button', { name: 'Enregistrer mes choix' }).click();
+        await page.getByLabel('Votre prénom').fill('Ada');
+        await page.getByRole('button', { name: 'Continuer' }).click();
+        await waitForTitle(page, 'Bonjour Ada');
+        await page.goto(`${APP}/admin/programmes`);
+        await waitForTitle(page, 'Fiches des programmes');
+        const programPath = await page.getByRole('link', { name: /CIPH/ }).getAttribute('href');
+        for (const path of ['/admin', '/admin/programmes', programPath as string, '/admin/programmes/nouvelle', '/admin/ressources'])
+            await audit(path);
     } finally {
         await context.close();
         rmSync(profile, { recursive: true, force: true });

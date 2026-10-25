@@ -19,7 +19,9 @@ describe.skipIf(!apiKey)('extraction réelle (API Claude)', () => {
             extractDocument: (input) => {
                 sent.push(input.text);
                 return real.extractDocument(input);
-            }
+            },
+            explainProgram: (fiche) => real.explainProgram(fiche),
+            draftLetter: (fiche, kind) => real.draftLetter(fiche, kind)
         };
         const saved: SaveExtraction[] = [];
         const start: ExtractionStart = { care_file_id: 'f', storage_path: 'f/d', mime_type: 'application/pdf', ...FICTIONAL_DICTIONARY };

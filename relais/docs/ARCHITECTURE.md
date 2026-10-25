@@ -82,7 +82,8 @@ relais/
 │   ├── functions/             # extract-document, get-document-url, explain-program,
 │   │                          # draft-letter, invite-member, delete-care-file,
 │   │                          # export-data, send-reminders, notify-support
-│   ├── seed/                  # 2 familles fictives, 8 programmes « À VÉRIFIER », ressources
+│   ├── reference/             # textes de consentement, ressources, 8 programmes « À VÉRIFIER »
+│   ├── seed/                  # 2 familles fictives (démonstration locale seulement)
 │   └── tests/                 # shim + rls_test.sql
 └── tests/                     # unit, integration, e2e (Playwright + axe), lighthouse
 ```
@@ -235,26 +236,41 @@ elle refusera tant que la personne est propriétaire d'un dossier (transfert ou 
 
 ## 7. Navigateur de droits
 
-1. Questionnaire court : âge (ou année de naissance déjà connue), milieu de vie, tranche de revenu,
-   dépenses d'aide à domicile (oui / non), besoins d'adaptation du logement.
-2. **Moteur de règles en TypeScript pur, sans IA** : compare les réponses aux `criteria` de chaque
-   fiche, écrits dans un petit langage JSON :
+1. **Questionnaire court**, prérempli par le profil (âge tiré de l'année de naissance, milieu de vie, aide
+   domestique, besoins d'adaptation) : services payés pour rester à domicile, aide domestique, incapacité
+   grave et prolongée, dépendance envers l'aidant, cohabitation, adaptation du logement. Chaque question
+   accepte « Je ne sais pas ». Aucune question sur le revenu en v0.1 : les fiches disent quand le revenu
+   compte, l'organisme tranche.
+2. **Moteur de règles en TypeScript pur, sans IA** (`src/shared/benefits/engine.ts`) : compare les
+   réponses aux `criteria` de chaque fiche, écrits dans un petit langage JSON validé par Zod (faits et
+   opérateurs connus seulement), chaque condition portant son libellé :
    ```json
    {
      "all": [
-       { "fact": "recipient_age", "op": ">=", "value": 70 },
-       { "fact": "living_setting", "op": "in", "value": ["home", "rpa"] }
+       { "fact": "recipient_age", "op": ">=", "value": 70, "label": "La personne a 70 ans ou plus" },
+       { "fact": "living_setting", "op": "in", "value": ["home", "rpa"], "label": "Elle vit chez elle ou en RPA" }
      ]
    }
    ```
-   Résultat par programme : `likely`, `possible` (information manquante) ou `unlikely`, avec les
-   raisons. Chaque carte affiche la source officielle, la date de vérification (ou « À VÉRIFIER ») et
-   la mention « admissibilité à confirmer auprès de l'organisme ».
-3. **Explication par l'IA** : à partir de la seule fiche `programs` (aucune donnée personnelle), mise en
-   cache par version de fiche ; si la fiche ne contient pas l'information, la réponse dit qu'elle ne
-   sait pas.
-4. **Brouillon de lettre** : l'IA rédige avec des espaces réservés (`[NOM DE LA PERSONNE]`…) que le
-   téléphone remplit localement ; aucun nom n'est envoyé.
+   Logique à trois valeurs : tous les critères remplis → `likely` ; une réponse « je ne sais pas » et
+   aucun échec → `possible` ; un critère non rempli → `unlikely`. Les raisons affichées sont les libellés
+   de la fiche, jamais du texte généré. Le moteur tourne sur le téléphone ; `save_benefit_assessment`
+   enregistre les réponses et ajoute aux démarches du dossier les programmes `likely` ou `possible`
+   (statut `to_explore`, pièces à fournir copiées de la fiche). Refaire le questionnaire met à jour le
+   niveau sans toucher au statut ni aux pièces déjà cochées.
+3. **Chaque carte** affiche la source officielle (lien), la date de vérification ou « Fiche À
+   VÉRIFIER », et « Admissibilité à confirmer auprès de : <organisme> ». Aucun montant : la base refuse
+   tout `$`, `%`, `€`, « dollars », « cents » ou « taux » dans une fiche (`private.has_no_amount`).
+4. **Explication par l'IA** (`explain-program`) : à partir de la seule fiche (aucune donnée du dossier),
+   mise en cache par version de fiche. Garde-fous : aucun montant, aucun chiffre absent de la fiche. Une
+   sortie refusée n'est pas mise en cache et l'écran dit « Je ne sais pas » en montrant la fiche.
+5. **Brouillon de lettre** (`draft-letter`) : l'IA rédige avec des espaces réservés fixes
+   (`[NOM DE LA PERSONNE AIDÉE]`, `[VOTRE NOM]`, `[DATE]`…) que le téléphone remplit localement ; tout
+   autre crochet devient `[À COMPLÉTER]`. Aucun nom n'est envoyé.
+6. **Administration** (rôle `admin`, vérification en deux étapes) : fiches et ressources d'aide. Toute
+   modification du contenu d'une fiche augmente sa version et la remet « à vérifier », sauf si elle est
+   vérifiée le jour même (date du Québec) ; une fiche vérifiée porte obligatoirement lien officiel, date
+   et initiales. Les explications et lettres en cache de l'ancienne version ne servent plus.
 
 ## 8. Détresse
 
