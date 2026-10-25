@@ -125,7 +125,9 @@ service métier ──evaluateAndRecord(facts)──▶ RiskService
 2. **Règle pure** (`structuringSignal`) : seuil `STRUCTURING_THRESHOLD` réécrit à l'exposant de la devise (`structuringThresholdMinor`) ; opérations strictement sous le seuil ; au moins deux, somme ≥ seuil, opération courante incluse ; `MEDIUM` (2) ou `HIGH` (≥ 3) ; sujet retenu = le plus d'opérations, puis la plus grande somme, puis l'organisation.
 3. **Persistance** : clé `STRUCTURING:<sens>:<ORGANIZATION|USER>:<id>:<devise>` ; verrou `pg_advisory_xact_lock(hashtext(clé))` ; si une alerte ouverte de même clé existe dans la fenêtre, la détection est ajoutée à `explanation.updates` et l'alerte est éventuellement escaladée (sévérité, score, échéance) — sinon création (`risk.structuring_detected`).
 
-## 7. Intégration — appels restant à ajouter (hors périmètre de ce chantier)
+## 7. Intégration — appels branchés dans les services
+
+Prévus lors de ce chantier, ces quatre appels sont en place dans les services indiqués (vérifié le 2026-10-25).
 
 | Service (propriétaire)                                                                                            | Appel                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -158,7 +160,7 @@ Aucune donnée secrète n'est journalisée ; les montants des explications sont 
 
 ## 10. Limites connues
 
-- Seuil de structuration nominal identique pour toutes les devises (très bas en XOF / GNF) : à remplacer par un seuil par devise ou en équivalent CAD avant toute exploitation réelle (`env.ts` n'accepte aujourd'hui qu'une valeur décimale).
+- Seuil de structuration par devise (`STRUCTURING_THRESHOLD`, valeur par défaut et `CCC:valeur` par devise, ex. `10000.00,XOF:4400000,GNF:63000000`) : les valeurs XOF / GNF sont des équivalents approchés aux taux sandbox, à recalibrer avec la conformité avant toute exploitation réelle.
 - SLA en heures calendaires (pas de calendrier de jours ouvrés).
 - Pagination par page (pas de curseur) : suffisante pour la volumétrie sandbox ; un curseur `(dueAt, id)` serait préférable au-delà de quelques milliers d'alertes ouvertes.
 - La structuration ne relie pas des sujets distincts (réseaux de mules, bénéficiaires communs).

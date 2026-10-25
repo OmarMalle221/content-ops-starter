@@ -264,6 +264,7 @@ Livré depuis la revue d'intégration, chaque point vérifié sur la pile réell
 - **Traces** : export OTLP des spans serveur et webhook vers Jaeger, trace d'un téléversement retrouvée de bout en bout.
 - **Interface d'administration** : montants du volume et du registre formatés par devise, libellés traduits.
 - **Dépendances** : Zod 4.6.6, body-parser 2.4.0, multer 2.5.0 (avis de sécurité élevés).
+- **Couverture du registre comptable** (indicateur §11) : mesurée pour la première fois (88,3 % des lignes), portée à **97,75 %** (90,3 % des branches) par des tests des garde-fous — compte inconnu, gelé ou clos, devise du compte, écritures invalides, solde négatif détecté par la réconciliation — et imposée à chaque exécution (seuil 90 %, CI comprise).
 
 **Le volet technique réalisable en sandbox est terminé.** Ce qui reste ne peut pas être fait par du code et bloque toute activité réelle (§10, portes R1–R10) :
 

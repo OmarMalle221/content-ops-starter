@@ -53,7 +53,7 @@ Deux contraintes techniques encadrent le build :
 
 Positives : démarrage sans compilation ; image sans chaîne de développement (TypeScript, SWC, ts-node), non privilégiée et immuable ; cartes de sources pour des piles lisibles ; migrations séparées et ordonnées ; aucun secret par défaut ; sauvegardes chiffrées, vérifiées et purgées ; restauration éprouvée à chaque CI avec réconciliation comptable, ce qui fournit la mesure de RTO demandée par `SECURITY.md` ; mise à l'échelle documentée (BullMQ, Redis, S3).
 
-Négatives : un build de plus à maintenir (alias `paths`, liste des points d'entrée) ; les dépendances déclarées en `dependencies` mais inutiles au bundle (ts-node, tsconfig-paths) sont installées puis retirées dans l'image — à déplacer en `devDependencies` ; le CLI Prisma (≈ 120 Mo avec ses moteurs et dépendances) reste dans l'image d'exécution pour le service `migrate` ; l'image web dépend de l'adresse interne de l'API connue au build ; l'image du serveur S3 est épinglée (`S3_SERVER_IMAGE` pour la remplacer) ; pas encore de collecte de métriques.
+Négatives : un build de plus à maintenir (alias `paths`, liste des points d'entrée) ; ts-node et tsconfig-paths (point d'entrée de développement) sont des `devDependencies`, retirées de l'image avec leurs pairs TypeScript / SWC ; le CLI Prisma (≈ 120 Mo avec ses moteurs et dépendances) reste dans l'image d'exécution pour le service `migrate` ; l'image web dépend de l'adresse interne de l'API connue au build ; l'image du serveur S3 est épinglée (`S3_SERVER_IMAGE` pour la remplacer) ; pas encore de collecte de métriques.
 
 ## Alternatives
 
