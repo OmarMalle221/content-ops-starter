@@ -286,12 +286,30 @@ elle refusera tant que la personne est propriétaire d'un dossier (transfert ou 
 
 ## 9. Coordination, rendez-vous, charge de l'aidant
 
-- Tâches (responsable, échéance), calendrier partagé des rendez-vous (qui accompagne), journal de bord,
-  rappels quotidiens par courriel au contenu générique (« Vous avez 2 tâches cette semaine dans
-  Relais »), sans détail de santé.
-- **Préparer un rendez-vous** : page imprimable produite **sans IA** à partir du dossier (situation,
-  changements récents de la chronologie, médicaments tels qu'écrits avec leur document source,
-  questions saisies par la famille).
+- **Tâches** (zone « coordination ») : quoi, qui s'en occupe (un membre du dossier, vérifié par la base),
+  échéance ; « faite » datée et signée par la base. Une tâche peut naître d'un « à faire » d'un document ou
+  d'une démarche du navigateur de droits (lien vers sa source, créé seulement par qui voit cette source).
+  Un membre retiré du dossier n'est plus responsable de rien.
+- **Agenda** (zone « coordination ») : objet, date et heure saisies à l'heure du Québec (changements
+  d'heure compris), lieu, contact lié, qui accompagne. Les membres « coordination » (ex. un voisin qui
+  conduit) voient l'agenda et les tâches ; l'interface leur rappelle de garder les titres brefs.
+- **Questions à poser** et **carnet de bord** (zone « santé ») : les observations du quotidien sont des
+  renseignements de santé ; seuls les membres qui ont accès à la santé les voient. Chacun modifie ou retire
+  seulement ses propres notes. Toute saisie libre passe par le détecteur de détresse.
+- **Fichier calendrier (.ics)** produit sur le téléphone, sans serveur : seulement l'objet, l'heure et le
+  lieu (le calendrier du téléphone est souvent synchronisé ailleurs) ; jamais les notes ni les questions.
+- **Rappels quotidiens par courriel** (consentement distinct « Rappels par courriel ») : `pg_cron` appelle
+  chaque matin la fonction `send-reminders` avec un secret partagé (`supabase/cron/send_reminders.sql`).
+  La base ne lui donne que des **nombres** par personne (`reminders_due` : tâches confiées échues ou dues
+  d'ici demain, rendez-vous d'aujourd'hui ou de demain qu'elle accompagne). Courriel fixe : « Vous avez
+  2 tâches à faire d'ici demain et 1 rendez-vous… », un lien, la façon d'arrêter. Envoi par Amazon SES en
+  `ca-central-1` (API HTTPS signée SigV4, sans dépendance) ; un envoi par personne et par jour
+  (`reminder_deliveries`), un échec n'est pas noté et sera repris.
+- **Préparer un rendez-vous** : page imprimable produite **sans IA** à partir du dossier (la personne, son
+  autonomie, les changements des 3 derniers mois de la chronologie, les médicaments tels qu'écrits, les
+  questions de la famille), **chaque élément avec sa source** (profil, document et sa date, note à la main
+  et son auteur). Version imprimée en noir sur blanc, sans navigation, avec des lignes pour les réponses.
+  L'impression est notée au journal des accès (`prep_sheet_printed`).
 - **Bilan hebdomadaire** : 3 questions (fatigue, débordement, isolement) sur 1 à 5 ; au-delà du seuil
   (proposé : total ≥ 12 ou une réponse à 5, à valider par la TS), suggestions de répit tirées de
   `resources` et offre de parler à une intervenante. Pas un outil clinique.

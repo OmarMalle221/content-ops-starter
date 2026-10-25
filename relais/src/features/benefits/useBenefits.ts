@@ -11,6 +11,6 @@ export const benefitKeys = {
 export const usePrograms = () => useQuery({ queryKey: benefitKeys.programs, queryFn: listPrograms, staleTime: 10 * 60 * 1000 });
 export const useBenefitAnswers = (fileId: string) =>
     useQuery({ queryKey: benefitKeys.answers(fileId), queryFn: () => getLatestAnswers(fileId) });
-export const useFilePrograms = (fileId: string) =>
-    useQuery({ queryKey: benefitKeys.filePrograms(fileId), queryFn: () => listFilePrograms(fileId) });
+export const useFilePrograms = (fileId: string, enabled = true) =>
+    useQuery({ queryKey: benefitKeys.filePrograms(fileId), queryFn: () => listFilePrograms(fileId), enabled });
 export const useAdminResources = () => useQuery({ queryKey: benefitKeys.adminResources, queryFn: listResourcesForAdmin });

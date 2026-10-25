@@ -103,6 +103,18 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         await audit(`${fileUrl}/droits/soutien-domicile-clsc`);
         await audit('/aide');
 
+        // Étape 5 : tâches, agenda, rendez-vous, page à imprimer, carnet.
+        for (const section of ['/taches', '/agenda', '/agenda/nouveau', '/carnet']) await audit(`${fileUrl}${section}`);
+        await page.goto(`${APP}${fileUrl}/agenda/nouveau`);
+        await waitForTitle(page, 'Nouveau rendez-vous');
+        await page.getByLabel('Objet du rendez-vous').fill('Clinique de gériatrie');
+        await page.getByLabel('Date', { exact: true }).fill('2026-11-12');
+        await page.getByLabel('Heure', { exact: true }).fill('10:30');
+        await page.getByRole('button', { name: 'Enregistrer' }).click();
+        await waitForTitle(page, 'Clinique de gériatrie');
+        const appointmentPath = new URL(page.url()).pathname;
+        for (const path of [appointmentPath, `${appointmentPath}/preparer`, `${fileUrl}/agenda`, fileUrl]) await audit(path);
+
         // Administration : autre compte (rôle admin, vérification en deux étapes).
         await context.clearCookies();
         await page.evaluate(() => {

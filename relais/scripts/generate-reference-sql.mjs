@@ -155,6 +155,10 @@ const setStatus = (fileVar, slug, status, notes) =>
     `update public.care_file_programs set status = ${q(status)}, notes = ${q(notes)}
     where care_file_id = :'${fileVar}' and program_id = ${programId(slug)};`;
 
+// Dates relatives au jour de la démonstration (heure du Québec).
+const TODAY = "(now() at time zone 'America/Toronto')::date";
+const dayAt = (days, time) => `((${TODAY} + ${days})::timestamp + interval '${time}') at time zone 'America/Toronto'`;
+
 const fileConsent = (fileVar) =>
     `select public.record_file_consent(:'${fileVar}', 'care_recipient_data', ${q(consentTexts.care_recipient_data.version)}, 'care_recipient_signed_form', 'person_consents');`;
 
@@ -193,6 +197,17 @@ ${assessmentSql('file_a', FAMILY_A)}
 ${setStatus('file_a', 'credit-maintien-domicile-aines', 'in_progress', 'Factures du ménage gardées dans la chemise bleue.')}
 update public.program_checklist_items set is_done = true
 where care_file_id = :'file_a' and label like 'Factures ou reçus%';
+insert into public.tasks (care_file_id, title, assignee_id, due_on) values
+    (:'file_a', 'Appeler le CLSC pour l’évaluation du soutien à domicile', auth.uid(), ${TODAY} + 1),
+    (:'file_a', 'Acheter une barre d’appui pour le bain', null, ${TODAY} + 10);
+insert into public.appointments (care_file_id, title, starts_at, ends_at, location, contact_id, companion_id)
+select :'file_a', 'Clinique de gériatrie', ${dayAt(3, '10:30')}, ${dayAt(3, '11:30')}, 'Hôpital fictif de Montréal',
+    (select id from public.contacts where care_file_id = :'file_a' limit 1), auth.uid();
+insert into public.appointment_questions (appointment_id, care_file_id, question, position)
+select id, care_file_id, 'Quels exercices peuvent l’aider à garder son équilibre ?', 0
+from public.appointments where care_file_id = :'file_a';
+insert into public.journal_entries (care_file_id, body)
+values (:'file_a', 'Visite de dimanche : Maman était de bonne humeur et a bien mangé.');
 select public.create_invitation(:'file_a', ${q(marc.email)}, 'family_member', 'read_only') as invite_a \\gset
 
 ${welcome(marc, ['privacy_policy'])}
@@ -215,6 +230,13 @@ values (:'file_b', 'living_setting_change', '2026-08-15', 'Inscription sur la li
 ${assessmentSql('file_b', FAMILY_B)}
 ${setStatus('file_b', 'credit-impot-personnes-handicapees', 'in_progress', 'Formulaire T2201 remis au médecin de famille.')}
 ${setStatus('file_b', 'credit-maintien-domicile-aines', 'obtained', null)}
+insert into public.tasks (care_file_id, title, assignee_id, due_on, care_file_program_id)
+select :'file_b', 'Remplir la partie A du formulaire T2201', auth.uid(), ${TODAY} + 7, id
+from public.care_file_programs where care_file_id = :'file_b' and program_id = ${programId('credit-impot-personnes-handicapees')};
+insert into public.appointments (care_file_id, title, starts_at, location, companion_id)
+values (:'file_b', 'Visite de la travailleuse sociale', ${dayAt(2, '14:00')}, 'Résidence fictive Les Érables', auth.uid());
+insert into public.journal_entries (care_file_id, body)
+values (:'file_b', 'Papa a demandé des nouvelles de sa place en CHSLD.');
 
 reset role;
 `;

@@ -4,9 +4,9 @@ Application web mobile qui aide les proches aidants du Québec à coordonner les
 obtenir les services et les aides auxquels il a droit. Relais n'est pas un service de santé : il ne pose
 aucun diagnostic et ne donne aucun conseil médical.
 
-**Statut : étapes 1 à 4 sur 6 livrées** (socle, consentements, écran d'urgence ; dossier familial et
-membres ; documents, lecture automatique pseudonymisée et chronologie ; navigateur de droits). Suivi dans
-[`PROGRESS.md`](PROGRESS.md).
+**Statut : étapes 1 à 5 sur 6 livrées** (socle, consentements, écran d'urgence ; dossier familial et
+membres ; documents, lecture automatique pseudonymisée et chronologie ; navigateur de droits ; tâches,
+agenda, rappels et page « Préparer un rendez-vous »). Suivi dans [`PROGRESS.md`](PROGRESS.md).
 
 ## Démarrer
 
@@ -24,7 +24,9 @@ Démonstration locale sans compte Supabase (PostgreSQL 16 requis) :
 connexion `123456`, code TOTP `654321` (adresses commençant par `intervenante` ou `admin` pour les rôles
 internes). Les données passent par la vraie base migrée, sous RLS ; les fonctions serveur (lecture des
 documents, explications, lettres, URL signées, suppressions) tournent avec une IA simulée, sans appel
-réseau. Avec `RELAIS_DEMO_SEED=1` devant la première commande, deux familles fictives sont chargées
+réseau ; les rappels par courriel se déclenchent par `POST /functions/v1/send-reminders` avec l'en-tête
+`x-relais-cron-secret: test-cron-secret` et restent en mémoire (jamais envoyés). Avec
+`RELAIS_DEMO_SEED=1` devant la première commande, deux familles fictives sont chargées
 (`claire.demo@example.test`, `marc.demo@example.test`, `denis.demo@example.test`).
 
 | Document                                       | Contenu                                                           |

@@ -45,6 +45,17 @@ update public.care_file_programs set status = 'in_progress', notes = 'Factures d
     where care_file_id = :'file_a' and program_id = (select id from public.programs where slug = 'credit-maintien-domicile-aines');
 update public.program_checklist_items set is_done = true
 where care_file_id = :'file_a' and label like 'Factures ou reçus%';
+insert into public.tasks (care_file_id, title, assignee_id, due_on) values
+    (:'file_a', 'Appeler le CLSC pour l’évaluation du soutien à domicile', auth.uid(), (now() at time zone 'America/Toronto')::date + 1),
+    (:'file_a', 'Acheter une barre d’appui pour le bain', null, (now() at time zone 'America/Toronto')::date + 10);
+insert into public.appointments (care_file_id, title, starts_at, ends_at, location, contact_id, companion_id)
+select :'file_a', 'Clinique de gériatrie', (((now() at time zone 'America/Toronto')::date + 3)::timestamp + interval '10:30') at time zone 'America/Toronto', (((now() at time zone 'America/Toronto')::date + 3)::timestamp + interval '11:30') at time zone 'America/Toronto', 'Hôpital fictif de Montréal',
+    (select id from public.contacts where care_file_id = :'file_a' limit 1), auth.uid();
+insert into public.appointment_questions (appointment_id, care_file_id, question, position)
+select id, care_file_id, 'Quels exercices peuvent l’aider à garder son équilibre ?', 0
+from public.appointments where care_file_id = :'file_a';
+insert into public.journal_entries (care_file_id, body)
+values (:'file_a', 'Visite de dimanche : Maman était de bonne humeur et a bien mangé.');
 select public.create_invitation(:'file_a', 'marc.demo@example.test', 'family_member', 'read_only') as invite_a \gset
 
 select set_config('request.jwt.claims', '{"sub":"de000000-0000-4000-8000-00000000000b","role":"authenticated","aal":"aal1","email":"marc.demo@example.test"}', true);
@@ -85,5 +96,12 @@ update public.care_file_programs set status = 'in_progress', notes = 'Formulaire
     where care_file_id = :'file_b' and program_id = (select id from public.programs where slug = 'credit-impot-personnes-handicapees');
 update public.care_file_programs set status = 'obtained', notes = null
     where care_file_id = :'file_b' and program_id = (select id from public.programs where slug = 'credit-maintien-domicile-aines');
+insert into public.tasks (care_file_id, title, assignee_id, due_on, care_file_program_id)
+select :'file_b', 'Remplir la partie A du formulaire T2201', auth.uid(), (now() at time zone 'America/Toronto')::date + 7, id
+from public.care_file_programs where care_file_id = :'file_b' and program_id = (select id from public.programs where slug = 'credit-impot-personnes-handicapees');
+insert into public.appointments (care_file_id, title, starts_at, location, companion_id)
+values (:'file_b', 'Visite de la travailleuse sociale', (((now() at time zone 'America/Toronto')::date + 2)::timestamp + interval '14:00') at time zone 'America/Toronto', 'Résidence fictive Les Érables', auth.uid());
+insert into public.journal_entries (care_file_id, body)
+values (:'file_b', 'Papa a demandé des nouvelles de sa place en CHSLD.');
 
 reset role;

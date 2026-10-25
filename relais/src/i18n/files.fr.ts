@@ -105,7 +105,7 @@ export const files = {
         contacts: 'Contacts',
         consent: 'Consentement',
         members: 'Membres',
-        log: 'Journal',
+        log: 'Journal des accès',
         settings: 'Paramètres'
     },
     consentMissingOwner: 'Avant d’ajouter des renseignements, enregistrez le consentement de votre proche.',

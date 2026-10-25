@@ -598,7 +598,7 @@ select tst.ok('journal : arrivées, changement de niveau, retrait', (
     from public.access_log where care_file_id = :'file_id'));
 select tst.fails('suppression du compte refusée tant qu''elle est propriétaire', 'select public.delete_my_account()', '55006');
 select public.export_care_file(:'file_id') as file_export \gset
-select tst.ok('export : format et contenu', (:'file_export'::jsonb ->> 'format') = 'relais-dossier/3'
+select tst.ok('export : format et contenu', (:'file_export'::jsonb ->> 'format') = 'relais-dossier/4'
     and (:'file_export'::jsonb #>> '{care_recipient,first_name}') = 'Louise'
     and jsonb_array_length(:'file_export'::jsonb -> 'contacts') = 2
     and jsonb_array_length(:'file_export'::jsonb -> 'members') = 5);
@@ -903,7 +903,7 @@ select tst.eq('ses médicaments et événements partent avec lui', (
     + (select count(*) from public.timeline_events where source_document_id = :'doc2')
     + (select count(*) from public.document_extractions where document_id = :'doc2')), 0);
 select public.export_care_file(:'file2') as export2 \gset
-select tst.ok('export : documents, médicaments et chronologie', (:'export2'::jsonb ->> 'format') = 'relais-dossier/3'
+select tst.ok('export : documents, médicaments et chronologie', (:'export2'::jsonb ->> 'format') = 'relais-dossier/4'
     and jsonb_array_length(:'export2'::jsonb -> 'documents') = 2
     and jsonb_array_length(:'export2'::jsonb -> 'medications_as_written') = 2
     and jsonb_array_length(:'export2'::jsonb -> 'timeline_events') = 2
@@ -1096,7 +1096,7 @@ set local role authenticated;
 select tst.ok('explication en cache pour la version de la fiche (la première gardée)', (
     select (public.program_for_ai(:'p_ciph') #>> '{cached_explanation,plain_explanation}') = 'Explication.'));
 select public.export_care_file(:'file3') as export3 \gset
-select tst.ok('export : réponses et programmes', (:'export3'::jsonb ->> 'format') = 'relais-dossier/3'
+select tst.ok('export : réponses et programmes', (:'export3'::jsonb ->> 'format') = 'relais-dossier/4'
     and jsonb_array_length(:'export3'::jsonb -> 'programs') = 3
     and (:'export3'::jsonb #>> '{benefit_answers,recipient_age}') = '82');
 select public.delete_care_file(:'file3') as deleted3 \gset
@@ -1108,6 +1108,202 @@ select tst.eq('dossier « Grand-maman » entièrement effacé', (
     + (select count(*) from public.benefit_assessments where care_file_id = :'file3')
     + (select count(*) from public.program_checklist_items where care_file_id = :'file3')), 0);
 select tst.eq('les fiches du catalogue restent', (select count(*) from public.programs), 8);
+
+\o
+\echo '== étape 5 : structure de la coordination'
+\o /dev/null
+
+select tst.ok('rappels : la fonction ne renvoie que des nombres et l''adresse',
+    pg_get_function_result('public.reminders_due(date)'::regprocedure)
+    = 'TABLE(user_id uuid, email text, task_count integer, appointment_count integer)');
+select tst.ok('rappels : fonctions réservées au serveur',
+    not has_function_privilege('authenticated', 'public.reminders_due(date)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.record_reminder_sent(uuid,date,integer,integer)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.reminders_due(date)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.reminders_due(date)', 'EXECUTE'));
+select tst.ok('auteurs et dates de fin non modifiables',
+    not has_column_privilege('authenticated', 'public.tasks', 'created_by', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.tasks', 'completed_by', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.tasks', 'care_file_id', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.journal_entries', 'author_id', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.appointments', 'created_by', 'UPDATE'));
+select tst.ok('rappels envoyés : aucune écriture par les membres',
+    not has_table_privilege('authenticated', 'public.reminder_deliveries', 'INSERT')
+    and not has_table_privilege('authenticated', 'public.reminder_deliveries', 'UPDATE')
+    and not has_table_privilege('authenticated', 'public.reminder_deliveries', 'DELETE'));
+
+\o
+\echo '== étape 5 : tâches, agenda, questions et carnet (« Papi »)'
+\o /dev/null
+
+-- C : aidante principale ; D : accès complet ; E : coordination ; G : lecture seule ; O : extérieure.
+\set file4 'f4000000-0000-4000-8000-000000000004'
+insert into public.care_files (id, owner_id, title) values (:'file4', 'c0000000-0000-4000-8000-00000000000c', 'Papi');
+insert into public.care_file_members (care_file_id, user_id, role, access_level) values
+    (:'file4', 'd0000000-0000-4000-8000-00000000000d', 'family_member', 'full'),
+    (:'file4', 'e0000000-0000-4000-8000-00000000000e', 'family_member', 'coordination'),
+    (:'file4', '70000000-0000-4000-8000-000000000007', 'family_member', 'read_only');
+insert into public.consents (user_id, care_file_id, consent_type, text_version, granted_by, legal_basis)
+    values ('c0000000-0000-4000-8000-00000000000c', :'file4', 'care_recipient_data', '2026-10-27',
+            'care_recipient_signed_form', 'person_consents');
+select (now() at time zone 'America/Toronto')::date as today \gset
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+insert into public.tasks (care_file_id, title, assignee_id, due_on, created_by) values
+    (:'file4', 'Appeler la pharmacie', 'e0000000-0000-4000-8000-00000000000e', :'today', 'd0000000-0000-4000-8000-00000000000d'),
+    (:'file4', 'Remplir le formulaire du CLSC', 'd0000000-0000-4000-8000-00000000000d', :'today'::date + 5, null),
+    (:'file4', 'Acheter des bas de contention', null, null, null);
+select tst.ok('auteur d''une tâche imposé', (select bool_and(created_by = auth.uid()) from public.tasks));
+select tst.fails('responsable hors du dossier refusé', format($$insert into public.tasks (care_file_id, title, assignee_id)
+    values (%L, 'X', '60000000-0000-4000-8000-000000000006')$$, :'file4'), '23514');
+update public.tasks set status = 'done' where title = 'Acheter des bas de contention';
+select tst.ok('tâche faite : qui et quand', (
+    select completed_at is not null and completed_by = auth.uid() from public.tasks where title = 'Acheter des bas de contention'));
+update public.tasks set status = 'todo' where title = 'Acheter des bas de contention';
+select tst.ok('tâche rouverte : date de fin effacée', (
+    select completed_at is null and completed_by is null from public.tasks where title = 'Acheter des bas de contention'));
+insert into public.tasks (care_file_id, title, status, completed_at, completed_by)
+    values (:'file4', 'Antidatée', 'done', '2020-01-01', 'd0000000-0000-4000-8000-00000000000d');
+select tst.ok('date de fin et auteur non falsifiables', (
+    select completed_at > now() - interval '1 minute' and completed_by = auth.uid() from public.tasks where title = 'Antidatée'));
+delete from public.tasks where title = 'Antidatée';
+
+insert into public.appointments (care_file_id, title, starts_at, companion_id) values
+    (:'file4', 'Clinique de gériatrie', (:'today'::date + 1)::timestamp at time zone 'America/Toronto' + interval '10 hours',
+     'e0000000-0000-4000-8000-00000000000e'),
+    (:'file4', 'Prise de sang', (:'today'::date + 3)::timestamp at time zone 'America/Toronto' + interval '8 hours', null),
+    (:'file4', 'Visite de l''ergothérapeute', :'today'::timestamp at time zone 'America/Toronto' + interval '15 hours', null);
+select tst.fails('accompagnateur hors du dossier refusé', format($$insert into public.appointments (care_file_id, title, starts_at, companion_id)
+    values (%L, 'X', now(), '60000000-0000-4000-8000-000000000006')$$, :'file4'), '23514');
+select tst.fails('fin avant le début refusée', format($$insert into public.appointments (care_file_id, title, starts_at, ends_at)
+    values (%L, 'X', now(), now() - interval '1 hour')$$, :'file4'), '23514');
+select id as appt1 from public.appointments where title = 'Clinique de gériatrie' \gset
+insert into public.appointment_questions (appointment_id, care_file_id, question, position) values
+    (:'appt1', :'file4', 'Faut-il refaire une prise de sang ?', 0),
+    (:'appt1', :'file4', 'Quels signes doivent nous inquiéter ?', 1);
+insert into public.journal_entries (care_file_id, body, author_id)
+    values (:'file4', 'Papa a bien dormi.', 'd0000000-0000-4000-8000-00000000000d');
+select tst.ok('auteur d''une note du carnet imposé', (select author_id = auth.uid() from public.journal_entries));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"e0000000-0000-4000-8000-00000000000e","role":"authenticated","email":"emma@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('coordination : voit les tâches et l''agenda', tst.cnt('select 1 from public.tasks') + tst.cnt('select 1 from public.appointments'), 6);
+select tst.eq('coordination : ne voit ni les questions ni le carnet',
+    tst.cnt('select 1 from public.appointment_questions') + tst.cnt('select 1 from public.journal_entries'), 0);
+insert into public.tasks (care_file_id, title) values (:'file4', 'Conduire Papa à la clinique');
+select tst.eq('coordination : coche une tâche', tst.affected($$update public.tasks set status = 'done' where title = 'Appeler la pharmacie'$$), 1);
+update public.tasks set status = 'todo' where title = 'Appeler la pharmacie';
+select tst.denied('coordination : pas de note au carnet', format($$insert into public.journal_entries (care_file_id, body) values (%L, 'X')$$, :'file4'));
+select tst.denied('coordination : pas de question médicale', format($$insert into public.appointment_questions (appointment_id, care_file_id, question)
+    values (%L, %L, 'X')$$, :'appt1', :'file4'));
+select tst.denied('coordination : pas de tâche liée à un document qu''elle ne voit pas',
+    format($$insert into public.tasks (care_file_id, title, source_document_id) values (%L, 'X', gen_random_uuid())$$, :'file4'));
+select tst.denied('coordination : pas de tâche liée à une démarche qu''elle ne voit pas',
+    format($$insert into public.tasks (care_file_id, title, care_file_program_id) values (%L, 'X', gen_random_uuid())$$, :'file4'));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"70000000-0000-4000-8000-000000000007","role":"authenticated","email":"gilles@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('lecture seule : voit tout, carnet et questions compris', tst.cnt('select 1 from public.tasks')
+    + tst.cnt('select 1 from public.appointments') + tst.cnt('select 1 from public.appointment_questions')
+    + tst.cnt('select 1 from public.journal_entries'), 10);
+select tst.eq('lecture seule : ne coche rien', tst.affected($$update public.tasks set status = 'done'$$), 0);
+select tst.eq('lecture seule : ne supprime rien', tst.affected($$delete from public.appointments$$), 0);
+select tst.denied('lecture seule : pas de tâche', format($$insert into public.tasks (care_file_id, title) values (%L, 'X')$$, :'file4'));
+select tst.denied('lecture seule : pas de note', format($$insert into public.journal_entries (care_file_id, body) values (%L, 'X')$$, :'file4'));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"d0000000-0000-4000-8000-00000000000d","role":"authenticated","email":"denis@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('carnet : la note d''un autre ne se modifie pas', tst.affected($$update public.journal_entries set body = 'X'$$), 0);
+select tst.eq('carnet : la note d''un autre ne se supprime pas', tst.affected($$delete from public.journal_entries$$), 0);
+insert into public.journal_entries (care_file_id, body) values (:'file4', 'Visite de 14 h : bonne humeur.');
+select tst.eq('carnet : sa propre note se modifie', tst.affected($$update public.journal_entries set body = 'Visite de 14 h.' where author_id = auth.uid()$$), 1);
+select tst.ok('carnet : date de création conservée', (select created_at <= updated_at from public.journal_entries where author_id = auth.uid()));
+select tst.denied('carnet : auteur non modifiable', $$update public.journal_entries set author_id = auth.uid()$$);
+select tst.eq('accès complet : ajoute une question', tst.affected(format($$insert into public.appointment_questions (appointment_id, care_file_id, question)
+    values (%L, %L, 'Peut-il conduire ?')$$, :'appt1', :'file4')), 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"60000000-0000-4000-8000-000000000006","role":"authenticated","email":"olivier@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('personne extérieure : rien', tst.cnt('select 1 from public.tasks') + tst.cnt('select 1 from public.appointments')
+    + tst.cnt('select 1 from public.appointment_questions') + tst.cnt('select 1 from public.journal_entries'), 0);
+select tst.denied('personne extérieure : pas de tâche', format($$insert into public.tasks (care_file_id, title) values (%L, 'X')$$, :'file4'));
+commit;
+
+\o
+\echo '== étape 5 : rappels quotidiens'
+\o /dev/null
+
+-- C et E acceptent les rappels ; D n'a rien accepté.
+insert into public.consents (user_id, consent_type, text_version) values
+    ('c0000000-0000-4000-8000-00000000000c', 'email_reminders', '2026-10-26'),
+    ('e0000000-0000-4000-8000-00000000000e', 'email_reminders', '2026-10-26');
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"e0000000-0000-4000-8000-00000000000e","role":"authenticated","email":"emma@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('membre : pas d''accès aux rappels', format($$select * from public.reminders_due(%L)$$, :'today'), '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+-- E : 1 tâche due aujourd'hui et 1 rendez-vous demain qu'elle accompagne. C : la visite d'aujourd'hui, sans
+-- accompagnateur (aidante principale). La prise de sang (dans 3 jours) ne compte pas.
+select tst.ok('rappels : nombres par personne', (
+    select jsonb_object_agg(email, jsonb_build_array(task_count, appointment_count))
+    from public.reminders_due(:'today'))
+    = '{"emma@example.test": [1, 1], "claire@example.test": [0, 1]}'::jsonb);
+select public.record_reminder_sent('e0000000-0000-4000-8000-00000000000e', :'today', 1, 1);
+select public.record_reminder_sent('e0000000-0000-4000-8000-00000000000e', :'today', 1, 1);
+select tst.eq('rappels : un seul courriel par jour', tst.cnt(format('select 1 from public.reminders_due(%L)', :'today')), 1);
+select tst.eq('rappels : le lendemain, de nouveau', tst.cnt(format($$select 1 from public.reminders_due(%L) where email = 'emma@example.test'$$,
+    :'today'::date + 1)), 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"e0000000-0000-4000-8000-00000000000e","role":"authenticated","email":"emma@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('rappels reçus : visibles par la personne', tst.cnt('select 1 from public.reminder_deliveries'), 1);
+select tst.ok('rappels reçus : dans l''export personnel', jsonb_array_length(public.export_my_data() -> 'reminder_emails') = 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('rappels reçus : rien de ceux des autres', tst.cnt('select 1 from public.reminder_deliveries'), 0);
+-- E quitte le dossier : ses tâches et ses accompagnements sont libérés.
+delete from public.care_file_members where care_file_id = :'file4' and user_id = 'e0000000-0000-4000-8000-00000000000e';
+select tst.ok('membre retiré : plus responsable ni accompagnatrice', (
+    select count(*) = 0 from public.tasks where assignee_id = 'e0000000-0000-4000-8000-00000000000e')
+    and (select count(*) = 0 from public.appointments where companion_id = 'e0000000-0000-4000-8000-00000000000e'));
+select tst.eq('membre retiré : les tâches restent', tst.cnt('select 1 from public.tasks'), 4);
+
+select public.export_care_file(:'file4') as export4 \gset
+select tst.ok('export : tâches, agenda avec questions, carnet', (:'export4'::jsonb ->> 'format') = 'relais-dossier/4'
+    and jsonb_array_length(:'export4'::jsonb -> 'tasks') = 4
+    and jsonb_array_length(:'export4'::jsonb -> 'appointments') = 3
+    and jsonb_array_length(:'export4'::jsonb #> '{appointments,1,questions}') = 3
+    and jsonb_array_length(:'export4'::jsonb -> 'journal_entries') = 2);
+select public.delete_care_file(:'file4') as deleted4 \gset
+select tst.ok('suppression : tâches, rendez-vous et notes comptés', (:'deleted4'::jsonb ->> 'tasks')::int = 4
+    and (:'deleted4'::jsonb ->> 'appointments')::int = 3 and (:'deleted4'::jsonb ->> 'journal_entries')::int = 2);
+commit;
+
+select tst.eq('dossier « Papi » entièrement effacé', (
+    (select count(*) from public.tasks where care_file_id = :'file4')
+    + (select count(*) from public.appointments where care_file_id = :'file4')
+    + (select count(*) from public.appointment_questions where care_file_id = :'file4')
+    + (select count(*) from public.journal_entries where care_file_id = :'file4')), 0);
 
 \o
 \echo 'RLS OK'

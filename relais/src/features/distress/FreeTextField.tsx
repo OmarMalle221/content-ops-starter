@@ -10,6 +10,7 @@ import { useDistress } from './DistressProvider';
 export function FreeTextField({
     label,
     hint,
+    error,
     value,
     onValueChange,
     compact = false,
@@ -17,6 +18,7 @@ export function FreeTextField({
 }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> & {
     label: string;
     hint?: string;
+    error?: string | null;
     value: string;
     onValueChange: (value: string) => void;
     /** Zone basse (une ou deux lignes) : titres, précisions. */
@@ -44,10 +46,16 @@ export function FreeTextField({
                     {hint}
                 </p>
             )}
+            {error && (
+                <p id={`${id}-error`} className="font-bold text-urgent">
+                    {error}
+                </p>
+            )}
             <textarea
                 id={id}
-                aria-describedby={hint ? `${id}-hint` : undefined}
-                className={`${compact ? 'min-h-14' : 'min-h-32'} rounded-lg border-2 border-muted bg-surface p-3 text-lg`}
+                aria-describedby={[hint ? `${id}-hint` : '', error ? `${id}-error` : ''].filter(Boolean).join(' ') || undefined}
+                aria-invalid={error ? true : undefined}
+                className={`${compact ? 'min-h-14' : 'min-h-32'} rounded-lg border-2 ${error ? 'border-urgent' : 'border-muted'} bg-surface p-3 text-lg`}
                 value={value}
                 onChange={(event) => handleChange(event.target.value)}
                 {...textarea}

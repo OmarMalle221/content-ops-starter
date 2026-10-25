@@ -51,6 +51,13 @@ select pg_temp.check('statuts et dates posés par les déclencheurs',
 select pg_temp.check('pièce cochée dans la liste de la famille A',
     exists (select 1 from public.program_checklist_items where care_file_id = :'file_a' and is_done and done_at is not null));
 
+select pg_temp.check('coordination : tâches, rendez-vous à venir, questions et carnet',
+    (select count(*) from public.tasks where care_file_id = :'file_a') = 2
+    and (select count(*) from public.tasks where care_file_id = :'file_b' and care_file_program_id is not null) = 1
+    and (select bool_and(starts_at > now()) from public.appointments where care_file_id in (:'file_a', :'file_b'))
+    and (select count(*) from public.appointment_questions where care_file_id = :'file_a') = 1
+    and (select count(*) from public.journal_entries where care_file_id in (:'file_a', :'file_b') and author_id is not null) = 2);
+
 -- Marc lit les démarches mais ne peut rien modifier (RLS).
 select set_config('request.jwt.claims',
     '{"sub":"de000000-0000-4000-8000-00000000000b","role":"authenticated","aal":"aal1","email":"marc.demo@example.test"}', true);
@@ -59,6 +66,9 @@ select pg_temp.check('Marc voit les 8 démarches', (select count(*) from public.
 with changed as (update public.care_file_programs set status = 'refused' returning 1)
 select pg_temp.check('Marc ne peut pas changer un statut', (select count(*) from changed) = 0);
 select pg_temp.check('Marc ne voit pas le dossier de Roger', (select count(*) from public.care_recipients where care_file_id = :'file_b') = 0);
+with changed as (update public.tasks set status = 'done' returning 1)
+select pg_temp.check('Marc ne coche pas de tâche', (select count(*) from changed) = 0);
+select pg_temp.check('Marc lit le carnet', (select count(*) from public.journal_entries) = 1);
 reset role;
 
 \o

@@ -89,6 +89,19 @@ export interface BackendState {
         decided_at: string | null;
     }>;
     checklist: Array<{ label: string; origin: string; is_done: boolean }>;
+    tasks: Array<{
+        title: string;
+        status: string;
+        assignee_id: string | null;
+        due_on: string | null;
+        completed_by: string | null;
+        source_document_id: string | null;
+    }>;
+    appointments: Array<{ id: string; title: string; starts_at: string; companion_id: string | null }>;
+    appointmentQuestions: string[];
+    journalEntries: Array<{ body: string; author_id: string | null }>;
+    reminderDeliveries: Array<{ user_id: string; sent_on: string; task_count: number; appointment_count: number }>;
+    emails: Array<{ to: string; subject: string; text: string; html: string }>;
     explanations: Array<{ program_id: string; program_version: number }>;
     resources: Array<{ slug: string; phone: string | null; verification_status: string; verified_by: string | null }>;
     aiCalls: Array<{

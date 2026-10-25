@@ -1,9 +1,57 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
+import { useSession } from '../../app/session';
 import { buttonClass, Card, PageTitle } from '../../components/ui';
+import { coordination as tc } from '../../i18n/coordination.fr';
 import { files as tf, GRANTOR_LABELS, LIVING_SETTING_LABELS, SERVICE_LABELS } from '../../i18n/files.fr';
-import { formatDate } from '../../lib/format';
+import { formatDate, formatDay, formatTime } from '../../lib/format';
+import { isPast } from '../coordination/AgendaPages';
+import { useAppointments, useTasks } from '../coordination/useCoordination';
 import { useFileContext } from './FileLayout';
 import { useCareNeeds, useCareRecipient, useContacts, useMembers } from './useFile';
+
+const WEEK = 7 * 24 * 60 * 60 * 1000;
+
+/** Les 7 prochains jours : rendez-vous à venir et tâches confiées à la personne connectée. */
+function ThisWeek({ fileId }: { fileId: string }) {
+    const { session } = useSession();
+    const appointments = useAppointments(fileId);
+    const tasks = useTasks(fileId);
+    // Heure figée à l'affichage de la page (rendu pur).
+    const [now] = useState(() => Date.now());
+    const next = (appointments.data ?? []).filter((a) => !isPast(a, now) && new Date(a.starts_at).getTime() < now + WEEK).slice(0, 3);
+    const mine = (tasks.data ?? []).filter((t) => t.status === 'todo' && t.assignee_id === session?.user.id).length;
+    return (
+        <Card className="flex flex-col gap-3">
+            <h2 className="text-xl font-bold">{tc.weekTitle}</h2>
+            <div>
+                <h3 className="font-bold">{tc.nextAppointments}</h3>
+                {next.length === 0 ? (
+                    <p className="text-muted">{tc.noNextAppointments}</p>
+                ) : (
+                    <ul className="flex list-none flex-col gap-1 p-0">
+                        {next.map((a) => (
+                            <li key={a.id}>
+                                <Link to={`agenda/${a.id}`} className="font-bold text-brand underline underline-offset-4">
+                                    {formatDay(a.starts_at)}, {formatTime(a.starts_at)} — {a.title}
+                                </Link>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+            <p>{tc.myTasks(mine)}</p>
+            <div className="flex flex-wrap gap-2">
+                <Link to="agenda" className={buttonClass('secondary')}>
+                    {tc.seeAgenda}
+                </Link>
+                <Link to="taches" className={buttonClass('secondary')}>
+                    {tc.seeTasks}
+                </Link>
+            </div>
+        </Card>
+    );
+}
 
 export function FileOverviewPage() {
     const { file, access } = useFileContext();
@@ -17,6 +65,7 @@ export function FileOverviewPage() {
     return (
         <div className="flex flex-col gap-4">
             <PageTitle>{file.title}</PageTitle>
+            <ThisWeek fileId={file.id} />
 
             <Card>
                 <h2 className="text-xl font-bold">{tf.profileTitle}</h2>

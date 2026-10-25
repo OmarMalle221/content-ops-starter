@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { Button, buttonClass, Card, Loading, Notice, PageTitle } from '../../components/ui';
+import { coordination as tc } from '../../i18n/coordination.fr';
 import { fr } from '../../i18n/fr';
 import { DOCUMENT_STATUS_LABELS, EXTRACTION_ERROR_LABELS, RETRYABLE_ERRORS, documents as td } from '../../i18n/documents.fr';
 import { ApiError } from '../../lib/api';
@@ -16,6 +17,7 @@ import {
 } from '../../lib/documents';
 import { formatDate } from '../../lib/format';
 import { DOCUMENT_TYPE_LABELS, TIMELINE_EVENT_LABELS } from '../../shared/extraction/labels.fr';
+import { createTaskLink } from '../coordination/links';
 import { useFileContext } from '../files/FileLayout';
 import { fileKeys } from '../files/useFile';
 import { documentTitle } from './FileDocumentsPage';
@@ -178,6 +180,8 @@ function DocumentBody({
 }
 
 function ConfirmedView({ doc, extraction, confirmed }: { doc: CareDocument; extraction: Extraction; confirmed: ConfirmedData }) {
+    const { access } = useFileContext();
+    const canCreateTask = access.canWrite('coordination');
     const nothing =
         !confirmed.summary &&
         confirmed.medications.length === 0 &&
@@ -241,9 +245,20 @@ function ConfirmedView({ doc, extraction, confirmed }: { doc: CareDocument; extr
             {confirmed.action_items.length > 0 && (
                 <>
                     <h3 className="text-xl font-bold">{td.actionsSection}</h3>
-                    <ul className="list-disc pl-5">
+                    <ul className="flex list-none flex-col gap-2 p-0">
                         {confirmed.action_items.map((a, i) => (
-                            <li key={i}>{a.text}</li>
+                            <li key={i} className="flex flex-col gap-1 rounded-lg bg-surface p-3">
+                                <span>{a.text}</span>
+                                {canCreateTask && (
+                                    <Link
+                                        to={createTaskLink(doc.care_file_id, a.text, { document: doc.id })}
+                                        className="self-start font-bold text-brand underline underline-offset-4"
+                                        aria-label={tc.createTaskFor(a.text)}
+                                    >
+                                        {tc.createTask}
+                                    </Link>
+                                )}
+                            </li>
                         ))}
                     </ul>
                 </>

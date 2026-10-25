@@ -6,6 +6,7 @@ import type { Profile, Resource } from '../../src/lib/api';
 import type { FileConsent, Membership } from '../../src/lib/careFiles';
 import type { CareDocument, Extraction, MedicationMention, TimelineEvent } from '../../src/lib/documents';
 import type { FileProgram, Program } from '../../src/lib/benefits';
+import type { Appointment, AppointmentQuestion, JournalEntry, Task } from '../../src/lib/coordination';
 import type { BenefitAnswers } from '../../src/shared/benefits/engine';
 import programsJson from '../../src/content/programs.fr.json';
 import type { ConsentRecord, UserConsentType } from '../../src/lib/consents';
@@ -36,6 +37,10 @@ interface FileState {
     medications: MedicationMention[];
     answers: { answers: BenefitAnswers; created_at: string } | null;
     programs: FileProgram[];
+    tasks: Task[];
+    appointments: Appointment[];
+    questions: AppointmentQuestion[];
+    journal: JournalEntry[];
 }
 
 const emptyFile = (): FileState => ({
@@ -46,7 +51,11 @@ const emptyFile = (): FileState => ({
     timeline: [],
     medications: [],
     answers: null,
-    programs: []
+    programs: [],
+    tasks: [],
+    appointments: [],
+    questions: [],
+    journal: []
 });
 
 interface BackendState {
@@ -80,6 +89,7 @@ export function resetBackend(): void {
     for (const fn of Object.values(careFilesApi)) fn.mockClear();
     for (const fn of Object.values(documentsApi)) fn.mockClear();
     for (const fn of Object.values(benefitsApi)) fn.mockClear();
+    for (const fn of Object.values(coordinationApi)) fn.mockClear();
     backend.programs = catalog();
 }
 
@@ -247,4 +257,64 @@ export const benefitsApi = {
     updateProgram: vi.fn(async () => undefined),
     listResourcesForAdmin: vi.fn(async () => []),
     updateResource: vi.fn(async () => undefined)
+};
+
+// ------------------------------------------------------------------------------------- coordination
+export function task(overrides: Partial<Task> = {}): Task {
+    return {
+        id: id(),
+        care_file_id: FILE_ID,
+        title: 'Appeler la pharmacie',
+        details: null,
+        assignee_id: null,
+        due_on: null,
+        status: 'todo',
+        completed_at: null,
+        completed_by: null,
+        source_document_id: null,
+        care_file_program_id: null,
+        created_by: USER_ID,
+        created_at: '2026-10-29T14:00:00Z',
+        ...overrides
+    };
+}
+
+export const APPOINTMENT_ID = 'a1000000-0000-4000-8000-000000000001';
+
+export function appointment(overrides: Partial<Appointment> = {}): Appointment {
+    return {
+        id: APPOINTMENT_ID,
+        care_file_id: FILE_ID,
+        title: 'Clinique de gériatrie',
+        starts_at: '2026-11-02T15:00:00.000Z',
+        ends_at: null,
+        location: 'Hôpital fictif',
+        contact_id: null,
+        companion_id: null,
+        notes: 'Apporter la carte',
+        source_document_id: null,
+        created_by: USER_ID,
+        created_at: '2026-10-29T14:00:00Z',
+        ...overrides
+    };
+}
+
+export const coordinationApi = {
+    listTasks: vi.fn(async () => [...backend.file.tasks]),
+    createTask: vi.fn(async () => undefined),
+    updateTask: vi.fn(async () => undefined),
+    setTaskDone: vi.fn(async () => undefined),
+    deleteTask: vi.fn(async () => undefined),
+    listAppointments: vi.fn(async () => [...backend.file.appointments]),
+    createAppointment: vi.fn(async () => APPOINTMENT_ID),
+    updateAppointment: vi.fn(async () => undefined),
+    deleteAppointment: vi.fn(async () => undefined),
+    listQuestions: vi.fn(async () => [...backend.file.questions]),
+    addQuestion: vi.fn(async () => undefined),
+    deleteQuestion: vi.fn(async () => undefined),
+    logPrepSheetPrinted: vi.fn(async () => undefined),
+    listJournal: vi.fn(async () => [...backend.file.journal]),
+    addJournalEntry: vi.fn(async () => undefined),
+    updateJournalEntry: vi.fn(async () => undefined),
+    deleteJournalEntry: vi.fn(async () => undefined)
 };

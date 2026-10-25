@@ -33,7 +33,8 @@ service de santé ni un service de crise.
    confidentialité publiée, registre et procédure d'incident de confidentialité (avis à la CAI et aux
    personnes).
 10. **Sous-traitants.** Supabase (Canada), Netlify (fichiers statiques seulement), fournisseur de
-    courriel, fournisseur d'IA, OCR éventuel : ententes nécessaires.
+    courriel (Amazon SES, région Canada : il reçoit l'adresse et un rappel générique), fournisseur d'IA,
+    OCR éventuel : ententes nécessaires.
 11. **Intervenantes Relais.** Statut, confidentialité, secret professionnel, tenue de dossiers si ce sont
     des professionnelles membres d'un ordre ; accès limité aux dossiers que l'aidant leur confie.
 12. **Avertissements.** Pas de conseil médical, pas un service d'urgence, admissibilité aux programmes à
@@ -56,6 +57,11 @@ service de santé ni un service de crise.
 18. **Médicaments « tels qu'écrits ».** Relais recopie les médicaments des documents vérifiés, sans
     interprétation, avec la mention que ce n'est pas une liste à jour. Formulation et responsabilité si une
     famille s'y fie comme à une liste officielle.
+19. **Carnet de bord et suppression d'un compte.** Les notes d'un membre restent au dossier quand il
+    supprime son compte (son nom est effacé) : elles font partie de l'histoire du dossier de la personne
+    aidée. Est-ce compatible avec son droit à la suppression, ou faut-il effacer ses notes aussi ?
+20. **Page « Préparer un rendez-vous ».** Elle réunit des renseignements de santé sur papier ; son
+    impression est notée au journal des accès. Mention « gardez la copie en lieu sûr » suffisante ?
 
 ## B. Travailleuse sociale — sécurité, ton et parcours
 
@@ -87,3 +93,6 @@ service de santé ni un service de crise.
 11. **Relecture d'un document.** Formulation de l'écran de relecture (« gardez, corrigez ou décochez »),
     des points « à vérifier » et du rappel « aucun conseil médical — Info-Santé » ; les éléments douteux
     sont décochés par défaut. Est-ce compris par des aidants fatigués, sur un téléphone ?
+12. **Rappels et carnet.** Texte du courriel de rappel (générique, sans nom) et heure d'envoi (8 h l'été,
+    7 h l'hiver). Carnet de bord visible seulement par les membres qui ont accès à la santé : le bon
+    partage ? Faut-il un rappel de ce qu'on évite d'y écrire ?

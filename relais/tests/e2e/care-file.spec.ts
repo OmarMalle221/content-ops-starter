@@ -146,9 +146,11 @@ test('invitations : coordination, lecture des droits, mauvaise adresse, journal'
     await emma.getByRole('button', { name: 'Rejoindre le dossier' }).click();
     await waitForTitle(emma, 'Maman');
 
-    // Coordination : pas d'onglet Journal ni Paramètres, profil visible, santé masquée par la base.
+    // Coordination : pas d'onglet Journal des accès, Carnet ni Paramètres ; agenda et profil visibles.
     const tabs = emma.getByRole('navigation', { name: 'Sections du dossier' });
-    await expect(tabs.getByRole('link', { name: 'Journal' })).toHaveCount(0);
+    await expect(tabs.getByRole('link', { name: 'Journal des accès' })).toHaveCount(0);
+    await expect(tabs.getByRole('link', { name: 'Carnet' })).toHaveCount(0);
+    await expect(tabs.getByRole('link', { name: 'Agenda' })).toBeVisible();
     await expect(tabs.getByRole('link', { name: 'Paramètres' })).toHaveCount(0);
     await tabs.getByRole('link', { name: 'Profil' }).click();
     await waitForTitle(emma, 'Profil');
@@ -214,7 +216,7 @@ test('paramètres : export du dossier, refus de supprimer le compte, suppression
     const file = await download;
     const chunks = await (await file.createReadStream()).toArray();
     const content = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    expect(content).toMatchObject({ format: 'relais-dossier/3', care_recipient: { first_name: 'Louise' } });
+    expect(content).toMatchObject({ format: 'relais-dossier/4', care_recipient: { first_name: 'Louise' } });
 
     await page.getByLabel('Je comprends que la suppression est définitive.').check();
     await page.getByRole('button', { name: 'Supprimer le dossier' }).click();

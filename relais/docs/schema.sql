@@ -7,8 +7,9 @@
 -- document_extractions, medication_mentions, timeline_events, storage_deletion_queue, bucket `documents`,
 -- fonctions register_document … confirm_document) et étape 4 (programs, program_explanations,
 -- program_letter_templates, benefit_assessments, care_file_programs, program_checklist_items, contrôle
--- « aucun montant », versionnage des fiches, save_benefit_assessment). Pour ces tables, la migration
--- l'emporte sur ce fichier, qui décrit surtout la cible des étapes 5 et 6. Les tests automatisés sont dans
+-- « aucun montant », versionnage des fiches, save_benefit_assessment) et étape 5 (tasks, appointments,
+-- appointment_questions, journal_entries en zone « santé », reminder_deliveries, reminders_due). Pour ces
+-- tables, la migration l'emporte sur ce fichier, qui décrit surtout la cible de l'étape 6. Les tests automatisés sont dans
 -- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
 -- Principes
@@ -70,7 +71,7 @@ create type public.timeline_event_type as enum (
 create type public.timeline_source as enum ('document', 'appointment', 'manual');  -- « appointment » ajouté à l'étape 5
 create type public.program_status as enum ('to_explore', 'in_progress', 'obtained', 'refused');
 create type public.verification_status as enum ('to_verify', 'verified');
-create type public.task_status as enum ('todo', 'in_progress', 'done', 'cancelled');
+create type public.task_status as enum ('todo', 'done');
 create type public.resource_category as enum (
     'emergency', 'crisis_line', 'psychosocial_line', 'health_line', 'respite', 'caregiver_support',
     'elder_abuse', 'info'
@@ -291,18 +292,18 @@ create index medication_mentions_file on public.medication_mentions (care_file_i
 create index medication_mentions_document on public.medication_mentions (source_document_id, care_file_id);
 create index medication_mentions_created_by on public.medication_mentions (created_by);
 
+-- Livré à l'étape 5 (20261030000001_coordination.sql fait foi).
 create table public.appointments (
     id                 uuid primary key default gen_random_uuid(),
     care_file_id       uuid not null references public.care_files (id) on delete cascade,
+    title              text not null check (char_length(btrim(title)) between 1 and 160),
     starts_at          timestamptz not null,
     ends_at            timestamptz,
     location           text check (char_length(location) <= 240),
     contact_id         uuid,
-    purpose            text check (char_length(purpose) <= 240),
     companion_id       uuid references public.users (id) on delete set null,  -- qui accompagne
     notes              text check (char_length(notes) <= 2000),
     source_document_id uuid,
-    reminder_sent_at   timestamptz,
     created_by         uuid references public.users (id) on delete set null,
     created_at         timestamptz not null default now(),
     updated_at         timestamptz not null default now(),
@@ -359,8 +360,8 @@ create table public.tasks (
     status               public.task_status not null default 'todo',
     care_file_program_id uuid,  -- FK ajoutée plus bas (care_file_programs)
     source_document_id   uuid,
-    reminder_sent_at     timestamptz,
     completed_at         timestamptz,
+    completed_by         uuid references public.users (id) on delete set null,
     created_by           uuid references public.users (id) on delete set null,
     created_at           timestamptz not null default now(),
     updated_at           timestamptz not null default now(),
@@ -368,7 +369,7 @@ create table public.tasks (
         references public.documents (id, care_file_id) on delete set null (source_document_id)
 );
 create index tasks_file_due on public.tasks (care_file_id, due_on);
-create index tasks_assignee on public.tasks (assignee_id) where status in ('todo', 'in_progress');
+create index tasks_assignee on public.tasks (assignee_id);
 
 create table public.journal_entries (
     id           uuid primary key default gen_random_uuid(),
@@ -379,6 +380,16 @@ create table public.journal_entries (
     updated_at   timestamptz not null default now()
 );
 create index journal_entries_file on public.journal_entries (care_file_id, created_at desc);
+
+-- Rappels quotidiens : au plus un courriel par personne et par jour ; seulement des nombres.
+create table public.reminder_deliveries (
+    user_id           uuid not null references public.users (id) on delete cascade,
+    sent_on           date not null,
+    task_count        smallint not null check (task_count >= 0),
+    appointment_count smallint not null check (appointment_count >= 0),
+    sent_at           timestamptz not null default now(),
+    primary key (user_id, sent_on)
+);
 
 -- -----------------------------------------------------------------------------------------------------
 -- Navigateur de droits
@@ -1060,7 +1071,7 @@ begin
         ('timeline_events', 'health'),
         ('tasks', 'coordination'),
         ('appointments', 'coordination'),
-        ('appointment_questions', 'coordination'),
+        ('appointment_questions', 'health'),
         ('benefit_assessments', 'benefits'),
         ('care_file_programs', 'benefits'),
         ('program_checklist_items', 'benefits')
@@ -1127,16 +1138,21 @@ create policy documents_select on public.documents for select to authenticated
 create policy extractions_select on public.document_extractions for select to authenticated
     using (private.can_read(care_file_id, 'health'));
 
--- journal de bord : lecture par la coordination ; modification par l'auteur seulement.
+-- carnet de bord : zone « santé » (observations du quotidien) ; modification par l'auteur seulement.
 create policy journal_select on public.journal_entries for select to authenticated
-    using (private.can_read(care_file_id, 'coordination'));
+    using (private.can_read(care_file_id, 'health'));
 create policy journal_insert on public.journal_entries for insert to authenticated
-    with check (private.can_write(care_file_id, 'coordination') and author_id = (select auth.uid()));
+    with check (private.can_write(care_file_id, 'health') and author_id = (select auth.uid()));
 create policy journal_update on public.journal_entries for update to authenticated
-    using (author_id = (select auth.uid()) and private.can_write(care_file_id, 'coordination'))
+    using (author_id = (select auth.uid()) and private.can_write(care_file_id, 'health'))
     with check (author_id = (select auth.uid()));
 create policy journal_delete on public.journal_entries for delete to authenticated
     using (author_id = (select auth.uid()));
+
+-- Rappels reçus : chacun voit seulement les siens (écrits par la fonction serveur).
+grant select on public.reminder_deliveries to authenticated;
+create policy reminder_deliveries_select on public.reminder_deliveries for select to authenticated
+    using (user_id = (select auth.uid()));
 
 -- Catalogue : lecture des fiches actives ; écriture par l'admin (MFA).
 create policy programs_select on public.programs for select to authenticated

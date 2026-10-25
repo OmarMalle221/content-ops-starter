@@ -2,7 +2,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { useProfile } from '../../app/queries';
-import { Button, Card, Checkbox, Loading, Notice, PageTitle, RadioGroup, SelectField, TextField } from '../../components/ui';
+import { Button, buttonClass, Card, Checkbox, Loading, Notice, PageTitle, RadioGroup, SelectField, TextField } from '../../components/ui';
+import { coordination as tc } from '../../i18n/coordination.fr';
 import { fr } from '../../i18n/fr';
 import { benefits as tb, PROGRAM_STATUS_LABELS } from '../../i18n/benefits.fr';
 import {
@@ -21,6 +22,7 @@ import {
 import { formatDate } from '../../lib/format';
 import { fillPlaceholders, LETTER_KINDS, type ExplanationOutput, type LetterKind } from '../../shared/benefits/ai';
 import { assess, criteriaLabels, factsFromAnswers } from '../../shared/benefits/engine';
+import { createTaskLink } from '../coordination/links';
 import { FreeTextField } from '../distress/FreeTextField';
 import { useFileContext } from '../files/FileLayout';
 import { useCareRecipient } from '../files/useFile';
@@ -91,6 +93,14 @@ export function ProgramPage() {
             {fileProgram ? (
                 <>
                     <StatusSection fileProgram={fileProgram} canWrite={canWrite} onStatus={setStatus} />
+                    {access.canWrite('coordination') && (
+                        <Link
+                            to={createTaskLink(file.id, tc.programTaskTitle(program.name), { demarche: fileProgram.id })}
+                            className={buttonClass('secondary', 'self-start')}
+                        >
+                            {tc.createTask}
+                        </Link>
+                    )}
                     <Checklist fileProgram={fileProgram} canWrite={canWrite} />
                     <Notes fileProgram={fileProgram} canWrite={canWrite} onStatus={setStatus} />
                 </>

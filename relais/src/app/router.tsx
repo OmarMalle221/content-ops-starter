@@ -8,6 +8,10 @@ import { LandingPage } from '../features/landing/LandingPage';
 import { MfaPage } from '../features/mfa/MfaPage';
 import { AdminHomePage, AdminProgramEditPage, AdminProgramsPage, AdminResourcesPage } from '../features/admin/AdminPages';
 import { BenefitsPage } from '../features/benefits/BenefitsPage';
+import { AgendaPage, AppointmentEditPage, AppointmentPage } from '../features/coordination/AgendaPages';
+import { JournalPage } from '../features/coordination/JournalPage';
+import { PrepSheetPage } from '../features/coordination/PrepSheetPage';
+import { TasksPage } from '../features/coordination/TasksPage';
 import { ProgramPage } from '../features/benefits/ProgramPage';
 import { DocumentPage } from '../features/documents/DocumentPage';
 import { FileDocumentsPage } from '../features/documents/FileDocumentsPage';
@@ -64,6 +68,13 @@ export const routes = [
                                         element: <FileLayout />,
                                         children: [
                                             { index: true, element: <FileOverviewPage /> },
+                                            { path: 'agenda', element: <AgendaPage /> },
+                                            { path: 'agenda/nouveau', element: <AppointmentEditPage /> },
+                                            { path: 'agenda/:appointmentId', element: <AppointmentPage /> },
+                                            { path: 'agenda/:appointmentId/modifier', element: <AppointmentEditPage /> },
+                                            { path: 'agenda/:appointmentId/preparer', element: <PrepSheetPage /> },
+                                            { path: 'taches', element: <TasksPage /> },
+                                            { path: 'carnet', element: <JournalPage /> },
                                             { path: 'profil', element: <FileProfilePage /> },
                                             { path: 'contacts', element: <FileContactsPage /> },
                                             { path: 'documents', element: <FileDocumentsPage /> },

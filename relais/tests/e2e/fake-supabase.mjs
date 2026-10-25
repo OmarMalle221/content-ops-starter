@@ -15,6 +15,8 @@
 //   de l'appelant (la politique RLS du bucket s'applique), comme l'API Storage. URL signées à durée limitée.
 // - Fonctions Edge : le VRAI code serveur (supabase/functions/_shared/handlers.ts) avec une IA SIMULÉE
 //   (tests/support/simulated-llm.ts) ; aucun appel réseau. GET /__test/storage?path=… lit un fichier déposé.
+//   Rappels : POST /functions/v1/send-reminders avec l'en-tête x-relais-cron-secret: test-cron-secret ;
+//   les courriels sont gardés en mémoire (état « emails »), jamais envoyés.
 //
 // Lancement : bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -24,6 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { HANDLERS, RpcError } from '../../supabase/functions/_shared/handlers.ts';
+import { cronSecretMatches, handleSendReminders } from '../../supabase/functions/_shared/reminders.ts';
 import { SimulatedLlm } from '../support/simulated-llm.ts';
 
 const PORT = Number(process.env.FAKE_SUPABASE_PORT ?? 54399);
@@ -41,6 +44,7 @@ const STORAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../.tmp/fa
 const signedUrls = new Map(); // jeton → { bucket, path, expiresAt }
 const contentTypes = new Map(); // « bucket/chemin » → type MIME déposé
 const llm = new SimulatedLlm();
+const emails = []; // courriels « envoyés » par la fonction de rappels
 
 const sessions = new Map(); // jeton d'accès → { userId, email, aal }
 const refreshTokens = new Map(); // jeton de rafraîchissement → { userId, email, aal }
@@ -326,7 +330,7 @@ async function rpcCall(who, name, body, service = false) {
     const { rows } = await pool.query(
         `select p.proargnames as names,
                 array(select format_type(t, null) from unnest(p.proargtypes) t) as types,
-                format_type(p.prorettype, null) as returns
+                format_type(p.prorettype, null) as returns, p.proretset as returns_set
          from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = $1`,
         [name]
     );
@@ -344,6 +348,11 @@ async function rpcCall(who, name, body, service = false) {
         })
         .filter(Boolean);
     const call = `public.${ident(name)}(${args.join(', ')})`;
+    if (fn.returns_set) {
+        // Fonction qui renvoie des lignes : tableau JSON, comme PostgREST.
+        const sql = `select coalesce(jsonb_agg(to_jsonb(r)), '[]'::jsonb) as result from ${call} r`;
+        return (await asCaller(who, (client) => client.query(sql, params), service)).rows[0].result;
+    }
     if (fn.returns === 'void') {
         await asCaller(who, (client) => client.query(`select ${call}`, params), service);
         return undefined;
@@ -402,7 +411,26 @@ async function handleStorage(req, res, url) {
 }
 
 // -------------------------------------------------------------------------------- fonctions Edge
+// Fonction planifiée : appelée par pg_cron avec un secret partagé (ici, par les tests).
+const CRON_SECRET = 'test-cron-secret';
+
+async function handleScheduled(req, res) {
+    if (!cronSecretMatches(CRON_SECRET, req.headers['x-relais-cron-secret'] ?? null)) return send(res, 401, { error: 'unauthorized' });
+    await readRaw(req);
+    const response = await handleSendReminders({
+        serviceRpc: (fn, args) =>
+            rpcCall(null, fn, args, true).catch((error) => {
+                throw error instanceof HttpError ? new RpcError(String(error.body.code)) : error;
+            }),
+        email: { send: async (message) => void emails.push(message) },
+        appUrl: 'http://127.0.0.1:4173',
+        now: () => new Date()
+    });
+    return send(res, response.status, response.body);
+}
+
 async function handleFunction(req, res, name) {
+    if (name === 'send-reminders') return handleScheduled(req, res);
     const handler = HANDLERS[name];
     if (!handler) return send(res, 404, { error: 'not_found' });
     const who = caller(req);
@@ -526,6 +554,7 @@ async function resetData() {
     signedUrls.clear();
     contentTypes.clear();
     llm.inputs.splice(0);
+    emails.splice(0);
     sessions.clear();
     refreshTokens.clear();
     factors.clear();
@@ -572,6 +601,14 @@ async function state() {
         checklist: await q('select label, origin, is_done from public.program_checklist_items order by position, label'),
         explanations: await q('select program_id, program_version from public.program_explanations'),
         resources: await q('select slug, phone, verification_status, verified_by from public.resources order by sort_order'),
+        tasks: await q('select title, status, assignee_id, due_on, completed_by, source_document_id from public.tasks order by created_at'),
+        appointments: await q('select id, title, starts_at, companion_id from public.appointments order by starts_at'),
+        appointmentQuestions: (await q('select question from public.appointment_questions order by position, created_at')).map(
+            (r) => r.question
+        ),
+        journalEntries: await q('select body, author_id from public.journal_entries order by created_at'),
+        reminderDeliveries: await q('select user_id, sent_on, task_count, appointment_count from public.reminder_deliveries'),
+        emails: [...emails],
         aiCalls: await q('select * from public.ai_calls order by created_at'),
         llmInputs: [...llm.inputs],
         accessLog: await q('select * from public.access_log order by id')

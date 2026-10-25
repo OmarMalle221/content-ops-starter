@@ -1,6 +1,6 @@
 # Relais — PROGRESS
 
-Dernière mise à jour : 2026-10-25 (étape 4)
+Dernière mise à jour : 2026-10-25 (étape 5)
 
 ## Fait
 
@@ -175,61 +175,107 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
   réponse du serveur (trouvé par les tests de bout en bout) ; ils changent tout de suite et reviennent en
   arrière si l'enregistrement échoue.
 
+### Étape 5 — Coordination et rendez-vous (livrée)
+
+- **Base de données** (`supabase/migrations/20261030000001_coordination.sql`) : `tasks` et `appointments`
+  (zone « coordination »), `appointment_questions` et `journal_entries` (carnet de bord, zone « santé »),
+  `reminder_deliveries`. La base impose l'auteur, la date et l'auteur d'une tâche faite, un responsable ou
+  un accompagnateur membre du dossier, et libère les tâches d'un membre retiré. Une tâche liée à un
+  document ou à une démarche ne peut être créée que par quelqu'un qui voit cette source. Fonctions
+  réservées au serveur : `reminders_due` (des nombres seulement) et `record_reminder_sent`.
+  `export_care_file` (format `relais-dossier/4`), `delete_care_file` et `export_my_data` étendues.
+- **Rappels quotidiens** : fonction `send-reminders` appelée chaque matin par `pg_cron`
+  (`supabase/cron/send_reminders.sql`, secret partagé), courriel au contenu fixe (« Vous avez 1 tâche à
+  faire d'ici demain et 1 rendez-vous aujourd'hui ou demain dans Relais »), un lien et la façon d'arrêter.
+  Envoi par Amazon SES en `ca-central-1`, signé SigV4 (vérifié sur les exemples officiels d'AWS), un
+  courriel par personne et par jour au plus. Seulement pour qui a accepté « Rappels par courriel ».
+- **PWA** : navigation du dossier en deux groupes (« Au quotidien », « Le dossier ») ; **Tâches** (à faire
+  par échéance, retards signalés, « mes tâches », faites repliées, case cochée tout de suite) ; **Agenda**
+  (rendez-vous par jour, à l'heure du Québec, accompagnement, contact) ; fiche d'un rendez-vous (questions
+  à poser, **ajout au calendrier du téléphone** par un fichier .ics produit sur place : objet, heure et lieu
+  seulement) ; **Préparer un rendez-vous** (page à imprimer sans IA, chaque élément avec sa source,
+  lignes pour les réponses, impression notée au journal) ; **Carnet de bord** ; « Cette semaine » dans
+  l'aperçu ; « Créer une tâche » depuis un « à faire » de document et depuis une démarche.
+- **Familles de démonstration** enrichies : tâches, rendez-vous (dans les jours qui suivent la démo),
+  question à poser, notes du carnet, tâche liée à la démarche du CIPH.
+- **Tests, tous verts en local** :
+  - Base : 343 vérifications RLS (51 de plus : tâches, agenda, questions et carnet par niveau d'accès,
+    auteurs et dates non falsifiables, rappels réservés au serveur et sans contenu, un courriel par jour,
+    membre retiré, export et suppression) ; contrôle par mutation (une lecture du carnet élargie ou un
+    rappel compté pour tous font échouer les tests).
+  - Unitaires et composants : 342 tests, dont signature SigV4 (5), fichier .ics (5), courriel de rappel
+    (3), fonction de rappels (5), heures au Québec et changements d'heure (3), écrans (11).
+  - Bout en bout : 22 parcours, dont 2 pour l'étape 5 (document → tâche → rendez-vous → questions →
+    .ics → page à imprimer sourcée, accessible aussi en version imprimée → carnet ; rappel générique, un
+    seul par jour, secret exigé).
+  - Lighthouse accessibilité mobile : 100 sur les 34 pages auditées (dont tâches, agenda, rendez-vous,
+    page à imprimer et carnet).
+- **Non vérifié ici** : envoi réel par SES (aucun compte AWS dans cet environnement) ; la signature est
+  vérifiée sur les exemples officiels, la requête SES sans réseau.
+
 ## En cours
 
-- Rien. **Prochaine étape : 5 — Coordination et rendez-vous**, à lancer sur ton feu vert.
+- Rien. **Prochaine étape : 6 — Charge de l'aidant, demandes d'intervenante, mesures du pilote et passe
+  finale (performance, accessibilité)**, à lancer sur ton feu vert.
 
 ## Décisions
 
-| #   | Décision                                                                                                                                                                                     | Raison                                                                                          |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| D1  | Front Vite + React + TypeScript en PWA (pas de rendu serveur)                                                                                                                                | Même base que Rempart ; Netlify ne sert que des fichiers statiques                              |
-| D2  | Code serveur dans des Edge Functions Supabase épinglées à `ca-central-1` (à partir de l'étape 2)                                                                                             | Les données de santé restent dans la région Canada ; clé IA côté serveur seulement              |
-| D3  | Permissions appliquées par la base (RLS + fonctions `private.*`), matrice par zone de données                                                                                                | Un client modifié ne peut rien lire de plus                                                     |
-| D4  | Écritures bloquées sans consentement actif de la personne aidée ; écritures de santé bloquées sans consentement `health_information` de l'auteur                                             | Loi 25 appliquée dans la base, pas seulement à l'écran                                          |
-| D5  | Membre « coordination » : profil, tâches, rendez-vous, journal de bord, contacts ; ni documents, ni santé, ni droits                                                                         | Minimisation                                                                                    |
-| D6  | Bilan de l'aidant visible par son auteur seulement                                                                                                                                           | Confidentialité de l'aidant                                                                     |
-| D7  | Intervenantes et admins : rôle global + MFA obligatoire ; admin jamais membre d'un dossier par défaut                                                                                        | Règle « admin sans accès aux dossiers »                                                         |
-| D8  | Lecture des fichiers seulement par URL signée de 60 s émise et journalisée par une fonction serveur                                                                                          | Journal des accès fiable pour les documents                                                     |
-| D9  | Année de naissance au lieu de la date ; NAM jamais stocké en champ structuré                                                                                                                 | Minimisation                                                                                    |
-| D10 | Détecteur de détresse déterministe exécuté sur le téléphone ; numéros lus dans `resources`                                                                                                   | Déclenchement garanti et testable ; aucun numéro généré                                         |
-| D11 | Moteur de règles sans IA ; l'IA n'explique qu'à partir de la fiche ; lettres à espaces réservés remplis sur le téléphone                                                                     | Aucune invention ; aucun nom envoyé pour les lettres                                            |
-| D12 | Page « Préparer un rendez-vous » sans IA                                                                                                                                                     | Faits du dossier seulement                                                                      |
-| D13 | Courriels (code, rappels, invitations, avis) sans aucun contenu de santé                                                                                                                     | Règle 5                                                                                         |
-| D14 | Pas de cache hors ligne des données du dossier (seulement l'app)                                                                                                                             | Téléphones partagés                                                                             |
-| D15 | Suppression d'un dossier : fichiers effacés par l'API Storage, puis purge en base ; bilans de l'aidant conservés                                                                             | Critère d'acceptation ; à confirmer par le juriste                                              |
-| D16 | Connexion par code à 6 chiffres reçu par courriel, sans mot de passe                                                                                                                         | Fonctionne dans une PWA installée (un lien magique ouvrirait le navigateur)                     |
-| D17 | Consentements écrits seulement par `grant_consent` / `revoke_consent` ; une nouvelle version clôt l'accord précédent ; la politique ne se retire qu'en supprimant le compte                  | Historique complet et preuve de la version acceptée                                             |
-| D18 | Textes de consentement versionnés dans le dépôt ; la base garde leur empreinte SHA-256 et refuse qu'une version publiée change                                                               | Preuve de ce qui a été affiché                                                                  |
-| D19 | Export et suppression du compte par fonctions SQL (pas de fonction serveur à l'étape 1)                                                                                                      | Moins de pièces ; testables sur PostgreSQL                                                      |
-| D20 | Écran d'urgence en `<dialog>` modal, avec repli plein écran pour les navigateurs sans `showModal` (anciens iPhone)                                                                           | L'écran ne doit jamais manquer de s'afficher                                                    |
-| D21 | Tests de bout en bout contre un faux Supabase local (Auth simulée ; données sur la vraie base, voir D29)                                                                                     | Tests reproductibles sans compte ; sert aussi aux démonstrations                                |
-| D22 | Police Atkinson Hyperlegible servie par l'app ; aucune ressource externe (CSP)                                                                                                               | Lisibilité ; aucune adresse IP transmise à un tiers                                             |
-| D23 | « Parler à une intervenante » absent de l'écran d'urgence jusqu'à l'étape 6                                                                                                                  | Pas de bouton qui ne fait rien sur un écran de crise                                            |
-| D24 | Ressources de départ (911, 9-8-8, Info-Social 811, Info-Santé 811) toutes « à vérifier », sans URL source                                                                                    | Les sites officiels n'étaient pas joignables d'ici ; la vérification revient à la TS (porte B3) |
-| D25 | Invitations par lien que l'aidant partage lui-même (texto, courriel) plutôt que par un courriel envoyé par Relais                                                                            | Aucun fournisseur de courriel nécessaire à l'étape 2 ; les familles se textent                  |
-| D26 | Jeton d'invitation dans le fragment de l'adresse (`#`), lié à l'adresse invitée, valable 7 jours, stocké seulement sous forme d'empreinte                                                    | Jamais dans les journaux web ; un lien transféré ne sert à personne d'autre                     |
-| D27 | La personne aidée qui retire son accord ne peut pas être « recontredite » par un formulaire signé : seul son accord ou celui d'un représentant légal le rétablit                             | Autodétermination ; à valider par le juriste (A15)                                              |
-| D28 | Création de dossier par une fonction (`create_care_file`), suppression du compte refusée tant qu'on est propriétaire d'un dossier                                                            | Pas de dossier orphelin ; pas de transfert de propriété en v0.1                                 |
-| D29 | Tests de bout en bout sur la base migrée (mini PostgREST du faux Supabase) au lieu d'une imitation en mémoire                                                                                | Les parcours vérifient la vraie RLS, les vrais déclencheurs et les vraies fonctions             |
-| D30 | Q2 appliquée : API Anthropic derrière `LlmClient`, modèle `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`), sortie structurée Zod, effort bas, 25 s sans nouvel essai, repli serveur sur refus | Cible de 30 s ; fournisseur remplaçable (Bedrock au Canada) sans toucher au reste               |
-| D31 | Q3 appliquée : aucune image envoyée à l'IA ; photos et PDF numérisés notés à la main tant qu'aucun OCR au Canada n'est branché (`OcrClient`)                                                 | On ne pseudonymise qu'un texte (règle 6)                                                        |
-| D32 | Lecture automatique soumise à un consentement distinct du dossier (`ai_document_processing`), vérifié par la base                                                                            | Loi 25 : consentement explicite et distinct ; la personne peut refuser l'IA et garder Relais    |
-| D33 | Garde-fous déterministes après le modèle : conseil, interprétation ou chiffre absents du document retirés ; éléments introuvables tels qu'écrits marqués et décochés                         | Règles 1 et 3, vérifiables par des tests                                                        |
-| D34 | Ré-identification locale partielle : NAM, NAS, date de naissance, code postal et numéros de dossier restent masqués dans le brouillon                                                        | Minimisation : ces valeurs ne servent pas à la coordination                                     |
-| D35 | Rien n'entre au dossier sans `confirm_document` ; les « à faire » restent avec le document jusqu'à l'étape 5 (tâches) ; les rendez-vous datés vont à la chronologie                          | Pas de table de tâches avant l'étape 5                                                          |
-| D36 | Effacement Storage par file (`storage_deletion_queue`) remplie par la base avant la cascade, vidée par la fonction serveur                                                                   | La base ne peut pas effacer un objet Storage ; aucun fichier oublié si l'appel échoue           |
-| D37 | Logique des fonctions serveur sans dépendance à Deno ; le faux Supabase exécute ce même code avec une IA simulée                                                                             | Les parcours e2e testent le vrai code serveur, sans réseau ni clé                               |
-| D38 | Brouillon rejeté ou remplacé effacé (une seule extraction par document)                                                                                                                      | Minimisation                                                                                    |
-| D39 | Photos réduites à 2000 px et réencodées en JPEG sur le téléphone ; PDF envoyés tels quels                                                                                                    | Aucune métadonnée (GPS, appareil) ne quitte le téléphone ; PDF lisibles par le serveur          |
-| D40 | Moteur de règles en TypeScript pur, sur le téléphone ; critères JSON validés dans chaque fiche ; « Je ne sais pas » rend un critère inconnu (→ « possible »)                                 | Règle 3 : aucune IA pour choisir ; ne pas exclure une aide faute d'information                  |
-| D41 | Seuls les programmes probables ou possibles entrent dans les démarches ; refaire le questionnaire met à jour le niveau sans toucher au statut ni aux pièces                                  | Les démarches en cours ne disparaissent pas quand une réponse change                            |
-| D42 | Aucun montant dans une fiche, contrôlé par la base ; l'explication renvoie le montant à l'organisme                                                                                          | Règle 3 ; les montants changent chaque année et dépendent du revenu                             |
-| D43 | Fiche modifiée → nouvelle version « à vérifier », sauf vérification datée du jour (heure du Québec) ; fiche vérifiée = lien, date, initiales                                                 | Une vérification ne vaut que pour le contenu vérifié ; trace de qui a vérifié                   |
-| D44 | Explication et lettre produites à partir de la seule fiche, mises en cache par version ; `ai_calls` sans dossier                                                                             | Règles 3 et 6 ; coût et délai réduits ; aucune donnée du dossier vers l'IA                      |
-| D45 | Lettre à espaces réservés fixes, remplis sur le téléphone ; tout autre crochet devient « [À COMPLÉTER] »                                                                                     | Aucun nom envoyé ; rien n'est rempli au hasard                                                  |
-| D46 | Aucune question sur le revenu en v0.1                                                                                                                                                        | Minimisation ; les fiches disent quand le revenu compte et l'organisme tranche                  |
-| D47 | Familles fictives générées par le vrai moteur, appliquées par les fonctions et la RLS de l'application, démonstration locale seulement                                                       | La démonstration ne peut pas diverger des fiches ; aucun compte fictif en production            |
+| #   | Décision                                                                                                                                                                                     | Raison                                                                                                              |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| D1  | Front Vite + React + TypeScript en PWA (pas de rendu serveur)                                                                                                                                | Même base que Rempart ; Netlify ne sert que des fichiers statiques                                                  |
+| D2  | Code serveur dans des Edge Functions Supabase épinglées à `ca-central-1` (à partir de l'étape 2)                                                                                             | Les données de santé restent dans la région Canada ; clé IA côté serveur seulement                                  |
+| D3  | Permissions appliquées par la base (RLS + fonctions `private.*`), matrice par zone de données                                                                                                | Un client modifié ne peut rien lire de plus                                                                         |
+| D4  | Écritures bloquées sans consentement actif de la personne aidée ; écritures de santé bloquées sans consentement `health_information` de l'auteur                                             | Loi 25 appliquée dans la base, pas seulement à l'écran                                                              |
+| D5  | Membre « coordination » : profil, tâches, rendez-vous, journal de bord, contacts ; ni documents, ni santé, ni droits                                                                         | Minimisation                                                                                                        |
+| D6  | Bilan de l'aidant visible par son auteur seulement                                                                                                                                           | Confidentialité de l'aidant                                                                                         |
+| D7  | Intervenantes et admins : rôle global + MFA obligatoire ; admin jamais membre d'un dossier par défaut                                                                                        | Règle « admin sans accès aux dossiers »                                                                             |
+| D8  | Lecture des fichiers seulement par URL signée de 60 s émise et journalisée par une fonction serveur                                                                                          | Journal des accès fiable pour les documents                                                                         |
+| D9  | Année de naissance au lieu de la date ; NAM jamais stocké en champ structuré                                                                                                                 | Minimisation                                                                                                        |
+| D10 | Détecteur de détresse déterministe exécuté sur le téléphone ; numéros lus dans `resources`                                                                                                   | Déclenchement garanti et testable ; aucun numéro généré                                                             |
+| D11 | Moteur de règles sans IA ; l'IA n'explique qu'à partir de la fiche ; lettres à espaces réservés remplis sur le téléphone                                                                     | Aucune invention ; aucun nom envoyé pour les lettres                                                                |
+| D12 | Page « Préparer un rendez-vous » sans IA                                                                                                                                                     | Faits du dossier seulement                                                                                          |
+| D13 | Courriels (code, rappels, invitations, avis) sans aucun contenu de santé                                                                                                                     | Règle 5                                                                                                             |
+| D14 | Pas de cache hors ligne des données du dossier (seulement l'app)                                                                                                                             | Téléphones partagés                                                                                                 |
+| D15 | Suppression d'un dossier : fichiers effacés par l'API Storage, puis purge en base ; bilans de l'aidant conservés                                                                             | Critère d'acceptation ; à confirmer par le juriste                                                                  |
+| D16 | Connexion par code à 6 chiffres reçu par courriel, sans mot de passe                                                                                                                         | Fonctionne dans une PWA installée (un lien magique ouvrirait le navigateur)                                         |
+| D17 | Consentements écrits seulement par `grant_consent` / `revoke_consent` ; une nouvelle version clôt l'accord précédent ; la politique ne se retire qu'en supprimant le compte                  | Historique complet et preuve de la version acceptée                                                                 |
+| D18 | Textes de consentement versionnés dans le dépôt ; la base garde leur empreinte SHA-256 et refuse qu'une version publiée change                                                               | Preuve de ce qui a été affiché                                                                                      |
+| D19 | Export et suppression du compte par fonctions SQL (pas de fonction serveur à l'étape 1)                                                                                                      | Moins de pièces ; testables sur PostgreSQL                                                                          |
+| D20 | Écran d'urgence en `<dialog>` modal, avec repli plein écran pour les navigateurs sans `showModal` (anciens iPhone)                                                                           | L'écran ne doit jamais manquer de s'afficher                                                                        |
+| D21 | Tests de bout en bout contre un faux Supabase local (Auth simulée ; données sur la vraie base, voir D29)                                                                                     | Tests reproductibles sans compte ; sert aussi aux démonstrations                                                    |
+| D22 | Police Atkinson Hyperlegible servie par l'app ; aucune ressource externe (CSP)                                                                                                               | Lisibilité ; aucune adresse IP transmise à un tiers                                                                 |
+| D23 | « Parler à une intervenante » absent de l'écran d'urgence jusqu'à l'étape 6                                                                                                                  | Pas de bouton qui ne fait rien sur un écran de crise                                                                |
+| D24 | Ressources de départ (911, 9-8-8, Info-Social 811, Info-Santé 811) toutes « à vérifier », sans URL source                                                                                    | Les sites officiels n'étaient pas joignables d'ici ; la vérification revient à la TS (porte B3)                     |
+| D25 | Invitations par lien que l'aidant partage lui-même (texto, courriel) plutôt que par un courriel envoyé par Relais                                                                            | Aucun fournisseur de courriel nécessaire à l'étape 2 ; les familles se textent                                      |
+| D26 | Jeton d'invitation dans le fragment de l'adresse (`#`), lié à l'adresse invitée, valable 7 jours, stocké seulement sous forme d'empreinte                                                    | Jamais dans les journaux web ; un lien transféré ne sert à personne d'autre                                         |
+| D27 | La personne aidée qui retire son accord ne peut pas être « recontredite » par un formulaire signé : seul son accord ou celui d'un représentant légal le rétablit                             | Autodétermination ; à valider par le juriste (A15)                                                                  |
+| D28 | Création de dossier par une fonction (`create_care_file`), suppression du compte refusée tant qu'on est propriétaire d'un dossier                                                            | Pas de dossier orphelin ; pas de transfert de propriété en v0.1                                                     |
+| D29 | Tests de bout en bout sur la base migrée (mini PostgREST du faux Supabase) au lieu d'une imitation en mémoire                                                                                | Les parcours vérifient la vraie RLS, les vrais déclencheurs et les vraies fonctions                                 |
+| D30 | Q2 appliquée : API Anthropic derrière `LlmClient`, modèle `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`), sortie structurée Zod, effort bas, 25 s sans nouvel essai, repli serveur sur refus | Cible de 30 s ; fournisseur remplaçable (Bedrock au Canada) sans toucher au reste                                   |
+| D31 | Q3 appliquée : aucune image envoyée à l'IA ; photos et PDF numérisés notés à la main tant qu'aucun OCR au Canada n'est branché (`OcrClient`)                                                 | On ne pseudonymise qu'un texte (règle 6)                                                                            |
+| D32 | Lecture automatique soumise à un consentement distinct du dossier (`ai_document_processing`), vérifié par la base                                                                            | Loi 25 : consentement explicite et distinct ; la personne peut refuser l'IA et garder Relais                        |
+| D33 | Garde-fous déterministes après le modèle : conseil, interprétation ou chiffre absents du document retirés ; éléments introuvables tels qu'écrits marqués et décochés                         | Règles 1 et 3, vérifiables par des tests                                                                            |
+| D34 | Ré-identification locale partielle : NAM, NAS, date de naissance, code postal et numéros de dossier restent masqués dans le brouillon                                                        | Minimisation : ces valeurs ne servent pas à la coordination                                                         |
+| D35 | Rien n'entre au dossier sans `confirm_document` ; les « à faire » restent avec le document jusqu'à l'étape 5 (tâches) ; les rendez-vous datés vont à la chronologie                          | Pas de table de tâches avant l'étape 5                                                                              |
+| D36 | Effacement Storage par file (`storage_deletion_queue`) remplie par la base avant la cascade, vidée par la fonction serveur                                                                   | La base ne peut pas effacer un objet Storage ; aucun fichier oublié si l'appel échoue                               |
+| D37 | Logique des fonctions serveur sans dépendance à Deno ; le faux Supabase exécute ce même code avec une IA simulée                                                                             | Les parcours e2e testent le vrai code serveur, sans réseau ni clé                                                   |
+| D38 | Brouillon rejeté ou remplacé effacé (une seule extraction par document)                                                                                                                      | Minimisation                                                                                                        |
+| D39 | Photos réduites à 2000 px et réencodées en JPEG sur le téléphone ; PDF envoyés tels quels                                                                                                    | Aucune métadonnée (GPS, appareil) ne quitte le téléphone ; PDF lisibles par le serveur                              |
+| D40 | Moteur de règles en TypeScript pur, sur le téléphone ; critères JSON validés dans chaque fiche ; « Je ne sais pas » rend un critère inconnu (→ « possible »)                                 | Règle 3 : aucune IA pour choisir ; ne pas exclure une aide faute d'information                                      |
+| D41 | Seuls les programmes probables ou possibles entrent dans les démarches ; refaire le questionnaire met à jour le niveau sans toucher au statut ni aux pièces                                  | Les démarches en cours ne disparaissent pas quand une réponse change                                                |
+| D42 | Aucun montant dans une fiche, contrôlé par la base ; l'explication renvoie le montant à l'organisme                                                                                          | Règle 3 ; les montants changent chaque année et dépendent du revenu                                                 |
+| D43 | Fiche modifiée → nouvelle version « à vérifier », sauf vérification datée du jour (heure du Québec) ; fiche vérifiée = lien, date, initiales                                                 | Une vérification ne vaut que pour le contenu vérifié ; trace de qui a vérifié                                       |
+| D44 | Explication et lettre produites à partir de la seule fiche, mises en cache par version ; `ai_calls` sans dossier                                                                             | Règles 3 et 6 ; coût et délai réduits ; aucune donnée du dossier vers l'IA                                          |
+| D45 | Lettre à espaces réservés fixes, remplis sur le téléphone ; tout autre crochet devient « [À COMPLÉTER] »                                                                                     | Aucun nom envoyé ; rien n'est rempli au hasard                                                                      |
+| D46 | Aucune question sur le revenu en v0.1                                                                                                                                                        | Minimisation ; les fiches disent quand le revenu compte et l'organisme tranche                                      |
+| D47 | Familles fictives générées par le vrai moteur, appliquées par les fonctions et la RLS de l'application, démonstration locale seulement                                                       | La démonstration ne peut pas diverger des fiches ; aucun compte fictif en production                                |
+| D48 | Carnet de bord et questions à poser en zone « santé » ; tâches et agenda en zone « coordination »                                                                                            | Les observations du quotidien sont des renseignements de santé ; un voisin qui conduit voit l'agenda, pas le carnet |
+| D49 | Rappels : la base ne donne que des nombres à la fonction serveur ; courriel au texte fixe                                                                                                    | Aucun titre, nom ni lieu ne peut sortir dans un courriel (règle 5), même par erreur                                 |
+| D50 | Courriel par l'API HTTPS d'Amazon SES en `ca-central-1`, signée SigV4 sans dépendance                                                                                                        | Les fonctions Edge n'ouvrent pas de connexion SMTP ; hébergement au Canada                                          |
+| D51 | Fichier .ics produit sur le téléphone avec l'objet, l'heure et le lieu seulement                                                                                                             | Le calendrier du téléphone est souvent synchronisé ailleurs : minimisation                                          |
+| D52 | Heures de l'agenda saisies et affichées à l'heure du Québec, changements d'heure compris                                                                                                     | Pilote au Québec ; un téléphone réglé ailleurs n'en décale pas les rendez-vous                                      |
+| D53 | Page « Préparer un rendez-vous » sans IA : faits du dossier avec leur source, chronologie des 3 derniers mois                                                                                | Rien d'inventé ni d'interprété ; le professionnel voit d'où vient chaque élément                                    |
+| D54 | Une note du carnet reste au dossier si son auteur supprime son compte (auteur effacé)                                                                                                        | Elle appartient à l'histoire du dossier ; à valider par le juriste (A19)                                            |
 
 ### Hypothèses appliquées en attendant les réponses aux questions bloquantes
 
@@ -276,6 +322,10 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
   abandonnés (`pending_upload` de plus de 24 h).
 - Compte admin de l'équipe Relais : rôle `admin` à attribuer par SQL (`public.users.app_role`), MFA
   obligatoire à la première connexion.
+- Rappels : compte Amazon SES en `ca-central-1` (domaine vérifié, sortie du bac à sable), secrets
+  `AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY`, `RELAIS_EMAIL_FROM`, `RELAIS_APP_URL`,
+  `RELAIS_CRON_SECRET` ; Vault (`relais_functions_url`, `relais_cron_secret`) puis
+  `supabase/cron/send_reminders.sql`. Envoyer un premier rappel réel à une adresse de l'équipe.
 
 ### Avant le pilote : vérifier les 8 fiches à la source
 
@@ -297,16 +347,19 @@ Points précis :
   valider et compléter par la travailleuse sociale (B1).
 - Textes de consentement (`src/content/consent-texts.fr.json`) : à faire valider par le juriste ;
   coordonnées de la personne responsable des renseignements personnels à fournir.
-- Taille de l'application : 245 ko compressés au premier chargement (229 avant l'étape 4) ;
+- Taille de l'application : 256 ko compressés au premier chargement (245 avant l'étape 5) ;
   découpage par page prévu à la passe de performance de l'étape 6.
 - Revérification périodique des fiches (ex. rappel aux admins pour toute fiche vérifiée il y a plus de
-  12 mois) : à ajouter avec les rappels de l'étape 5.
+  12 mois) : le fournisseur de courriel existe maintenant ; à ajouter à l'étape 6 si l'équipe le veut.
+- Heure d'envoi des rappels (8 h l'été, 7 h l'hiver) et texte du courriel : à valider par la travailleuse
+  sociale (B12).
 - Documents qui évoquent une crise (B5) : l'écran d'urgence ne se déclenche que sur ce que la famille tape,
   pas sur le contenu des documents lus. À trancher avec la travailleuse sociale.
-- Les « à faire » tirés d'un document restent avec le document ; ils deviendront des tâches partagées à
-  l'étape 5.
+- Les « à faire » d'un document deviennent des tâches à la demande (« Créer une tâche »), pas
+  automatiquement : la famille choisit le titre que verront les membres « coordination ».
 - Mode sombre non pris en charge en v0.1.
 - Transfert de la propriété d'un dossier à un autre membre : hors v0.1 (la personne doit supprimer le
   dossier pour supprimer son compte).
-- Invitations par courriel envoyé par Relais : à ajouter avec le fournisseur de courriel de l'étape 5.
+- Invitations par courriel envoyé par Relais : possible maintenant (SES) ; non fait, l'invitation par lien
+  partagé suffit au pilote.
 - ESLint 9 n'est plus maintenu ; passer à ESLint 10 quand `eslint-plugin-jsx-a11y` le prendra en charge.
