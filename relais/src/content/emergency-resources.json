@@ -1,0 +1,54 @@
+[
+    {
+        "slug": "urgence-911",
+        "category": "emergency",
+        "name": "Urgence 911",
+        "organization": null,
+        "phone": "911",
+        "sms": null,
+        "url": null,
+        "description": "Si quelqu'un est en danger, ou a besoin de soins urgents.",
+        "hours": "24 h sur 24, 7 jours sur 7",
+        "source_url": null,
+        "sort_order": 10
+    },
+    {
+        "slug": "ligne-9-8-8",
+        "category": "crisis_line",
+        "name": "9-8-8, prévention du suicide",
+        "organization": null,
+        "phone": "988",
+        "sms": "988",
+        "url": null,
+        "description": "Si vous pensez au suicide, ou si vous êtes inquiet ou inquiète pour quelqu'un. Par appel ou par texto.",
+        "hours": "24 h sur 24, 7 jours sur 7",
+        "source_url": null,
+        "sort_order": 20
+    },
+    {
+        "slug": "info-social-811",
+        "category": "psychosocial_line",
+        "name": "Info-Social 811",
+        "organization": null,
+        "phone": "811",
+        "sms": null,
+        "url": null,
+        "description": "Pour parler à une intervenante ou un intervenant psychosocial. Choisissez l'option 2.",
+        "hours": "24 h sur 24, 7 jours sur 7",
+        "source_url": null,
+        "sort_order": 30
+    },
+    {
+        "slug": "info-sante-811",
+        "category": "health_line",
+        "name": "Info-Santé 811",
+        "organization": null,
+        "phone": "811",
+        "sms": null,
+        "url": null,
+        "description": "Pour une question de santé, parler à une infirmière ou un infirmier. Choisissez l'option 1.",
+        "hours": "24 h sur 24, 7 jours sur 7",
+        "source_url": null,
+        "sort_order": 40
+    }
+]

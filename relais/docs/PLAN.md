@@ -7,6 +7,7 @@ Chaque étape se termine par une démo sur téléphone, des tests verts en CI et
 ## Étape 1 — Socle, authentification et consentements
 
 **Livrables**
+
 - Projet Vite + React + TypeScript en PWA, mise en page mobile, jetons de design AA, `fr.ts`.
 - Supabase : migrations `users`, `consents`, `resources`, `access_log`, `ai_calls`, fonctions `private.*` ;
   shim de test et `rls_test.sql` ; CI (lint, types, unitaires, base, e2e, Lighthouse).
@@ -24,6 +25,7 @@ les écritures), journaliseur (aucun champ libre), axe + Lighthouse sur les écr
 ## Étape 2 — Dossier et membres
 
 **Livrables**
+
 - `care_files`, `care_file_members`, invitations par courriel, `care_recipients`, `care_needs`,
   `contacts`.
 - Enregistrement du consentement de la personne aidée et de son statut juridique (elle-même, mandat
@@ -33,12 +35,13 @@ les écritures), journaliseur (aucun champ libre), axe + Lighthouse sur les écr
 - Journal des accès consultable par l'aidant principal ; export du dossier ; **suppression du dossier**.
 
 **Tests** : `rls_test.sql` complet (chaque rôle × table × opération), invitation (expiration, mauvaise
-adresse), suppression qui efface tout et ne laisse que la trace. Critère couvert : *un membre invité ne
-voit que ce que ses permissions autorisent*.
+adresse), suppression qui efface tout et ne laisse que la trace. Critère couvert : _un membre invité ne
+voit que ce que ses permissions autorisent_.
 
 ## Étape 3 — Documents et extraction IA
 
 **Livrables**
+
 - Bucket privé, téléversement PDF / photo (compression, retrait EXIF), URL signées journalisées.
 - Fonction `extract-document` : texte (ou OCR selon Q3), pseudonymisation, appel Claude via
   `LlmClient`, validation Zod, garde-fous, `ai_calls`.
@@ -52,6 +55,7 @@ suppression étendue aux fichiers Storage.
 ## Étape 4 — Navigateur de droits
 
 **Livrables**
+
 - Table `programs` + 8 fiches « À VÉRIFIER » sans montant, `resources` de répit et lignes d'aide.
 - Questionnaire, moteur de règles, liste personnalisée avec statut (`to_explore`, `in_progress`,
   `obtained`, `refused`), pièces à fournir, lien officiel, mention « admissibilité à confirmer ».
@@ -64,6 +68,7 @@ carte affichée porte source et date de vérification (e2e), garde-fou « je ne 
 ## Étape 5 — Coordination et rendez-vous
 
 **Livrables**
+
 - Tâches (responsable, échéance), calendrier partagé, journal de bord, export `.ics` d'un rendez-vous
   généré sur le téléphone.
 - Rappels quotidiens par courriel au contenu générique (`pg_cron` → `send-reminders`).
@@ -75,6 +80,7 @@ des faits du dossier, chacun avec sa source), axe sur la version imprimable.
 ## Étape 6 — Charge de l'aidant et demandes d'intervenante
 
 **Livrables**
+
 - Bilan hebdomadaire (3 questions, 1 à 5), seuil, suggestions de répit tirées de `resources`.
 - Bouton « Parler à une intervenante », tableau de suivi interne (MFA), avis par courriel sans contenu.
 - Mesures du pilote : temps gagné, satisfaction, programmes repérés puis demandés ; tableau admin

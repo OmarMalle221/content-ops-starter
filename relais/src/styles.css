@@ -1,0 +1,79 @@
+@import 'tailwindcss';
+@import '@fontsource/atkinson-hyperlegible/400.css';
+@import '@fontsource/atkinson-hyperlegible/700.css';
+
+/* Mise en page : une colonne de lecture, mobile d'abord ; l'aide immédiate reste visible dans l'en-tête.
+   Police Atkinson Hyperlegible (hébergée avec l'app, aucun appel externe), conçue pour la lisibilité.
+   Contrastes calculés (WCAG) sur blanc : texte 15.7:1, texte secondaire 6.9:1, teal 8.9:1, rouge d'urgence 6.5:1,
+   contour de focus 6.7:1 (au moins 3:1 exigé pour un indicateur de focus, critère 1.4.11). */
+@theme {
+    --font-sans: 'Atkinson Hyperlegible', 'Segoe UI', Roboto, system-ui, sans-serif;
+
+    --color-canvas: #f5f8f7;
+    --color-surface: #ffffff;
+    --color-ink: #13262b;
+    --color-muted: #4a5d62;
+    --color-line: #c9d7d5;
+    --color-brand: #0f5257;
+    --color-brand-strong: #0a3d41;
+    --color-brand-soft: #e1eeec;
+    --color-urgent: #b3261e;
+    --color-urgent-strong: #8c1d17;
+    --color-urgent-soft: #fbeae8;
+    --color-ok: #1d6b3a;
+    --color-ok-soft: #e4f2e8;
+    --color-focus: #1d4ed8;
+}
+
+html {
+    font-size: 106.25%; /* 17 px : lecture confortable sur téléphone */
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+}
+
+h1,
+h2,
+h3 {
+    line-height: 1.25;
+    text-wrap: balance;
+}
+
+:focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Le titre de page reçoit le focus à chaque navigation, sans contour visible. */
+h1[tabindex='-1']:focus {
+    outline: none;
+}
+
+details > summary {
+    cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+@media print {
+    .no-print {
+        display: none !important;
+    }
+}

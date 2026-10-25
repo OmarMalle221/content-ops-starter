@@ -1,9 +1,10 @@
 -- =====================================================================================================
--- Relais v0.1 — schéma proposé (PostgreSQL 16 / Supabase, région ca-central-1)
+-- Relais v0.1 — schéma cible (PostgreSQL 16 / Supabase, région ca-central-1)
 --
--- PROPOSITION à valider. Après le feu vert, ce fichier sera découpé en migrations par étape
--- (supabase/migrations/) et couvert par des tests RLS automatisés (supabase/tests/rls_test.sql).
--- Vérifié : s'applique sans erreur sur PostgreSQL 16 + shim Supabase (rôles, auth.uid(), storage).
+-- CIBLE GLOBALE des 6 étapes. Ce qui est livré vit dans supabase/migrations/ et y fait foi
+-- (étape 1 : users, consent_texts, consents, resources, access_log, ai_calls). Ce fichier est tenu à
+-- jour quand une étape fait évoluer la conception. Les tests automatisés sont dans
+-- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
 -- Principes
 --   * Tables, colonnes et code en anglais ; commentaires en français.
@@ -64,7 +65,8 @@ create type public.program_status as enum ('to_explore', 'in_progress', 'obtaine
 create type public.verification_status as enum ('to_verify', 'verified');
 create type public.task_status as enum ('todo', 'in_progress', 'done', 'cancelled');
 create type public.resource_category as enum (
-    'emergency', 'crisis_line', 'psychosocial_line', 'respite', 'caregiver_support', 'elder_abuse', 'info'
+    'emergency', 'crisis_line', 'psychosocial_line', 'health_line', 'respite', 'caregiver_support',
+    'elder_abuse', 'info'
 );
 create type public.support_origin as enum ('button', 'distress_screen', 'checkin');
 create type public.support_status as enum ('new', 'assigned', 'in_progress', 'closed');
@@ -80,7 +82,7 @@ create type public.access_action as enum (
 -- -----------------------------------------------------------------------------------------------------
 create table public.users (
     id           uuid primary key references auth.users (id) on delete cascade,
-    display_name text check (char_length(display_name) <= 80),
+    display_name text check (char_length(btrim(display_name)) between 1 and 80),
     app_role     public.app_role not null default 'member',  -- modifiable par service_role seulement
     created_at   timestamptz not null default now()
 );
@@ -124,6 +126,16 @@ create table public.care_file_invitations (
     check (role <> 'care_recipient' or access_level = 'read_only')
 );
 
+-- Versions publiées des textes de consentement (empreinte SHA-256 du texte versionné dans le dépôt).
+create table public.consent_texts (
+    consent_type public.consent_type not null,
+    version      text not null check (version ~ '^\d{4}-\d{2}-\d{2}(\.\d+)?$'),
+    sha256       text not null check (sha256 ~ '^[0-9a-f]{64}$'),
+    published_on date not null,
+    primary key (consent_type, version)
+);
+
+-- Écritures par RPC seulement : grant_consent (accord ou renouvellement), revoke_consent.
 create table public.consents (
     id                  uuid primary key default gen_random_uuid(),
     user_id             uuid not null references public.users (id) on delete cascade,  -- qui enregistre
@@ -132,11 +144,11 @@ create table public.consents (
     granted_by          public.consent_grantor not null default 'self',
     legal_basis         public.legal_basis,
     representative_name text check (char_length(representative_name) <= 120),
-    text_version        text not null,   -- version du texte affiché (ex. « health_information@2026-11-01 »)
-    text_sha256         text not null check (text_sha256 ~ '^[0-9a-f]{64}$'),
+    text_version        text not null,
     granted_at          timestamptz not null default now(),
     revoked_at          timestamptz,
     revoked_by          uuid references public.users (id) on delete set null,
+    foreign key (consent_type, text_version) references public.consent_texts (consent_type, version),
     check (
         (consent_type in ('care_recipient_data', 'ai_document_processing')) = (care_file_id is not null)
     ),
@@ -438,12 +450,13 @@ create table public.resources (
     category            public.resource_category not null,
     name                text not null,
     organization        text,
-    phone               text,
-    sms                 text,
-    url                 text check (url is null or url ~ '^https://'),
+    phone               text check (phone ~ '^[0-9 +-]+$'),
+    sms                 text check (sms ~ '^[0-9 +-]+$'),
+    url                 text check (url ~ '^https://'),
     description         text,
     hours               text,
     region              text,  -- null = tout le Québec
+    source_url          text check (source_url ~ '^https://'),
     verification_status public.verification_status not null default 'to_verify',
     verified_on         date,
     verified_by         text,
@@ -451,7 +464,7 @@ create table public.resources (
     is_active           boolean not null default true,
     updated_at          timestamptz not null default now(),
     check (phone is not null or sms is not null or url is not null),
-    check ((verification_status = 'verified') = (verified_on is not null))
+    check ((verification_status = 'verified') = (verified_on is not null and verified_by is not null))
 );
 
 -- Bilan hebdomadaire privé : visible par son auteur seulement (pas même par l'aidant principal).
@@ -963,7 +976,7 @@ grant update (access_level) on public.care_file_members to authenticated;
 grant select on public.care_file_invitations to authenticated;
 grant update (revoked_at) on public.care_file_invitations to authenticated;
 
-grant select, insert on public.consents to authenticated;
+grant select on public.consents to authenticated;
 
 grant select, insert on public.documents to authenticated;
 grant select on public.document_extractions to authenticated;
@@ -1059,22 +1072,12 @@ create policy invitations_select on public.care_file_invitations for select to a
 create policy invitations_update on public.care_file_invitations for update to authenticated
     using (private.can_write(care_file_id, 'manage')) with check (private.can_write(care_file_id, 'manage'));
 
--- consents : ajout seulement (la révocation passe par revoke_consent).
+-- consents : lecture seulement. Écritures par RPC (étape 1 : grant_consent / revoke_consent ; étape 2 :
+-- record_file_consent, réservé au propriétaire, ou à la personne aidée pour « care_recipient_in_app »).
 create policy consents_select on public.consents for select to authenticated
     using (
         (care_file_id is null and user_id = (select auth.uid()))
         or (care_file_id is not null and private.can_read(care_file_id, 'profile'))
-    );
-create policy consents_insert on public.consents for insert to authenticated
-    with check (
-        user_id = (select auth.uid())
-        and (
-            (care_file_id is null and granted_by = 'self')
-            or (care_file_id is not null and granted_by <> 'care_recipient_in_app'
-                and private.can_write(care_file_id, 'manage'))
-            or (care_file_id is not null and granted_by = 'care_recipient_in_app'
-                and private.is_care_recipient_member(care_file_id))
-        )
     );
 
 -- documents : lecture des métadonnées ; création d'une entrée « pending_upload » par l'auteur.

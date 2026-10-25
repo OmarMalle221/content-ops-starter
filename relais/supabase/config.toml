@@ -1,0 +1,37 @@
+# Configuration du CLI Supabase (développement local). Le projet hébergé doit être créé en région
+# ca-central-1 (Canada Central) ; reproduire ces réglages Auth dans son tableau de bord.
+project_id = "relais"
+
+[api]
+# Seul `public` est exposé par l'API ; les fonctions d'accès vivent dans le schéma `private`.
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+
+[auth]
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:4173"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+# Connexion par code à 6 chiffres (pas de lien magique : la PWA installée ne s'ouvre pas depuis un lien).
+enable_signup = true
+enable_confirmations = false
+otp_length = 6
+otp_expiry = 600
+
+[auth.email.template.magic_link]
+subject = "Votre code de connexion Relais"
+content_path = "./supabase/templates/code.html"
+
+[auth.email.template.confirmation]
+subject = "Votre code de connexion Relais"
+content_path = "./supabase/templates/code.html"
+
+# Vérification en deux étapes (TOTP) : obligatoire pour les intervenantes et les admins (voir RLS).
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true

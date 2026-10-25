@@ -1,7 +1,7 @@
 # Relais v0.1 — Architecture proposée
 
-> Statut : **proposition, en attente du feu vert.** Les choix marqués *(Q1)* à *(Q5)* dépendent des
-> questions bloquantes listées dans [`../PROGRESS.md`](../PROGRESS.md).
+> Statut : **étape 1 livrée** (socle, authentification, consentements). Les choix marqués _(Q1)_ à _(Q5)_
+> suivent les hypothèses par défaut notées dans [`../PROGRESS.md`](../PROGRESS.md), en attendant les réponses.
 
 ## 1. Vue d'ensemble
 
@@ -47,17 +47,17 @@ flowchart LR
 
 ## 2. Pile technique
 
-| Couche | Choix | Pourquoi |
-|---|---|---|
-| Front | React 19 + TypeScript, Vite, `vite-plugin-pwa`, React Router, TanStack Query, Tailwind | PWA légère, mobile d'abord, même base que Rempart |
-| Formulaires et validation | Zod (schémas partagés front / fonctions) | Une seule définition des données |
-| Base | Supabase Postgres 15+ avec RLS, région `ca-central-1` | Hébergement au Canada, chiffrement au repos (AES-256) et TLS |
-| Fichiers | Supabase Storage, bucket privé `documents` | Même région ; aucune lecture directe (voir § 6) |
-| Serveur | Supabase Edge Functions (Deno), épinglées `ca-central-1` | Pas de serveur à gérer ; code IA isolé |
-| IA | SDK officiel `@anthropic-ai/sdk`, modèle `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`) | Sorties JSON validées (`messages.parse` + `zodOutputFormat`) |
-| Planification | `pg_cron` → fonction `send-reminders` | Rappels quotidiens |
-| Courriel | Fournisseur SMTP au Canada (ex. Amazon SES `ca-central-1`) | Courriels sans contenu de santé |
-| Tests | Vitest, PostgreSQL 16 + shim Supabase (RLS), Playwright + axe, Lighthouse CI | Mêmes outils que TrustCargo Pay dans ce dépôt |
+| Couche                    | Choix                                                                                   | Pourquoi                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Front                     | React 19 + TypeScript, Vite, `vite-plugin-pwa`, React Router, TanStack Query, Tailwind  | PWA légère, mobile d'abord, même base que Rempart            |
+| Formulaires et validation | Zod (schémas partagés front / fonctions)                                                | Une seule définition des données                             |
+| Base                      | Supabase Postgres 15+ avec RLS, région `ca-central-1`                                   | Hébergement au Canada, chiffrement au repos (AES-256) et TLS |
+| Fichiers                  | Supabase Storage, bucket privé `documents`                                              | Même région ; aucune lecture directe (voir § 6)              |
+| Serveur                   | Supabase Edge Functions (Deno), épinglées `ca-central-1`                                | Pas de serveur à gérer ; code IA isolé                       |
+| IA                        | SDK officiel `@anthropic-ai/sdk`, modèle `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`) | Sorties JSON validées (`messages.parse` + `zodOutputFormat`) |
+| Planification             | `pg_cron` → fonction `send-reminders`                                                   | Rappels quotidiens                                           |
+| Courriel                  | Fournisseur SMTP au Canada (ex. Amazon SES `ca-central-1`)                              | Courriels sans contenu de santé                              |
+| Tests                     | Vitest, PostgreSQL 16 + shim Supabase (RLS), Playwright + axe, Lighthouse CI            | Mêmes outils que TrustCargo Pay dans ce dépôt                |
 
 ## 3. Organisation du code (proposée)
 
@@ -87,20 +87,20 @@ relais/
 └── tests/                     # unit, integration, e2e (Playwright + axe), lighthouse
 ```
 
-*(Q1)* Emplacement : dépôt dédié recommandé (application de santé : accès et secrets séparés) ; à défaut,
+_(Q1)_ Emplacement : dépôt dédié recommandé (application de santé : accès et secrets séparés) ; à défaut,
 dossier `relais/` de ce dépôt, comme `dfn/` et `trustcargo-pay/`.
 
 ## 4. Règles non négociables → mécanismes
 
-| Règle | Mécanisme | Vérifié par |
-|---|---|---|
-| 1. Aucun conseil médical | Prompts « résume ce qui est écrit, n'interprète rien » ; schéma de sortie sans champ d'avis ; garde-fou déterministe qui repère le langage de conseil (« vous devriez », « augmenter la dose », « normal », « inquiétant »…) et force « à vérifier » ; renvoi fixe vers le professionnel ou Info-Santé 811 | Tests unitaires des garde-fous + jeu de documents fictifs |
-| 2. Détresse | Détecteur déterministe exécuté **sur le téléphone** à chaque saisie libre ; écran d'urgence immédiat ; numéros lus dans `resources` (copie de secours générée à la compilation à partir de la même table, jamais d'un texte généré) | Corpus de phrases types en test automatisé (doit toujours déclencher) |
-| 3. Aucune invention | Le moteur de règles (sans IA) choisit les programmes ; l'IA ne reçoit que la fiche `programs` ; garde-fou : tout chiffre ou montant absent de la fiche fait rejeter la sortie ; champ `unknowns` → « Je ne sais pas » | Tests du moteur + tests des garde-fous |
-| 4. Loi 25 | 6 types de consentement distincts et révocables ; écritures de santé bloquées sans consentement actif (dans la base, pas seulement à l'écran) ; minimisation (année de naissance, jamais de NAM structuré) ; export et suppression ; journal des accès | Tests RLS + test de suppression |
-| 5. Canada, chiffrement, journaux | Supabase `ca-central-1`, Edge Functions épinglées, Netlify statique ; TLS + chiffrement au repos ; journal applicatif par liste blanche de champs (identifiants, codes, durées) ; aucune donnée de santé dans les URL (filtres par POST/RPC) | Test du journaliseur + revue |
-| 6. Pseudonymisation avant Claude | Voir § 5 ; *(Q2, Q3)* | Tests unitaires sur documents fictifs |
-| 7. Français simple, mobile, WCAG AA | Textes centralisés dans `fr.ts`, relus par la TS ; cibles tactiles 44 px, contraste AA, police 16 px min. ; axe dans chaque test e2e ; Lighthouse ≥ 90 mobile | Playwright + axe + Lighthouse CI |
+| Règle                               | Mécanisme                                                                                                                                                                                                                                                                                                  | Vérifié par                                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 1. Aucun conseil médical            | Prompts « résume ce qui est écrit, n'interprète rien » ; schéma de sortie sans champ d'avis ; garde-fou déterministe qui repère le langage de conseil (« vous devriez », « augmenter la dose », « normal », « inquiétant »…) et force « à vérifier » ; renvoi fixe vers le professionnel ou Info-Santé 811 | Tests unitaires des garde-fous + jeu de documents fictifs             |
+| 2. Détresse                         | Détecteur déterministe exécuté **sur le téléphone** à chaque saisie libre ; écran d'urgence immédiat ; numéros lus dans `resources` (copie de secours générée à la compilation à partir de la même table, jamais d'un texte généré)                                                                        | Corpus de phrases types en test automatisé (doit toujours déclencher) |
+| 3. Aucune invention                 | Le moteur de règles (sans IA) choisit les programmes ; l'IA ne reçoit que la fiche `programs` ; garde-fou : tout chiffre ou montant absent de la fiche fait rejeter la sortie ; champ `unknowns` → « Je ne sais pas »                                                                                      | Tests du moteur + tests des garde-fous                                |
+| 4. Loi 25                           | 6 types de consentement distincts et révocables ; écritures de santé bloquées sans consentement actif (dans la base, pas seulement à l'écran) ; minimisation (année de naissance, jamais de NAM structuré) ; export et suppression ; journal des accès                                                     | Tests RLS + test de suppression                                       |
+| 5. Canada, chiffrement, journaux    | Supabase `ca-central-1`, Edge Functions épinglées, Netlify statique ; TLS + chiffrement au repos ; journal applicatif par liste blanche de champs (identifiants, codes, durées) ; aucune donnée de santé dans les URL (filtres par POST/RPC)                                                               | Test du journaliseur + revue                                          |
+| 6. Pseudonymisation avant Claude    | Voir § 5 ; _(Q2, Q3)_                                                                                                                                                                                                                                                                                      | Tests unitaires sur documents fictifs                                 |
+| 7. Français simple, mobile, WCAG AA | Textes centralisés dans `fr.ts`, relus par la TS ; cibles tactiles 44 px, contraste AA, police 16 px min. ; axe dans chaque test e2e ; Lighthouse ≥ 90 mobile                                                                                                                                              | Playwright + axe + Lighthouse CI                                      |
 
 ## 5. Documents et extraction IA
 
@@ -131,6 +131,7 @@ sequenceDiagram
 tâches retenus, chacun relié au document source.
 
 **Pseudonymisation (avant tout appel IA)**
+
 - Dictionnaire du dossier : prénom et nom de la personne aidée, noms des membres et des contacts,
   adresses connues → jetons `[PERSONNE_1]`, `[ADRESSE_1]`…
 - Motifs : NAM (`AAAA 0000 0000`), code postal, téléphone, courriel, date de naissance précédée de
@@ -140,7 +141,7 @@ tâches retenus, chacun relié au document source.
 - Compteurs (jamais les valeurs) enregistrés dans `ai_calls.pseudonymized_counts`.
 - Risque résiduel à déclarer dans l'EFVP : un nom inconnu du dossier, sans titre, peut passer.
 
-**Photos et PDF numérisés** *(Q3)* : on ne peut pseudonymiser qu'un texte. Recommandation : OCR hébergé
+**Photos et PDF numérisés** _(Q3)_ : on ne peut pseudonymiser qu'un texte. Recommandation : OCR hébergé
 au Canada, puis pseudonymisation du texte. Un document manuscrit ou flou (faible confiance OCR, ou
 `legibility` ≠ `clear` dans la sortie) est marqué **« à vérifier »**.
 
@@ -150,6 +151,7 @@ au Canada, puis pseudonymisation du texte. Un document manuscrit ou flou (faible
 `timeline_events[]`, `legibility`, `needs_review`, `review_reasons[]`. Aucun champ d'interprétation.
 
 **Appel au modèle**
+
 - `client.messages.parse()` avec `output_config.format = zodOutputFormat(schéma)`, modèle lu dans
   `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`), effort réglé bas et mesuré pour tenir la cible.
 - Refus du modèle (`stop_reason: "refusal"`) : repli serveur `fallbacks: "default"` sur l'API Anthropic
@@ -157,7 +159,7 @@ au Canada, puis pseudonymisation du texte. Un document manuscrit ou flou (faible
 - Cible **< 30 s pour un PDF de 3 pages** : texte extrait localement (quelques ko envoyés), un seul
   appel, délai d'expiration à 25 s ; mesuré par un test d'intégration sur un PDF fictif.
 
-**Fournisseur** *(Q2)* : l'API Anthropic directe ne propose que des zones « mondiale » ou « États-Unis »
+**Fournisseur** _(Q2)_ : l'API Anthropic directe ne propose que des zones « mondiale » ou « États-Unis »
 (`inference_geo`) ; Claude via Amazon Bedrock pourrait rester au Canada si le modèle y est offert (à
 vérifier). Le code isole le fournisseur derrière une interface `LlmClient` ; seul le texte
 pseudonymisé sort de Supabase.
@@ -166,13 +168,13 @@ pseudonymisé sort de Supabase.
 
 **Matrice d'accès** (appliquée par `private.can_read` / `private.can_write`, voir [`schema.sql`](schema.sql)) :
 
-| Zone de données | Propriétaire (aidant principal) | Accès complet | Coordination | Lecture seule | Personne aidée |
-|---|---|---|---|---|---|
-| Profil (prénom, âge, milieu de vie) | lire / écrire | lire / écrire | lire | lire | lire |
-| Coordination (tâches, rendez-vous, journal de bord, contacts) | lire / écrire | lire / écrire | lire / écrire | lire | lire |
-| Santé (documents, extractions, chronologie, médicaments, autonomie) | lire / écrire | lire / écrire | — | lire | lire |
-| Droits (questionnaire, programmes, pièces) | lire / écrire | lire / écrire | — | lire | lire |
-| Gestion (membres, invitations, journal des accès, suppression) | oui | — | — | — | — |
+| Zone de données                                                     | Propriétaire (aidant principal) | Accès complet | Coordination  | Lecture seule | Personne aidée |
+| ------------------------------------------------------------------- | ------------------------------- | ------------- | ------------- | ------------- | -------------- |
+| Profil (prénom, âge, milieu de vie)                                 | lire / écrire                   | lire / écrire | lire          | lire          | lire           |
+| Coordination (tâches, rendez-vous, journal de bord, contacts)       | lire / écrire                   | lire / écrire | lire / écrire | lire          | lire           |
+| Santé (documents, extractions, chronologie, médicaments, autonomie) | lire / écrire                   | lire / écrire | —             | lire          | lire           |
+| Droits (questionnaire, programmes, pièces)                          | lire / écrire                   | lire / écrire | —             | lire          | lire           |
+| Gestion (membres, invitations, journal des accès, suppression)      | oui                             | —             | —             | —             | —              |
 
 - **Intervenante Relais** : membre du dossier seulement si l'aidant l'y invite, au niveau qu'il choisit ;
   rôle global `relais_worker` et MFA obligatoires, sinon aucun accès.
@@ -194,8 +196,13 @@ cascade et ne laisse au journal **que la trace de la suppression** (acteur, date
 Les bilans de l'aidant (ses propres données) sont conservés. Les sauvegardes Supabase conservent les
 données jusqu'à leur expiration : point à valider par le juriste.
 
-**Droit d'accès et portabilité** : export JSON structuré + documents (fonction `export-data`), par
-dossier (propriétaire) et par personne (ses propres données).
+**Droit d'accès et portabilité** : export JSON structuré. Les données propres à la personne passent par la
+fonction SQL `export_my_data` (étape 1) ; l'export d'un dossier avec ses documents passera par la fonction
+serveur `export-data` (étape 2), seule à pouvoir lire Storage.
+
+**Suppression du compte** : fonction SQL `delete_my_account` (étape 1), qui efface le compte Auth et, par
+cascade, le profil et les consentements ; le journal garde l'identifiant pseudonyme et la trace. À l'étape 2,
+elle refusera tant que la personne est propriétaire d'un dossier (transfert ou suppression d'abord).
 
 ## 7. Navigateur de droits
 
@@ -204,10 +211,12 @@ dossier (propriétaire) et par personne (ses propres données).
 2. **Moteur de règles en TypeScript pur, sans IA** : compare les réponses aux `criteria` de chaque
    fiche, écrits dans un petit langage JSON :
    ```json
-   { "all": [
+   {
+     "all": [
        { "fact": "recipient_age", "op": ">=", "value": 70 },
        { "fact": "living_setting", "op": "in", "value": ["home", "rpa"] }
-   ] }
+     ]
+   }
    ```
    Résultat par programme : `likely`, `possible` (information manquante) ou `unlikely`, avec les
    raisons. Chaque carte affiche la source officielle, la date de vérification (ou « À VÉRIFIER ») et
@@ -228,7 +237,7 @@ dossier (propriétaire) et par personne (ses propres données).
 - Écran plein, immédiat, accessible au clavier et au lecteur d'écran : 911, 9-8-8 et autres ressources
   `emergency` / `crisis_line` lues dans `resources` (lisible même sans session) ; bouton « Parler à une
   intervenante » qui crée une demande `origin = distress_screen`. Le texte précise que Relais n'est pas
-  un service d'urgence *(Q4)*.
+  un service d'urgence _(Q4)_.
 
 ## 9. Coordination, rendez-vous, charge de l'aidant
 
@@ -246,12 +255,15 @@ dossier (propriétaire) et par personne (ses propres données).
 
 ## 10. Tests et intégration continue
 
-| Niveau | Outil | Exemples |
-|---|---|---|
-| Base | PostgreSQL 16 + shim Supabase, `rls_test.sql` auto-vérifiant | Chaque rôle × chaque table × lecture / écriture ; consentements ; suppression |
-| Unitaires | Vitest | Détecteur de détresse (corpus), moteur de règles, pseudonymisation, garde-fous IA, schémas |
-| Intégration | Vitest + client IA simulé ; test réel optionnel avec clé | Pipeline d'extraction, temps < 30 s sur PDF fictif de 3 pages |
-| Bout en bout | Playwright + axe | Parcours par étape, aucune violation WCAG AA |
-| Performance / accessibilité | Lighthouse CI (mobile) | Accessibilité ≥ 90 sur chaque page |
+| Niveau                      | Outil                                                        | Exemples                                                                                   |
+| --------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Base                        | PostgreSQL 16 + shim Supabase, `rls_test.sql` auto-vérifiant | Chaque rôle × chaque table × lecture / écriture ; consentements ; suppression              |
+| Unitaires                   | Vitest                                                       | Détecteur de détresse (corpus), moteur de règles, pseudonymisation, garde-fous IA, schémas |
+| Intégration                 | Vitest + client IA simulé ; test réel optionnel avec clé     | Pipeline d'extraction, temps < 30 s sur PDF fictif de 3 pages                              |
+| Bout en bout                | Playwright (Pixel 7) + axe, faux Supabase local              | Parcours par étape, aucune violation WCAG 2.2 AA, aucune violation de la CSP de production |
+| Performance / accessibilité | Lighthouse (mobile), piloté par Playwright                   | Accessibilité ≥ 90 sur chaque page, y compris les pages connectées                         |
 
-Une étape n'est livrée que si tout est vert en CI.
+Le faux Supabase (`tests/e2e/fake-supabase.mjs`) imite Auth (code par courriel, TOTP) et le sous-ensemble de
+PostgREST utilisé ; il ne remplace pas les tests RLS, qui tournent sur un vrai PostgreSQL. Il sert aussi aux
+démonstrations locales sans compte Supabase. Une étape n'est livrée que si tout est vert en CI
+(`.github/workflows/relais.yml`).

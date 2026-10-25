@@ -1,0 +1,110 @@
+{
+    "privacy_policy": {
+        "version": "2026-10-26",
+        "published_on": "2026-10-26",
+        "legal_review": "pending",
+        "required": true,
+        "title": "Comment Relais protège vos renseignements",
+        "summary": "Relais garde vos renseignements au Canada, les protège et s'en sert seulement pour vous aider à coordonner les soins de votre proche.",
+        "sections": [
+            {
+                "heading": "Ce que Relais recueille",
+                "text": "Votre adresse courriel et le nom que vous choisissez. Ensuite, seulement ce que vous décidez d'ajouter : le dossier de votre proche, les tâches, les rendez-vous."
+            },
+            {
+                "heading": "Pourquoi",
+                "text": "Pour organiser le dossier, partager le travail avec votre famille et repérer les programmes à demander. Relais ne fait pas de publicité et ne vend aucun renseignement."
+            },
+            {
+                "heading": "Où",
+                "text": "Sur des serveurs situés au Canada. Les renseignements sont chiffrés pendant leur transport et sur les serveurs."
+            },
+            {
+                "heading": "Qui y a accès",
+                "text": "Vous, et les personnes que vous invitez, selon les permissions que vous choisissez. L'équipe Relais n'a pas accès au dossier de votre proche, sauf si vous le confiez à une intervenante."
+            },
+            {
+                "heading": "Ce que Relais n'est pas",
+                "text": "Relais n'est pas un service de santé : il ne pose aucun diagnostic et ne donne aucun conseil médical. Pour une question de santé, appelez Info-Santé 811 ou un professionnel. Relais n'est pas non plus un service d'urgence : si quelqu'un est en danger, appelez le 911."
+            },
+            {
+                "heading": "Vos droits",
+                "text": "À tout moment, dans « Mon compte », vous pouvez consulter et télécharger vos renseignements, retirer un consentement ou supprimer votre compte. Chaque accès au dossier est noté dans un journal."
+            },
+            {
+                "heading": "Pour nous joindre",
+                "text": "Personne responsable de la protection des renseignements personnels : coordonnées à confirmer avant le pilote."
+            }
+        ]
+    },
+    "health_information": {
+        "version": "2026-10-26",
+        "published_on": "2026-10-26",
+        "legal_review": "pending",
+        "required": false,
+        "title": "Renseignements de santé",
+        "summary": "Vous acceptez que Relais conserve les renseignements de santé que vous ajoutez, pour vous aider à les organiser.",
+        "sections": [
+            {
+                "heading": "De quoi il s'agit",
+                "text": "Par exemple : des documents médicaux, des hospitalisations, des rendez-vous, des médicaments tels qu'ils sont écrits, ou l'autonomie de votre proche décrite par vous."
+            },
+            {
+                "heading": "Ce que Relais en fait",
+                "text": "Il les classe et les résume en langage simple, pour préparer les rendez-vous et ne rien oublier. Il n'interprète aucun résultat et ne suggère aucun changement de traitement."
+            },
+            {
+                "heading": "Qui les voit",
+                "text": "Vous, et les membres de la famille à qui vous donnez un accès complet ou en lecture seule. Les membres qui font seulement de la coordination ne les voient pas."
+            },
+            {
+                "heading": "Votre proche aussi doit être d'accord",
+                "text": "Ce consentement s'ajoute à celui de votre proche, ou de son représentant légal, que vous enregistrerez en créant son dossier."
+            },
+            {
+                "heading": "Si vous le retirez",
+                "text": "Vous ne pourrez plus ajouter de renseignements de santé. Ceux déjà enregistrés restent visibles pour vous jusqu'à ce que vous les supprimiez."
+            }
+        ]
+    },
+    "email_reminders": {
+        "version": "2026-10-26",
+        "published_on": "2026-10-26",
+        "legal_review": "pending",
+        "required": false,
+        "title": "Rappels par courriel",
+        "summary": "Recevoir un courriel quand une tâche ou un rendez-vous approche.",
+        "sections": [
+            {
+                "heading": "Ce que contient le courriel",
+                "text": "Seulement un rappel et un lien vers Relais. Aucun renseignement de santé, aucun nom de médicament ni de clinique."
+            },
+            {
+                "heading": "Pour arrêter",
+                "text": "Retirez ce consentement dans « Mes consentements ». Les rappels cessent tout de suite."
+            }
+        ]
+    },
+    "pilot_evaluation": {
+        "version": "2026-10-26",
+        "published_on": "2026-10-26",
+        "legal_review": "pending",
+        "required": false,
+        "title": "Évaluation du pilote",
+        "summary": "Répondre chaque semaine à 2 questions facultatives, pour nous aider à savoir si Relais vous est utile.",
+        "sections": [
+            {
+                "heading": "Les questions",
+                "text": "Le temps que Relais vous a fait gagner cette semaine, et votre niveau de satisfaction."
+            },
+            {
+                "heading": "Ce que nous en faisons",
+                "text": "Vos réponses servent seulement à évaluer Relais. Elles sont présentées de façon regroupée, sans votre nom. Nous comptons aussi, sans en lire le contenu, les programmes repérés puis demandés dans votre dossier."
+            },
+            {
+                "heading": "Pour arrêter",
+                "text": "Retirez ce consentement quand vous le voulez, dans « Mes consentements »."
+            }
+        ]
+    }
+}
