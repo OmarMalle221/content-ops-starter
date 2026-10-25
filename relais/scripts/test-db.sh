@@ -5,12 +5,29 @@
 #   DATABASE_URL set   -> uses that database (must be EMPTY, e.g. a CI postgres service).
 #   DATABASE_URL unset -> starts a temporary local cluster in .tmp/pgdata (port 54339, unix socket
 #                         in the data dir, trust auth) and removes it afterwards.
+#
+#   --serve CMD...     -> same database setup, then runs CMD with DATABASE_URL exported instead of the
+#                         tests, and stops the cluster when CMD exits (end-to-end tests: fake Supabase
+#                         backed by the real schema). Uses .tmp/pgdata-serve on port 54349.
 set -euo pipefail
+
+SERVE=0
+if [[ "${1:-}" == "--serve" ]]; then
+    SERVE=1
+    shift
+    [[ $# -gt 0 ]] || { echo "usage: $0 --serve COMMAND..." >&2; exit 2; }
+fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SUPABASE_DIR="$ROOT/supabase"
 PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"
-PORT="${PGTEST_PORT:-54339}"
+if [[ "$SERVE" == 1 ]]; then
+    PORT="${PGSERVE_PORT:-54349}"
+    DATA_SUBDIR="pgdata-serve"
+else
+    PORT="${PGTEST_PORT:-54339}"
+    DATA_SUBDIR="pgdata"
+fi
 DB_NAME="relais_test"
 
 if command -v psql >/dev/null 2>&1; then PSQL_BIN="$(command -v psql)"; else PSQL_BIN="$PG_BIN/psql"; fi
@@ -44,7 +61,15 @@ if [[ -n "${DATABASE_URL:-}" ]]; then
     CONN=("$DATABASE_URL")
 else
     [[ -x "$PG_BIN/initdb" ]] || { log "initdb not found in $PG_BIN (set PG_BIN)"; exit 1; }
-    DATA_DIR="$ROOT/.tmp/pgdata"
+    DATA_DIR="$ROOT/.tmp/$DATA_SUBDIR"
+    # A previous run killed abruptly may have left its cluster running.
+    if [[ -f "$DATA_DIR/postmaster.pid" ]]; then
+        if [[ "$(id -u)" == 0 ]]; then
+            runuser -u postgres -- "$PG_BIN/pg_ctl" -D "$DATA_DIR" -m immediate -w stop >/dev/null 2>&1 || true
+        else
+            "$PG_BIN/pg_ctl" -D "$DATA_DIR" -m immediate -w stop >/dev/null 2>&1 || true
+        fi
+    fi
     rm -rf "$DATA_DIR"
     mkdir -p "$DATA_DIR"
     SOCK_DIR="$DATA_DIR"
@@ -103,6 +128,19 @@ done
 for f in "$SUPABASE_DIR"/reference/*.sql; do
     run_sql "$f"
 done
+
+if [[ "$SERVE" == 1 ]]; then
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        export DATABASE_URL="postgresql://postgres@/$DB_NAME?host=$SOCK_DIR&port=$PORT"
+    fi
+    log "schema ready; running: $*"
+    # Not exec: the EXIT trap must stop the cluster when the command ends.
+    "$@" &
+    CHILD=$!
+    trap 'kill -TERM "$CHILD" 2>/dev/null || true' TERM INT
+    wait "$CHILD" || true
+    exit 0
+fi
 
 log "running rls_test.sql"
 "$PSQL_BIN" -X -q "${CONN[@]}" -v ON_ERROR_STOP=1 -f "$SUPABASE_DIR/tests/rls_test.sql"

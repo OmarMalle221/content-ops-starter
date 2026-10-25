@@ -31,7 +31,7 @@ async function accessibilityScore(path: string): Promise<{ score: number; failin
 }
 
 test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectées', async () => {
-    test.setTimeout(300_000);
+    test.setTimeout(600_000);
     await resetBackend();
     const profile = mkdtempSync(join(tmpdir(), 'relais-lh-'));
     const context = await chromium.launchPersistentContext(profile, { args: [`--remote-debugging-port=${PORT}`] });
@@ -56,7 +56,21 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         await page.getByLabel('Votre prénom').fill('Lucie');
         await page.getByRole('button', { name: 'Continuer' }).click();
         await waitForTitle(page, 'Bonjour Lucie');
-        for (const path of ['/accueil', '/mes-consentements', '/compte']) await audit(path);
+        for (const path of ['/accueil', '/mes-consentements', '/compte', '/dossiers/nouveau', '/invitation']) await audit(path);
+
+        // Pages du dossier (étape 2) : création, consentement, puis chaque section.
+        await page.goto(`${APP}/dossiers/nouveau`);
+        await page.getByLabel('Nom du dossier').fill('Maman');
+        await page.getByRole('button', { name: 'Créer le dossier' }).click();
+        await waitForTitle(page, 'Consentement de la personne aidée');
+        const fileUrl = new URL(page.url()).pathname.replace(/\/consentement$/, '');
+        await audit(`${fileUrl}/consentement`);
+        await page.getByRole('radio', { name: /a signé le formulaire/ }).check();
+        await page.getByLabel(/J’atteste que mon proche a lu/).check();
+        await page.getByRole('button', { name: 'Enregistrer' }).click();
+        await waitForTitle(page, 'Profil');
+        for (const section of ['', '/profil', '/contacts', '/membres', '/journal', '/parametres']) await audit(`${fileUrl}${section}`);
+        await audit(`${fileUrl}/formulaire-consentement`);
     } finally {
         await context.close();
         rmSync(profile, { recursive: true, force: true });

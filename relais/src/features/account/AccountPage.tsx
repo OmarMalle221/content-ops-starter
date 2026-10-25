@@ -5,7 +5,9 @@ import { queryKeys, useProfile } from '../../app/queries';
 import { useSession } from '../../app/session';
 import { Button, Card, Loading, Notice, PageTitle, TextField } from '../../components/ui';
 import { fr } from '../../i18n/fr';
-import { deleteMyAccount, exportMyData, signOutLocally, updateDisplayName } from '../../lib/api';
+import { ApiError, deleteMyAccount, exportMyData, signOutLocally, updateDisplayName } from '../../lib/api';
+import { downloadJson, todayStamp } from '../../lib/download';
+import { files as tf } from '../../i18n/files.fr';
 import { logEvent } from '../../lib/log';
 
 export function AccountPage() {
@@ -75,16 +77,7 @@ function ExportSection() {
     async function download() {
         setState('busy');
         try {
-            const data = await exportMyData();
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `relais-mes-renseignements-${new Date().toISOString().slice(0, 10)}.json`;
-            document.body.append(link);
-            link.click();
-            link.remove();
-            URL.revokeObjectURL(url);
+            downloadJson(await exportMyData(), `relais-mes-renseignements-${todayStamp()}.json`);
             logEvent('export_downloaded');
             setState('done');
         } catch {
@@ -131,7 +124,7 @@ function SignOutSection() {
 function DeleteSection() {
     const navigate = useNavigate();
     const [understood, setUnderstood] = useState(false);
-    const [state, setState] = useState<'idle' | 'busy' | 'error'>('idle');
+    const [state, setState] = useState<'idle' | 'busy' | 'error' | 'owns-files'>('idle');
 
     async function remove() {
         setState('busy');
@@ -140,8 +133,8 @@ function DeleteSection() {
             // Quitter d'abord la page protégée (avec le message), puis fermer la session.
             navigate('/', { replace: true, state: { notice: fr.account.deleted } });
             void signOutLocally();
-        } catch {
-            setState('error');
+        } catch (error) {
+            setState(error instanceof ApiError && error.code === '55006' ? 'owns-files' : 'error');
         }
     }
 
@@ -160,6 +153,7 @@ function DeleteSection() {
                     {fr.account.deleteConfirm}
                 </label>
                 {state === 'error' && <Notice tone="error">{fr.app.genericError}</Notice>}
+                {state === 'owns-files' && <Notice tone="error">{tf.accountOwnsFiles}</Notice>}
                 <Button variant="danger" disabled={!understood || state === 'busy'} onClick={() => void remove()}>
                     {state === 'busy' ? fr.account.deleting : fr.account.delete}
                 </Button>

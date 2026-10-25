@@ -17,11 +17,15 @@ describe('données de référence', () => {
         }
     });
 
-    it('seule la politique de confidentialité est obligatoire', () => {
+    it('parmi les consentements personnels, seule la politique de confidentialité est obligatoire', () => {
         const required = Object.entries(consentTexts)
-            .filter(([, text]) => text.required)
+            .filter(([, text]) => text.scope === 'user' && text.required)
             .map(([type]) => type);
         expect(required).toEqual(['privacy_policy']);
+    });
+
+    it('le dossier exige le consentement de la personne aidée', () => {
+        expect(consentTexts.care_recipient_data).toMatchObject({ scope: 'care_file', required: true });
     });
 
     it('les ressources d’urgence comprennent le 911 et le 9-8-8, avec un numéro composable', () => {

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { PRODUCTION_SUPABASE_ORIGIN, securityHeaders } from '../../security-headers';
+import { PRODUCTION_SUPABASE_ORIGIN, securityHeaders } from '../../security-headers.ts';
 
 describe('en-têtes de sécurité', () => {
     const toml = readFileSync('netlify.toml', 'utf8');

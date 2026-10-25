@@ -42,6 +42,12 @@ service de santé ni un service de crise.
     aidée ; obligations de signalement éventuelles.
 14. **Évaluation du pilote.** Consentement à l'usage des réponses (temps gagné, satisfaction) ; faut-il
     un comité d'éthique si les résultats sont publiés ou faits avec un partenaire de recherche ?
+15. **Retrait par la personne aidée.** Si la personne retire elle-même son accord dans Relais, l'aidant ne
+    peut plus le rétablir par un formulaire signé ; seuls la personne ou son représentant légal le peuvent.
+    Est-ce la bonne règle ? Et si la personne devient inapte ensuite, l'accord du mandataire suffit-il ?
+16. **Invitations.** Le lien d'invitation est envoyé par l'aidant lui-même (texto, courriel) ; il ne
+    fonctionne que pour l'adresse invitée, pendant 7 jours. Le consentement de la personne aidée couvre-t-il
+    ce partage ?
 
 ## B. Travailleuse sociale — sécurité, ton et parcours
 

@@ -26,6 +26,7 @@ export async function resetBackend(): Promise<void> {
     expect(res.ok).toBe(true);
 }
 
+/** État de la base (lu en superutilisateur par le faux Supabase), pour vérifier les effets d'un parcours. */
 export interface BackendState {
     users: Array<{
         id: string;
@@ -34,8 +35,28 @@ export interface BackendState {
         app_role: string;
         factors: Array<{ id: string; status: string }>;
     }>;
-    consents: Array<{ user_id: string; consent_type: string; text_version: string; revoked_at: string | null }>;
-    accessLog: Array<{ actor_id: string; action: string }>;
+    consents: Array<{
+        user_id: string;
+        care_file_id: string | null;
+        consent_type: string;
+        text_version: string;
+        granted_by: string;
+        legal_basis: string | null;
+        revoked_at: string | null;
+    }>;
+    careFiles: Array<{ id: string; owner_id: string; title: string }>;
+    members: Array<{ care_file_id: string; user_id: string; role: string; access_level: string }>;
+    invitations: Array<{
+        id: string;
+        care_file_id: string;
+        email: string;
+        role: string;
+        accepted_at: string | null;
+        revoked_at: string | null;
+    }>;
+    careRecipients: Array<{ care_file_id: string; first_name: string; living_setting: string }>;
+    contacts: Array<{ care_file_id: string; kind: string; name: string; created_by: string | null }>;
+    accessLog: Array<{ actor_id: string | null; care_file_id: string | null; action: string; metadata: Record<string, unknown> }>;
 }
 
 export async function backendState(): Promise<BackendState> {

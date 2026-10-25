@@ -15,6 +15,7 @@
         "resolveJsonModule": true,
         "isolatedModules": true,
         "verbatimModuleSyntax": true,
+        "allowImportingTsExtensions": true,
         "jsx": "react-jsx",
         "allowJs": false
     },

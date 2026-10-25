@@ -1,9 +1,12 @@
 -- =====================================================================================================
 -- Relais v0.1 — schéma cible (PostgreSQL 16 / Supabase, région ca-central-1)
 --
--- CIBLE GLOBALE des 6 étapes. Ce qui est livré vit dans supabase/migrations/ et y fait foi
--- (étape 1 : users, consent_texts, consents, resources, access_log, ai_calls). Ce fichier est tenu à
--- jour quand une étape fait évoluer la conception. Les tests automatisés sont dans
+-- CIBLE GLOBALE des 6 étapes. Ce qui est livré vit dans supabase/migrations/ et y fait foi :
+-- étape 1 (users, consent_texts, consents, resources, access_log, ai_calls) et étape 2 (care_files,
+-- care_file_members, care_file_invitations, care_recipients, care_needs, contacts, avec les fonctions
+-- create_care_file, record_file_consent, create_invitation, accept_invitation, export_care_file,
+-- delete_care_file). Pour ces tables, la migration l'emporte sur ce fichier, qui décrit surtout la cible
+-- des étapes 3 à 6. Les tests automatisés sont dans
 -- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
 -- Principes

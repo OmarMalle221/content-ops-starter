@@ -4,7 +4,7 @@ Application web mobile qui aide les proches aidants du Québec à coordonner les
 obtenir les services et les aides auxquels il a droit. Relais n'est pas un service de santé : il ne pose
 aucun diagnostic et ne donne aucun conseil médical.
 
-**Statut : étape 1 sur 6 livrée** (socle, authentification, consentements, écran d'urgence). Suivi dans
+**Statut : étapes 1 et 2 sur 6 livrées** (socle, consentements, écran d'urgence ; dossier familial et membres). Suivi dans
 [`PROGRESS.md`](PROGRESS.md).
 
 ## Démarrer
@@ -17,9 +17,10 @@ npm run test:db        # migrations + tests RLS sur PostgreSQL 16 (local ou DATA
 npm run test:e2e       # parcours sur téléphone (Playwright + axe + Lighthouse), faux Supabase local
 ```
 
-Démonstration locale sans Supabase : `node tests/e2e/fake-supabase.mjs` puis
-`npx vite --mode e2e` ; code de connexion `123456`, code TOTP `654321` (adresses commençant par
-`intervenante` ou `admin` pour les rôles internes).
+Démonstration locale sans compte Supabase (PostgreSQL 16 requis) :
+`bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`. Code de
+connexion `123456`, code TOTP `654321` (adresses commençant par `intervenante` ou `admin` pour les rôles
+internes). Les données passent par la vraie base migrée, sous RLS.
 
 | Document                                       | Contenu                                                           |
 | ---------------------------------------------- | ----------------------------------------------------------------- |

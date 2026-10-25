@@ -3,6 +3,7 @@
 import type { Session } from '@supabase/supabase-js';
 import { vi } from 'vitest';
 import type { Profile, Resource } from '../../src/lib/api';
+import type { FileConsent, Membership } from '../../src/lib/careFiles';
 import type { ConsentRecord, UserConsentType } from '../../src/lib/consents';
 import snapshot from '../../src/content/emergency-resources.json';
 
@@ -20,12 +21,20 @@ export function fakeSession(aal: 'aal1' | 'aal2' = 'aal1', userId = USER_ID): Se
     } as Session;
 }
 
+export const FILE_ID = 'f1000000-0000-4000-8000-000000000001';
+
+interface FileState {
+    members: Membership[];
+    consents: FileConsent[];
+}
+
 interface BackendState {
     session: Session | null;
     profile: Profile;
     consents: ConsentRecord[];
     resources: Resource[];
     failResources: boolean;
+    file: FileState;
 }
 
 export const backend: BackendState = {
@@ -33,7 +42,8 @@ export const backend: BackendState = {
     profile: { id: USER_ID, display_name: null, app_role: 'member' },
     consents: [],
     resources: [],
-    failResources: false
+    failResources: false,
+    file: { members: [], consents: [] }
 };
 
 export function resetBackend(): void {
@@ -42,7 +52,9 @@ export function resetBackend(): void {
     backend.consents = [];
     backend.resources = snapshot as Resource[];
     backend.failResources = false;
+    backend.file = { members: [], consents: [] };
     for (const fn of Object.values(api)) fn.mockClear();
+    for (const fn of Object.values(careFilesApi)) fn.mockClear();
 }
 
 let nextId = 1;
@@ -94,4 +106,48 @@ export const auth = {
         })),
         challengeAndVerify: vi.fn(async () => ({ data: {}, error: null }))
     }
+};
+
+/** Dossier unique en mémoire, appartenant à l'utilisateur de test, pour les pages de l'étape 2. */
+export function ownFile(): void {
+    backend.file.members = [
+        { care_file_id: FILE_ID, user_id: USER_ID, role: 'primary_caregiver', access_level: 'owner', joined_at: '2026-10-27T10:00:00Z' }
+    ];
+}
+
+export function fileConsent(overrides: Partial<FileConsent> = {}): FileConsent {
+    return {
+        id: id(),
+        consent_type: 'care_recipient_data',
+        text_version: '2026-10-27',
+        granted_by: 'care_recipient_signed_form',
+        legal_basis: 'person_consents',
+        representative_name: null,
+        granted_at: '2026-10-27T10:00:00Z',
+        revoked_at: null,
+        revoked_by: null,
+        ...overrides
+    };
+}
+
+export const careFilesApi = {
+    listMyMemberships: vi.fn(async () => backend.file.members.filter((m) => m.user_id === USER_ID)),
+    listCareFiles: vi.fn(async (ids: string[]) =>
+        ids.includes(FILE_ID) ? [{ id: FILE_ID, title: 'Maman', owner_id: USER_ID, created_at: '2026-10-27T10:00:00Z' }] : []
+    ),
+    getCareFile: vi.fn(async (fileId: string) =>
+        fileId === FILE_ID && backend.file.members.length > 0
+            ? { id: FILE_ID, title: 'Maman', owner_id: USER_ID, created_at: '2026-10-27T10:00:00Z' }
+            : null
+    ),
+    listMembers: vi.fn(async () => backend.file.members.map((m) => ({ ...m, display_name: m.user_id === USER_ID ? 'Louise' : null }))),
+    listFileConsents: vi.fn(async () => [...backend.file.consents]),
+    recordFileConsent: vi.fn(async () => undefined),
+    revokeFileConsent: vi.fn(async () => undefined),
+    getCareRecipient: vi.fn(async () => null),
+    getCareNeeds: vi.fn(async () => null),
+    listContacts: vi.fn(async () => []),
+    listInvitations: vi.fn(async () => []),
+    listAccessLog: vi.fn(async () => []),
+    logFileOpened: vi.fn(async () => undefined)
 };

@@ -1,32 +1,14 @@
 import { useEffect } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router';
-import { buttonClass, Notice, PageTitle } from '../components/ui';
+import { buttonClass, Notice, PageTitle, requestPageTitleFocus } from '../components/ui';
 import { fr } from '../i18n/fr';
 import { useSession } from './session';
 
-const TITLES: Record<string, string> = {
-    '/': fr.app.name,
-    '/connexion': fr.signIn.title,
-    '/confidentialite': fr.privacy.title,
-    '/aide': fr.help.title,
-    '/verification': fr.mfa.title,
-    '/bienvenue': fr.welcome.title,
-    '/accueil': fr.nav.home,
-    '/mes-consentements': fr.consents.title,
-    '/compte': fr.account.title
-};
-
-/** Après chaque navigation : titre d'onglet à jour et focus sur le titre de page (lecteurs d'écran). */
+/** Après chaque navigation : focus sur le titre de page (lecteurs d'écran). Le titre d'onglet est fixé par PageTitle. */
 function RouteFocus() {
     const { pathname } = useLocation();
     useEffect(() => {
-        const title = TITLES[pathname];
-        document.title = title && title !== fr.app.name ? `${title} — ${fr.app.name}` : fr.app.name;
-        const frame = window.requestAnimationFrame(() => {
-            // Ne jamais interrompre une saisie déjà commencée.
-            if (document.activeElement?.matches('input, textarea, select, [contenteditable]')) return;
-            document.querySelector<HTMLElement>('[data-page-title]')?.focus();
-        });
+        const frame = window.requestAnimationFrame(requestPageTitleFocus);
         return () => window.cancelAnimationFrame(frame);
     }, [pathname]);
     return null;

@@ -1,52 +1,51 @@
 #!/usr/bin/env node
 // Faux Supabase pour les tests de bout en bout (et les démonstrations locales sans compte Supabase).
-// Implémente le sous-ensemble d'Auth (code par courriel, MFA TOTP) et de PostgREST qu'utilise Relais.
-// Ce n'est PAS un modèle de sécurité : RLS est testée sur PostgreSQL (supabase/tests/rls_test.sql).
+//
+// - Auth est simulée : connexion par code, vérification en deux étapes (TOTP), sessions en mémoire.
+// - Les données NE sont PAS simulées : chaque requête PostgREST de l'application est traduite en SQL et
+//   exécutée sur la vraie base migrée (DATABASE_URL), sous le rôle `anon` ou `authenticated` et avec les
+//   claims JWT de l'appelant. La RLS, les fonctions et les déclencheurs réels s'appliquent donc.
+//   Seul le sous-ensemble de PostgREST utilisé par Relais est pris en charge.
 //
 //   Code de connexion : 123456     Code TOTP : 654321
 //   Adresse commençant par « intervenante » → rôle relais_worker ; par « admin » → rôle admin.
-//   POST /__test/reset remet l'état à zéro ; GET /__test/state renvoie l'état (assertions des tests).
+//   POST /__test/reset vide les données ; GET /__test/state renvoie l'état (assertions des tests).
+//
+// Lancement : bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import http from 'node:http';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = Number(process.env.FAKE_SUPABASE_PORT ?? 54399);
-export const LOGIN_CODE = '123456';
-export const TOTP_CODE = '654321';
+const LOGIN_CODE = '123456';
+const TOTP_CODE = '654321';
 
-const consentTexts = JSON.parse(readFileSync(join(root, 'src/content/consent-texts.fr.json'), 'utf8'));
-const seedResources = JSON.parse(readFileSync(join(root, 'src/content/emergency-resources.json'), 'utf8'));
-
-let state;
-function reset() {
-    state = {
-        users: new Map(), // id → { id, email, display_name, app_role, created_at, factors: [] }
-        consents: [],
-        accessLog: [],
-        resources: seedResources.map((r) => ({ id: randomUUID(), verification_status: 'to_verify', is_active: true, ...r })),
-        tokens: new Map(), // access token → { userId, aal }
-        refreshTokens: new Map() // refresh token → userId
-    };
+if (!process.env.DATABASE_URL) {
+    console.error('[fake-supabase] DATABASE_URL manquant : lancer via scripts/test-db.sh --serve');
+    process.exit(1);
 }
-reset();
+// Connexion en superutilisateur : le rôle de l'appelant est fixé par SET LOCAL ROLE dans chaque transaction.
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
+
+const sessions = new Map(); // jeton d'accès → { userId, email, aal }
+const refreshTokens = new Map(); // jeton de rafraîchissement → { userId, email, aal }
+const factors = new Map(); // userId → [{ id, friendly_name, status }]
 
 // ------------------------------------------------------------------------------------------- outils
 const b64url = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const IDENT = /^[a-z_][a-z0-9_]*$/;
 
-function send(res, status, body, headers = {}) {
-    res.writeHead(status, { 'content-type': 'application/json', ...headers });
+class HttpError extends Error {
+    constructor(status, body) {
+        super(body.message ?? body.msg ?? 'error');
+        this.status = status;
+        this.body = body;
+    }
+}
+
+function send(res, status, body) {
+    res.writeHead(status, { 'content-type': 'application/json' });
     res.end(body === undefined ? '' : JSON.stringify(body));
-}
-
-function authError(res, status, errorCode, msg) {
-    send(res, status, { code: status, error_code: errorCode, msg });
-}
-
-function pgError(res, status, code, message) {
-    send(res, status, { code, message, details: null, hint: null });
 }
 
 async function readBody(req) {
@@ -56,8 +55,29 @@ async function readBody(req) {
     return raw ? JSON.parse(raw) : {};
 }
 
-function userJson(user) {
-    const now = user.created_at;
+function ident(name) {
+    if (!IDENT.test(name)) throw new HttpError(400, { code: 'PGRST100', message: `invalid identifier ${name}` });
+    return `"${name}"`;
+}
+
+// Codes SQLSTATE → statut HTTP, comme PostgREST.
+function pgHttpError(error, anon) {
+    const status = { 42501: anon ? 401 : 403, 23505: 409, 23503: 409, '42P01': 404, 42883: 404 }[error.code] ?? 400;
+    return new HttpError(status, { code: error.code ?? 'XX000', message: error.message, details: error.detail ?? null, hint: null });
+}
+
+// ------------------------------------------------------------------------------------------- Auth
+function caller(req) {
+    const header = req.headers.authorization ?? '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    return sessions.get(token) ?? null;
+}
+
+async function userJson(userId) {
+    const { rows } = await pool.query('select id, email from auth.users where id = $1', [userId]);
+    const user = rows[0];
+    if (!user) return null;
+    const now = new Date().toISOString();
     return {
         id: user.id,
         aud: 'authenticated',
@@ -72,7 +92,7 @@ function userJson(user) {
         identities: [],
         created_at: now,
         updated_at: now,
-        factors: user.factors.map((f) => ({
+        factors: (factors.get(user.id) ?? []).map((f) => ({
             id: f.id,
             friendly_name: f.friendly_name,
             factor_type: 'totp',
@@ -83,11 +103,11 @@ function userJson(user) {
     };
 }
 
-function issueSession(user, aal) {
+async function issueSession(userId, email, aal) {
     const now = Math.floor(Date.now() / 1000);
     const payload = {
-        sub: user.id,
-        email: user.email,
+        sub: userId,
+        email,
         role: 'authenticated',
         aud: 'authenticated',
         aal,
@@ -98,25 +118,16 @@ function issueSession(user, aal) {
     };
     const accessToken = `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.fake-signature`;
     const refreshToken = randomUUID();
-    state.tokens.set(accessToken, { userId: user.id, aal });
-    state.refreshTokens.set(refreshToken, { userId: user.id, aal });
+    sessions.set(accessToken, { userId, email, aal });
+    refreshTokens.set(refreshToken, { userId, email, aal });
     return {
         access_token: accessToken,
         token_type: 'bearer',
         expires_in: 3600,
         expires_at: now + 3600,
         refresh_token: refreshToken,
-        user: userJson(user)
+        user: await userJson(userId)
     };
-}
-
-function caller(req) {
-    const header = req.headers.authorization ?? '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    const entry = state.tokens.get(token);
-    if (!entry) return null;
-    const user = state.users.get(entry.userId);
-    return user ? { user, aal: entry.aal } : null;
 }
 
 function roleFor(email) {
@@ -125,213 +136,47 @@ function roleFor(email) {
     return 'member';
 }
 
-// ---------------------------------------------------------------------------------------- PostgREST
-function parseFilters(url) {
-    const filters = [];
-    for (const [key, raw] of url.searchParams) {
-        if (key === 'select' || key === 'order' || key === 'limit') continue;
-        const [op, ...rest] = raw.split('.');
-        const value = rest.join('.');
-        filters.push({ column: key, op, value });
-    }
-    return filters;
-}
-
-function matches(row, { column, op, value }) {
-    const cell = row[column];
-    switch (op) {
-        case 'eq':
-            return String(cell) === value;
-        case 'is':
-            return value === 'null' ? cell === null || cell === undefined : String(cell) === value;
-        case 'in':
-            return value
-                .replace(/^\(|\)$/g, '')
-                .split(',')
-                .includes(String(cell));
-        default:
-            throw new Error(`opérateur non géré : ${op}`);
-    }
-}
-
-function project(row, select) {
-    if (!select || select === '*') return row;
-    return Object.fromEntries(
-        select
-            .split(',')
-            .map((c) => c.trim())
-            .map((c) => [c, row[c] ?? null])
-    );
-}
-
-function sortRows(rows, order) {
-    if (!order) return rows;
-    const [column, direction] = order.split('.');
-    return [...rows].sort((a, b) => (a[column] < b[column] ? -1 : a[column] > b[column] ? 1 : 0) * (direction === 'desc' ? -1 : 1));
-}
-
-/** Lignes visibles selon une RLS simplifiée (le vrai contrôle est testé sur PostgreSQL). */
-function visibleRows(table, who) {
-    switch (table) {
-        case 'resources':
-            return state.resources.filter((r) => r.is_active);
-        case 'consent_texts':
-            return Object.entries(consentTexts).map(([type, t]) => ({ consent_type: type, version: t.version }));
-        case 'users':
-            return who ? [state.users.get(who.user.id)] : null;
-        case 'consents':
-            return who ? state.consents.filter((c) => c.user_id === who.user.id) : null;
-        default:
-            return undefined;
-    }
-}
-
-function log(actorId, action, metadata = {}) {
-    state.accessLog.push({ id: state.accessLog.length + 1, occurred_at: new Date().toISOString(), actor_id: actorId, action, metadata });
-}
-
-const rpc = {
-    grant_consent(who, body) {
-        const text = consentTexts[body.p_type];
-        if (!text) return { status: 400, error: ['22023', 'care-file consents are recorded with the care file'] };
-        if (text.version !== body.p_version) return { status: 409, error: ['23503', 'unknown consent text version'] };
-        const existing = state.consents.find(
-            (c) => c.user_id === who.user.id && c.consent_type === body.p_type && c.revoked_at === null && c.text_version === body.p_version
-        );
-        if (existing) return { status: 200, body: existing.id };
-        for (const c of state.consents) {
-            if (c.user_id === who.user.id && c.consent_type === body.p_type && c.revoked_at === null)
-                c.revoked_at = new Date().toISOString();
-        }
-        const row = {
-            id: randomUUID(),
-            user_id: who.user.id,
-            care_file_id: null,
-            consent_type: body.p_type,
-            text_version: body.p_version,
-            granted_at: new Date().toISOString(),
-            revoked_at: null
-        };
-        state.consents.push(row);
-        log(who.user.id, 'consent_granted', { type: body.p_type });
-        return { status: 200, body: row.id };
-    },
-    revoke_consent(who, body) {
-        const row = state.consents.find((c) => c.id === body.p_consent_id && c.user_id === who.user.id && c.revoked_at === null);
-        if (!row) return { status: 403, error: ['42501', 'consent not found or not revocable by this user'] };
-        if (row.consent_type === 'privacy_policy') return { status: 400, error: ['22023', 'privacy_policy cannot be revoked'] };
-        row.revoked_at = new Date().toISOString();
-        log(who.user.id, 'consent_revoked', { type: row.consent_type });
-        return { status: 204 };
-    },
-    export_my_data(who) {
-        log(who.user.id, 'export_requested');
-        return {
-            status: 200,
-            body: {
-                format: 'relais-export/1',
-                exported_at: new Date().toISOString(),
-                account: { id: who.user.id, email: who.user.email, display_name: who.user.display_name, app_role: who.user.app_role },
-                consents: state.consents.filter((c) => c.user_id === who.user.id),
-                access_log: state.accessLog.filter((l) => l.actor_id === who.user.id)
-            }
-        };
-    },
-    delete_my_account(who) {
-        log(who.user.id, 'account_deleted');
-        state.users.delete(who.user.id);
-        state.consents = state.consents.filter((c) => c.user_id !== who.user.id);
-        return { status: 204 };
-    }
-};
-
-async function handleRest(req, res, url) {
-    const who = caller(req);
-    const path = url.pathname.replace('/rest/v1/', '');
-
-    if (path.startsWith('rpc/')) {
-        const fn = rpc[path.slice(4)];
-        if (!fn) return pgError(res, 404, 'PGRST202', 'function not found');
-        if (!who) return pgError(res, 401, '42501', 'permission denied');
-        const result = fn(who, await readBody(req));
-        if (result.error) return pgError(res, result.status, ...result.error);
-        return result.status === 204 ? send(res, 204) : send(res, result.status, result.body);
-    }
-
-    const rows = visibleRows(path, who);
-    if (rows === undefined) return pgError(res, 404, '42P01', 'relation does not exist');
-    if (rows === null) return pgError(res, 401, '42501', 'permission denied');
-    const filters = parseFilters(url);
-    const selected = rows.filter((row) => filters.every((f) => matches(row, f)));
-
-    if (req.method === 'GET') {
-        const out = sortRows(selected, url.searchParams.get('order')).map((r) => project(r, url.searchParams.get('select')));
-        if ((req.headers.accept ?? '').includes('application/vnd.pgrst.object+json')) {
-            if (out.length !== 1) return pgError(res, 406, 'PGRST116', 'JSON object requested, multiple (or no) rows returned');
-            return send(res, 200, out[0]);
-        }
-        return send(res, 200, out);
-    }
-
-    if (req.method === 'PATCH' && path === 'users') {
-        const body = await readBody(req);
-        const allowed = Object.keys(body).every((k) => k === 'display_name');
-        if (!allowed) return pgError(res, 401, '42501', 'permission denied');
-        const name = String(body.display_name ?? '').trim();
-        if (name.length < 1 || name.length > 80) return pgError(res, 400, '23514', 'check constraint');
-        for (const row of selected) row.display_name = name;
-        return send(res, 204);
-    }
-
-    return pgError(res, 405, 'PGRST000', 'method not allowed');
-}
-
-// ------------------------------------------------------------------------------------------- Auth
-async function handleAuth(req, res, url) {
-    const path = url.pathname.replace('/auth/v1', '');
-
+async function handleAuth(req, res, path) {
     if (req.method === 'POST' && path === '/otp') {
-        const body = await readBody(req);
-        const email = String(body.email ?? '').toLowerCase();
-        if (![...state.users.values()].some((u) => u.email === email)) {
+        const email = String((await readBody(req)).email ?? '').toLowerCase();
+        const existing = await pool.query('select id from auth.users where email = $1', [email]);
+        if (existing.rowCount === 0) {
             const id = randomUUID();
-            state.users.set(id, {
-                id,
-                email,
-                display_name: null,
-                app_role: roleFor(email),
-                created_at: new Date().toISOString(),
-                factors: []
-            });
+            await pool.query('insert into auth.users (id, email) values ($1, $2)', [id, email]);
+            await pool.query('update public.users set app_role = $2 where id = $1', [id, roleFor(email)]);
         }
         return send(res, 200, {});
     }
 
     if (req.method === 'POST' && path === '/verify') {
         const body = await readBody(req);
-        const user = [...state.users.values()].find((u) => u.email === String(body.email ?? '').toLowerCase());
-        if (!user || body.token !== LOGIN_CODE) return authError(res, 403, 'otp_expired', 'Token has expired or is invalid');
-        return send(res, 200, issueSession(user, 'aal1'));
+        const email = String(body.email ?? '').toLowerCase();
+        const { rows } = await pool.query('select id from auth.users where email = $1', [email]);
+        if (!rows[0] || body.token !== LOGIN_CODE) {
+            return send(res, 403, { code: 403, error_code: 'otp_expired', msg: 'Token has expired or is invalid' });
+        }
+        return send(res, 200, await issueSession(rows[0].id, email, 'aal1'));
     }
 
     if (req.method === 'POST' && path === '/token') {
-        const body = await readBody(req);
-        const entry = state.refreshTokens.get(body.refresh_token);
-        const user = entry && state.users.get(entry.userId);
-        if (!user) return authError(res, 400, 'refresh_token_not_found', 'Invalid Refresh Token');
-        return send(res, 200, issueSession(user, entry.aal));
+        const entry = refreshTokens.get((await readBody(req)).refresh_token);
+        if (!entry) return send(res, 400, { code: 400, error_code: 'refresh_token_not_found', msg: 'Invalid Refresh Token' });
+        return send(res, 200, await issueSession(entry.userId, entry.email, entry.aal));
     }
 
     const who = caller(req);
-    if (!who) return authError(res, 401, 'bad_jwt', 'invalid JWT');
+    const user = who && (await userJson(who.userId));
+    if (!who || !user) return send(res, 401, { code: 401, error_code: 'bad_jwt', msg: 'invalid JWT' });
 
-    if (req.method === 'GET' && path === '/user') return send(res, 200, userJson(who.user));
+    if (req.method === 'GET' && path === '/user') return send(res, 200, user);
     if (req.method === 'POST' && path === '/logout') return send(res, 204);
 
+    const mine = factors.get(who.userId) ?? [];
+    factors.set(who.userId, mine);
+
     if (req.method === 'POST' && path === '/factors') {
-        const body = await readBody(req);
-        const factor = { id: randomUUID(), friendly_name: body.friendly_name, status: 'unverified' };
-        who.user.factors.push(factor);
+        const factor = { id: randomUUID(), friendly_name: (await readBody(req)).friendly_name, status: 'unverified' };
+        mine.push(factor);
         return send(res, 200, {
             id: factor.id,
             type: 'totp',
@@ -347,25 +192,216 @@ async function handleAuth(req, res, url) {
 
     const factorPath = path.match(/^\/factors\/([^/]+)$/);
     if (req.method === 'DELETE' && factorPath) {
-        who.user.factors = who.user.factors.filter((f) => f.id !== factorPath[1]);
+        factors.set(
+            who.userId,
+            mine.filter((f) => f.id !== factorPath[1])
+        );
         return send(res, 200, { id: factorPath[1] });
     }
 
-    const challenge = path.match(/^\/factors\/([^/]+)\/challenge$/);
-    if (req.method === 'POST' && challenge) {
+    if (req.method === 'POST' && /^\/factors\/[^/]+\/challenge$/.test(path)) {
         return send(res, 200, { id: randomUUID(), type: 'totp', expires_at: Math.floor(Date.now() / 1000) + 300 });
     }
 
     const verify = path.match(/^\/factors\/([^/]+)\/verify$/);
     if (req.method === 'POST' && verify) {
         const body = await readBody(req);
-        const factor = who.user.factors.find((f) => f.id === verify[1]);
-        if (!factor || body.code !== TOTP_CODE) return authError(res, 422, 'mfa_verification_failed', 'Invalid TOTP code entered');
+        const factor = mine.find((f) => f.id === verify[1]);
+        if (!factor || body.code !== TOTP_CODE) {
+            return send(res, 422, { code: 422, error_code: 'mfa_verification_failed', msg: 'Invalid TOTP code entered' });
+        }
         factor.status = 'verified';
-        return send(res, 200, issueSession(who.user, 'aal2'));
+        return send(res, 200, await issueSession(who.userId, who.email, 'aal2'));
     }
 
-    return authError(res, 404, 'not_found', 'not found');
+    return send(res, 404, { code: 404, error_code: 'not_found', msg: 'not found' });
+}
+
+// ------------------------------------------------------------------------------------ mini PostgREST
+/** Exécute `work` dans une transaction, sous le rôle et les claims JWT de l'appelant. */
+async function asCaller(who, work) {
+    const client = await pool.connect();
+    try {
+        await client.query('begin');
+        const claims = who ? { sub: who.userId, email: who.email, role: 'authenticated', aal: who.aal } : { role: 'anon' };
+        await client.query(`select set_config('request.jwt.claims', $1, true)`, [JSON.stringify(claims)]);
+        await client.query(`set local role ${who ? 'authenticated' : 'anon'}`);
+        const result = await work(client);
+        await client.query('commit');
+        return result;
+    } catch (error) {
+        await client.query('rollback').catch(() => undefined);
+        throw error instanceof HttpError ? error : pgHttpError(error, !who);
+    } finally {
+        client.release();
+    }
+}
+
+const COMPARATORS = { eq: '=', neq: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
+const RESERVED = new Set(['select', 'order', 'limit', 'offset', 'on_conflict', 'columns']);
+
+/** Filtres PostgREST (eq, neq, gt, gte, lt, lte, is, in) → clause WHERE paramétrée. */
+function whereClause(url, params, alias) {
+    const conditions = [];
+    for (const [key, raw] of url.searchParams) {
+        if (RESERVED.has(key)) continue;
+        const column = `${alias}.${ident(key)}`;
+        const dot = raw.indexOf('.');
+        const op = raw.slice(0, dot);
+        const value = raw.slice(dot + 1);
+        if (op in COMPARATORS) {
+            params.push(value);
+            conditions.push(`${column} ${COMPARATORS[op]} $${params.length}`);
+        } else if (op === 'is' && ['null', 'true', 'false'].includes(value)) {
+            conditions.push(`${column} is ${value}`);
+        } else if (op === 'in') {
+            const values = value
+                .replace(/^\(|\)$/g, '')
+                .split(',')
+                .map((v) => v.replace(/^"|"$/g, ''));
+            params.push(values);
+            conditions.push(`${column} = any($${params.length})`);
+        } else {
+            throw new HttpError(400, { code: 'PGRST100', message: `unsupported filter ${key}=${raw}` });
+        }
+    }
+    return conditions.length ? `where ${conditions.join(' and ')}` : '';
+}
+
+function orderClause(url, alias) {
+    const order = url.searchParams.get('order');
+    if (!order) return '';
+    const parts = order.split(',').map((part) => {
+        const [column, ...modifiers] = part.split('.');
+        const direction = modifiers.includes('desc') ? 'desc' : 'asc';
+        const nulls = modifiers.includes('nullsfirst') ? ' nulls first' : modifiers.includes('nullslast') ? ' nulls last' : '';
+        return `${alias}.${ident(column)} ${direction}${nulls}`;
+    });
+    return `order by ${parts.join(', ')}`;
+}
+
+function project(rows, select) {
+    if (!select || select === '*') return rows;
+    if (select.includes('(')) throw new HttpError(400, { code: 'PGRST100', message: 'embedding is not supported by the fake' });
+    const columns = select.split(',').map((c) => c.trim());
+    return rows.map((row) => Object.fromEntries(columns.map((c) => [c, row[c] ?? null])));
+}
+
+function respondRows(req, res, status, rows, select) {
+    const out = project(rows, select);
+    if ((req.headers.accept ?? '').includes('application/vnd.pgrst.object+json')) {
+        if (out.length !== 1) {
+            return send(res, 406, { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' });
+        }
+        return send(res, status, out[0]);
+    }
+    return send(res, status, out);
+}
+
+async function handleRpc(req, res, name, who) {
+    const body = await readBody(req);
+    const { rows } = await pool.query(
+        `select p.proargnames as names,
+                array(select format_type(t, null) from unnest(p.proargtypes) t) as types,
+                format_type(p.prorettype, null) as returns
+         from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = $1`,
+        [name]
+    );
+    const fn = rows[0];
+    if (!fn) throw new HttpError(404, { code: 'PGRST202', message: `function ${name} not found` });
+    const params = [];
+    const args = (fn.names ?? [])
+        .map((argName, i) => {
+            if (!(argName in body)) return null;
+            const value = body[argName];
+            params.push(value === null ? null : typeof value === 'object' ? JSON.stringify(value) : String(value));
+            return `${ident(argName)} => $${params.length}::${fn.types[i]}`;
+        })
+        .filter(Boolean);
+    const call = `public.${ident(name)}(${args.join(', ')})`;
+    if (fn.returns === 'void') {
+        await asCaller(who, (client) => client.query(`select ${call}`, params));
+        return send(res, 204);
+    }
+    const result = await asCaller(who, (client) => client.query(`select to_jsonb(${call}) as result`, params));
+    return send(res, 200, result.rows[0].result);
+}
+
+async function handleRest(req, res, url) {
+    const who = caller(req);
+    const path = url.pathname.replace('/rest/v1/', '');
+    if (path.startsWith('rpc/')) return handleRpc(req, res, path.slice(4), who);
+
+    const table = `public.${ident(path)}`;
+    const select = url.searchParams.get('select');
+    const params = [];
+    const wantsRows = (req.headers.prefer ?? '').includes('return=representation');
+
+    if (req.method === 'GET') {
+        const limit = url.searchParams.get('limit');
+        const sql = `select coalesce(json_agg(row_to_json(t0)), '[]'::json) as rows from (
+            select * from ${table} t0 ${whereClause(url, params, 't0')} ${orderClause(url, 't0')}
+            ${limit ? `limit ${Number.parseInt(limit, 10)}` : ''}) t0`;
+        const result = await asCaller(who, (client) => client.query(sql, params));
+        return respondRows(req, res, 200, result.rows[0].rows, select);
+    }
+
+    if (req.method === 'POST') {
+        const body = await readBody(req);
+        const records = Array.isArray(body) ? body : [body];
+        const columns = [...new Set(records.flatMap((r) => Object.keys(r)))].map(ident);
+        params.push(JSON.stringify(records));
+        const sql = `insert into ${table} (${columns.join(', ')})
+            select ${columns.join(', ')} from json_populate_recordset(null::${table}, $1::json) returning *`;
+        const result = await asCaller(who, (client) => client.query(sql, params));
+        return wantsRows ? respondRows(req, res, 201, result.rows, select) : send(res, 201);
+    }
+
+    if (req.method === 'PATCH') {
+        const body = await readBody(req);
+        const columns = Object.keys(body).map(ident);
+        params.push(JSON.stringify(body));
+        const sql = `update ${table} as t0 set ${columns.map((c) => `${c} = r.${c}`).join(', ')}
+            from json_populate_record(null::${table}, $1::json) r ${whereClause(url, params, 't0')} returning t0.*`;
+        const result = await asCaller(who, (client) => client.query(sql, params));
+        return wantsRows ? respondRows(req, res, 200, result.rows, select) : send(res, 204);
+    }
+
+    if (req.method === 'DELETE') {
+        const sql = `delete from ${table} as t0 ${whereClause(url, params, 't0')} returning t0.*`;
+        const result = await asCaller(who, (client) => client.query(sql, params));
+        return wantsRows ? respondRows(req, res, 200, result.rows, select) : send(res, 204);
+    }
+
+    throw new HttpError(405, { code: 'PGRST000', message: 'method not allowed' });
+}
+
+// ------------------------------------------------------------------------------------- outils de test
+async function resetData() {
+    await pool.query('truncate auth.users cascade');
+    await pool.query('truncate public.access_log, public.ai_calls restart identity');
+    sessions.clear();
+    refreshTokens.clear();
+    factors.clear();
+}
+
+async function state() {
+    const q = async (sql) => (await pool.query(sql)).rows;
+    const users = await q(
+        'select u.id, a.email, u.display_name, u.app_role from public.users u join auth.users a on a.id = u.id order by u.created_at'
+    );
+    return {
+        users: users.map((u) => ({ ...u, factors: factors.get(u.id) ?? [] })),
+        consents: await q('select * from public.consents order by granted_at'),
+        careFiles: await q('select * from public.care_files order by created_at'),
+        members: await q('select * from public.care_file_members order by joined_at'),
+        invitations: await q(
+            'select id, care_file_id, email, role, access_level, accepted_at, revoked_at from public.care_file_invitations'
+        ),
+        careRecipients: await q('select * from public.care_recipients'),
+        contacts: await q('select * from public.contacts order by created_at'),
+        accessLog: await q('select * from public.access_log order by id')
+    };
 }
 
 // ----------------------------------------------------------------------------------------- serveur
@@ -380,19 +416,24 @@ const server = http.createServer(async (req, res) => {
     try {
         if (url.pathname === '/__test/health') return send(res, 200, { ok: true });
         if (url.pathname === '/__test/reset' && req.method === 'POST') {
-            reset();
+            await resetData();
             return send(res, 204);
         }
-        if (url.pathname === '/__test/state') {
-            return send(res, 200, { users: [...state.users.values()], consents: state.consents, accessLog: state.accessLog });
-        }
-        if (url.pathname.startsWith('/auth/v1/')) return await handleAuth(req, res, url);
+        if (url.pathname === '/__test/state') return send(res, 200, await state());
+        if (url.pathname.startsWith('/auth/v1/')) return await handleAuth(req, res, url.pathname.replace('/auth/v1', ''));
         if (url.pathname.startsWith('/rest/v1/')) return await handleRest(req, res, url);
         return send(res, 404, { message: 'not found' });
     } catch (error) {
+        if (error instanceof HttpError) return send(res, error.status, error.body);
         console.error('[fake-supabase]', error);
         return send(res, 500, { message: 'internal error' });
     }
 });
 
-server.listen(PORT, '127.0.0.1', () => console.log(`[fake-supabase] http://127.0.0.1:${PORT}`));
+server.listen(PORT, '127.0.0.1', () => console.log(`[fake-supabase] http://127.0.0.1:${PORT} → PostgreSQL`));
+for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.on(signal, () => {
+        server.close();
+        void pool.end().finally(() => process.exit(0));
+    });
+}

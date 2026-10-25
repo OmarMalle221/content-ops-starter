@@ -1,5 +1,6 @@
 {
     "privacy_policy": {
+        "scope": "user",
         "version": "2026-10-26",
         "published_on": "2026-10-26",
         "legal_review": "pending",
@@ -38,6 +39,7 @@
         ]
     },
     "health_information": {
+        "scope": "user",
         "version": "2026-10-26",
         "published_on": "2026-10-26",
         "legal_review": "pending",
@@ -68,6 +70,7 @@
         ]
     },
     "email_reminders": {
+        "scope": "user",
         "version": "2026-10-26",
         "published_on": "2026-10-26",
         "legal_review": "pending",
@@ -86,6 +89,7 @@
         ]
     },
     "pilot_evaluation": {
+        "scope": "user",
         "version": "2026-10-26",
         "published_on": "2026-10-26",
         "legal_review": "pending",
@@ -104,6 +108,41 @@
             {
                 "heading": "Pour arrêter",
                 "text": "Retirez ce consentement quand vous le voulez, dans « Mes consentements »."
+            }
+        ]
+    },
+    "care_recipient_data": {
+        "scope": "care_file",
+        "version": "2026-10-27",
+        "published_on": "2026-10-27",
+        "legal_review": "pending",
+        "required": true,
+        "title": "Consentement de la personne aidée",
+        "summary": "La personne aidée, ou son représentant légal, accepte que sa famille rassemble ses renseignements dans Relais pour coordonner ses soins et ses démarches.",
+        "sections": [
+            {
+                "heading": "Ce que contiendra le dossier",
+                "text": "Son profil (prénom, âge, milieu de vie) et ses contacts (CLSC, médecin, pharmacie, notaire). Plus tard, et seulement si elle le permet : des documents et des renseignements de santé."
+            },
+            {
+                "heading": "À quoi il sert",
+                "text": "Coordonner les soins et les rendez-vous, et repérer les programmes auxquels elle pourrait avoir droit. Jamais pour de la publicité ; Relais ne vend aucun renseignement."
+            },
+            {
+                "heading": "Qui pourra le voir",
+                "text": "La personne qui crée le dossier et les membres de la famille qu'elle invite, selon leurs permissions. Une intervenante de Relais seulement si le dossier lui est confié. La personne aidée peut avoir son propre accès en lecture."
+            },
+            {
+                "heading": "Où",
+                "text": "Sur des serveurs situés au Canada. Les renseignements sont chiffrés pendant leur transport et sur les serveurs."
+            },
+            {
+                "heading": "Ses droits",
+                "text": "Elle peut retirer ce consentement à tout moment. Plus rien ne pourra alors être ajouté au dossier ; il pourra être téléchargé ou supprimé."
+            },
+            {
+                "heading": "Qui consent",
+                "text": "La personne elle-même, si elle est en mesure de le faire. Sinon, son représentant légal : mandataire dont le mandat de protection est homologué, tuteur ou autre représentant reconnu."
             }
         ]
     }

@@ -6,6 +6,17 @@ import { HelpPage } from '../features/help/HelpPage';
 import { HomePage } from '../features/home/HomePage';
 import { LandingPage } from '../features/landing/LandingPage';
 import { MfaPage } from '../features/mfa/MfaPage';
+import { ConsentFormPage } from '../features/files/ConsentFormPage';
+import { FileConsentPage } from '../features/files/FileConsentPage';
+import { FileContactsPage } from '../features/files/FileContactsPage';
+import { FileLayout } from '../features/files/FileLayout';
+import { FileLogPage } from '../features/files/FileLogPage';
+import { FileMembersPage } from '../features/files/FileMembersPage';
+import { FileOverviewPage } from '../features/files/FileOverviewPage';
+import { FileProfilePage } from '../features/files/FileProfilePage';
+import { FileSettingsPage } from '../features/files/FileSettingsPage';
+import { NewCareFilePage } from '../features/files/NewCareFilePage';
+import { InvitationPage } from '../features/invitations/InvitationPage';
 import { WelcomePage } from '../features/onboarding/WelcomePage';
 import { PrivacyPage } from '../features/privacy/PrivacyPage';
 import { AppLayout, NotFoundPage } from './AppLayout';
@@ -20,6 +31,8 @@ export const routes = [
             { path: '/connexion', element: <SignInPage /> },
             { path: '/confidentialite', element: <PrivacyPage /> },
             { path: '/aide', element: <HelpPage /> },
+            // Publique : gère elle-même la connexion et l'accueil des nouveaux, en gardant le jeton.
+            { path: '/invitation', element: <InvitationPage /> },
             {
                 element: <RequireSession />,
                 children: [
@@ -33,7 +46,22 @@ export const routes = [
                                 children: [
                                     { path: '/accueil', element: <HomePage /> },
                                     { path: '/mes-consentements', element: <MyConsentsPage /> },
-                                    { path: '/compte', element: <AccountPage /> }
+                                    { path: '/compte', element: <AccountPage /> },
+                                    { path: '/dossiers/nouveau', element: <NewCareFilePage /> },
+                                    { path: '/dossiers/:fileId/formulaire-consentement', element: <ConsentFormPage /> },
+                                    {
+                                        path: '/dossiers/:fileId',
+                                        element: <FileLayout />,
+                                        children: [
+                                            { index: true, element: <FileOverviewPage /> },
+                                            { path: 'profil', element: <FileProfilePage /> },
+                                            { path: 'contacts', element: <FileContactsPage /> },
+                                            { path: 'consentement', element: <FileConsentPage /> },
+                                            { path: 'membres', element: <FileMembersPage /> },
+                                            { path: 'journal', element: <FileLogPage /> },
+                                            { path: 'parametres', element: <FileSettingsPage /> }
+                                        ]
+                                    }
                                 ]
                             }
                         ]

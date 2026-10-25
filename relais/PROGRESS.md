@@ -1,6 +1,6 @@
 # Relais — PROGRESS
 
-Dernière mise à jour : 2026-10-25
+Dernière mise à jour : 2026-10-25 (étape 2)
 
 ## Fait
 
@@ -41,12 +41,49 @@ Dernière mise à jour : 2026-10-25
     chaque écran, aucune violation de CSP.
   - Lighthouse accessibilité mobile : 100 sur les 8 pages (publiques et connectées), seuil 90.
 - **CI** : `.github/workflows/relais.yml` (format, lint, types, données de référence, Vitest ;
-  PostgreSQL 16 + RLS ; build, e2e, axe, Lighthouse).
+  PostgreSQL 16 + RLS ; build, e2e, axe, Lighthouse). Verte sur GitHub.
+
+### Étape 2 — Dossier et membres (livrée)
+
+- **Base de données** (`supabase/migrations/20261027000001_care_files.sql`) : `care_files`,
+  `care_file_members`, `care_file_invitations`, `care_recipients`, `care_needs`, `contacts` ; matrice
+  d'accès `private.can_read` / `private.can_write` par zone (profil, coordination, santé, droits, gestion) ;
+  fonctions `create_care_file`, `record_file_consent`, `create_invitation`, `accept_invitation`,
+  `log_access`, `export_care_file`, `delete_care_file` ; `revoke_consent`, `delete_my_account` et
+  `export_my_data` étendues. Nouveau texte de consentement « personne aidée » (à faire valider).
+- **Consentement de la personne aidée** : formulaire signé (imprimable depuis Relais) enregistré par
+  l'aidant, ou accord du représentant légal (mandat homologué, tutelle, procuration, autre ; nom
+  obligatoire), ou accord donné par la personne elle-même depuis son accès. Sans consentement, la base
+  refuse tout ajout. Si la personne retire elle-même son accord, l'aidant ne peut plus le rétablir par
+  formulaire.
+- **PWA** : mes dossiers, création guidée (nom → consentement → profil), aperçu, profil (année de
+  naissance seulement), autonomie et services (renseignements de santé, saisie libre surveillée par le
+  détecteur de détresse), contacts clés (appel en un geste), membres (niveaux complet, coordination,
+  lecture seule ; retrait ; départ volontaire), invitations par lien partagé, journal des accès,
+  paramètres (renommer, télécharger, supprimer). Les onglets et actions suivent les droits.
+- **Invitations** : le lien porte le jeton dans le fragment (`#`), jamais transmis aux serveurs web ; il ne
+  fonctionne que pour l'adresse invitée, pendant 7 jours ; il est retiré de l'adresse affichée et gardé le
+  temps de se connecter. Une intervenante ne peut rejoindre qu'avec le rôle global `relais_worker`.
+- **Tests de bout en bout sur la vraie base** : le faux Supabase traduit désormais chaque requête en SQL,
+  exécuté sous le rôle et l'identité de l'appelant sur la base migrée (`scripts/test-db.sh --serve`) : les
+  parcours vérifient la vraie RLS.
+- **Tests, tous verts en local** :
+  - Base : 154 vérifications RLS (chaque niveau d'accès × table × opération, intervenante avec et sans MFA,
+    admin, personne extérieure, invitations expirées, remplacées ou à la mauvaise adresse, consentement et
+    retrait, suppression qui ne laisse que sa trace). Un contrôle par mutation confirme qu'une matrice
+    affaiblie fait échouer les tests.
+  - Unitaires et composants : 219 tests (dont la matrice d'accès de l'interface et le formulaire de
+    consentement).
+  - Bout en bout : 15 parcours, dont 5 pour l'étape 2 (aidante, invitations et niveaux, saisie libre et
+    écran d'urgence, export et suppression du dossier, accord donné puis retiré par la personne aidée).
+  - Lighthouse accessibilité mobile : 100 sur les 18 pages auditées.
+- **Accessibilité corrigée en route** : le focus passe au titre de la page même quand celle-ci charge ses
+  données après la navigation.
 
 ## En cours
 
-- Rien. **Prochaine étape : 2 — Dossier et membres**, à lancer sur ton feu vert. Elle dépend des
-  réponses aux questions 1 et 5 (sinon j'applique les hypothèses ci-dessous).
+- Rien. **Prochaine étape : 3 — Documents et extraction IA**, à lancer sur ton feu vert. Elle dépend des
+  réponses aux questions 2 (fournisseur de l'IA) et 3 (photos et PDF numérisés).
 
 ## Décisions
 
@@ -72,10 +109,15 @@ Dernière mise à jour : 2026-10-25
 | D18 | Textes de consentement versionnés dans le dépôt ; la base garde leur empreinte SHA-256 et refuse qu'une version publiée change                                              | Preuve de ce qui a été affiché                                                                  |
 | D19 | Export et suppression du compte par fonctions SQL (pas de fonction serveur à l'étape 1)                                                                                     | Moins de pièces ; testables sur PostgreSQL                                                      |
 | D20 | Écran d'urgence en `<dialog>` modal, avec repli plein écran pour les navigateurs sans `showModal` (anciens iPhone)                                                          | L'écran ne doit jamais manquer de s'afficher                                                    |
-| D21 | Tests de bout en bout contre un faux Supabase local ; RLS testée à part sur PostgreSQL                                                                                      | Tests reproductibles sans compte ; sert aussi aux démonstrations                                |
+| D21 | Tests de bout en bout contre un faux Supabase local (Auth simulée ; données sur la vraie base, voir D29)                                                                    | Tests reproductibles sans compte ; sert aussi aux démonstrations                                |
 | D22 | Police Atkinson Hyperlegible servie par l'app ; aucune ressource externe (CSP)                                                                                              | Lisibilité ; aucune adresse IP transmise à un tiers                                             |
 | D23 | « Parler à une intervenante » absent de l'écran d'urgence jusqu'à l'étape 6                                                                                                 | Pas de bouton qui ne fait rien sur un écran de crise                                            |
 | D24 | Ressources de départ (911, 9-8-8, Info-Social 811, Info-Santé 811) toutes « à vérifier », sans URL source                                                                   | Les sites officiels n'étaient pas joignables d'ici ; la vérification revient à la TS (porte B3) |
+| D25 | Invitations par lien que l'aidant partage lui-même (texto, courriel) plutôt que par un courriel envoyé par Relais                                                           | Aucun fournisseur de courriel nécessaire à l'étape 2 ; les familles se textent                  |
+| D26 | Jeton d'invitation dans le fragment de l'adresse (`#`), lié à l'adresse invitée, valable 7 jours, stocké seulement sous forme d'empreinte                                   | Jamais dans les journaux web ; un lien transféré ne sert à personne d'autre                     |
+| D27 | La personne aidée qui retire son accord ne peut pas être « recontredite » par un formulaire signé : seul son accord ou celui d'un représentant légal le rétablit            | Autodétermination ; à valider par le juriste (A15)                                              |
+| D28 | Création de dossier par une fonction (`create_care_file`), suppression du compte refusée tant qu'on est propriétaire d'un dossier                                           | Pas de dossier orphelin ; pas de transfert de propriété en v0.1                                 |
+| D29 | Tests de bout en bout sur la base migrée (mini PostgREST du faux Supabase) au lieu d'une imitation en mémoire                                                               | Les parcours vérifient la vraie RLS, les vrais déclencheurs et les vraies fonctions             |
 
 ### Hypothèses appliquées en attendant les réponses aux questions bloquantes
 
@@ -84,8 +126,9 @@ Dernière mise à jour : 2026-10-25
 - **Q2** : fournisseur IA isolé derrière une interface ; rien n'est appelé avant l'étape 3.
 - **Q3** : OCR hébergé au Canada prévu pour les photos ; à confirmer avant l'étape 3.
 - **Q4** : l'écran d'urgence dit seulement que Relais n'est pas un service d'urgence ; aucun délai promis.
-- **Q5** : sans consentement valide (personne ou représentant légal), la base refuse les renseignements
-  sur la personne aidée (étape 2).
+- **Q5** : appliquée à l'étape 2 : sans consentement valide (personne ou représentant légal), la base refuse
+  les renseignements sur la personne aidée ; la page de consentement explique que le dossier ne peut pas
+  être accueilli pendant le pilote si le parent ne peut plus consentir et n'a pas de représentant.
 
 ## Questions ouvertes
 
@@ -98,7 +141,7 @@ Dernière mise à jour : 2026-10-25
    image envoyée telle quelle avec consentement spécifique ? À trancher avant l'étape 3.
 4. **Intervenantes Relais** : combien, quel statut, quelles heures, quel délai de rappel promettre ? Avant
    l'étape 6.
-5. **Parent inapte sans représentant** : ces familles font-elles partie du pilote ? Avant l'étape 2.
+5. **Parent inapte sans représentant** : ces familles font-elles partie du pilote ? (Hypothèse appliquée : non.)
 
 ### À vérifier dès qu'un projet Supabase existe (région `ca-central-1`)
 
@@ -117,4 +160,7 @@ Dernière mise à jour : 2026-10-25
   coordonnées de la personne responsable des renseignements personnels à fournir.
 - Taille de l'application : 200 ko compressés au premier chargement ; découpage par page à prévoir.
 - Mode sombre non pris en charge en v0.1.
+- Transfert de la propriété d'un dossier à un autre membre : hors v0.1 (la personne doit supprimer le
+  dossier pour supprimer son compte).
+- Invitations par courriel envoyé par Relais : à ajouter avec le fournisseur de courriel de l'étape 5.
 - ESLint 9 n'est plus maintenu ; passer à ESLint 10 quand `eslint-plugin-jsx-a11y` le prendra en charge.

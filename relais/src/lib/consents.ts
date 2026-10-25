@@ -9,8 +9,11 @@ export interface ConsentTextSection {
     text: string;
 }
 
-export interface ConsentText {
-    type: UserConsentType;
+/** Tous les textes versionnés, y compris ceux de portée « dossier » (personne aidée). */
+export type ConsentTextType = keyof typeof consentTexts;
+
+export interface ConsentText<T extends ConsentTextType = UserConsentType> {
+    type: T;
     version: string;
     required: boolean;
     title: string;
@@ -18,7 +21,7 @@ export interface ConsentText {
     sections: ConsentTextSection[];
 }
 
-export function consentText(type: UserConsentType): ConsentText {
+export function consentText<T extends ConsentTextType>(type: T): ConsentText<T> {
     const text = consentTexts[type];
     return {
         type,

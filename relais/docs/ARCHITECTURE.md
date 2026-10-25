@@ -1,6 +1,6 @@
 # Relais v0.1 — Architecture proposée
 
-> Statut : **étape 1 livrée** (socle, authentification, consentements). Les choix marqués _(Q1)_ à _(Q5)_
+> Statut : **étapes 1 et 2 livrées** (socle, authentification, consentements ; dossier et membres). Les choix marqués _(Q1)_ à _(Q5)_
 > suivent les hypothèses par défaut notées dans [`../PROGRESS.md`](../PROGRESS.md), en attendant les réponses.
 
 ## 1. Vue d'ensemble
@@ -263,7 +263,8 @@ elle refusera tant que la personne est propriétaire d'un dossier (transfert ou 
 | Bout en bout                | Playwright (Pixel 7) + axe, faux Supabase local              | Parcours par étape, aucune violation WCAG 2.2 AA, aucune violation de la CSP de production |
 | Performance / accessibilité | Lighthouse (mobile), piloté par Playwright                   | Accessibilité ≥ 90 sur chaque page, y compris les pages connectées                         |
 
-Le faux Supabase (`tests/e2e/fake-supabase.mjs`) imite Auth (code par courriel, TOTP) et le sous-ensemble de
-PostgREST utilisé ; il ne remplace pas les tests RLS, qui tournent sur un vrai PostgreSQL. Il sert aussi aux
+Le faux Supabase (`tests/e2e/fake-supabase.mjs`) simule Auth (code par courriel, TOTP) et traduit chaque
+requête PostgREST de l'application en SQL, exécuté sur la vraie base migrée sous le rôle et l'identité de
+l'appelant (`scripts/test-db.sh --serve`) : les parcours vérifient donc la vraie RLS. Il sert aussi aux
 démonstrations locales sans compte Supabase. Une étape n'est livrée que si tout est vert en CI
 (`.github/workflows/relais.yml`).

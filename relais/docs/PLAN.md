@@ -26,8 +26,8 @@ les écritures), journaliseur (aucun champ libre), axe + Lighthouse sur les écr
 
 **Livrables**
 
-- `care_files`, `care_file_members`, invitations par courriel, `care_recipients`, `care_needs`,
-  `contacts`.
+- `care_files`, `care_file_members`, invitations par lien que l'aidant partage (texto, courriel) et qui
+  ne fonctionne que pour l'adresse invitée, `care_recipients`, `care_needs`, `contacts`.
 - Enregistrement du consentement de la personne aidée et de son statut juridique (elle-même, mandat
   homologué, tutelle, procuration, autre) ; blocage des écritures sans consentement valide.
 - Niveaux d'accès (complet, coordination, lecture seule), accès optionnel de la personne aidée,
