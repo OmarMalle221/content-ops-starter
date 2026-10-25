@@ -1,0 +1,69 @@
+# Relais v0.1 — Points à faire valider avant le pilote
+
+Relais est une application web qui aide les proches aidants du Québec à coordonner les soins d'un parent
+et à repérer les aides auxquelles il a droit. Pilote prévu : 6 semaines, 10 familles. Relais n'est ni un
+service de santé ni un service de crise.
+
+## A. Juriste — Loi 25 et responsabilité
+
+1. **Qui peut consentir pour la personne aidée.** Modes prévus : la personne elle-même (dans
+   l'application ou par formulaire signé que l'aidant téléverse) ou son représentant légal. Statuts
+   enregistrés : la personne consent elle-même, mandat de protection homologué, tutelle, procuration,
+   autre. Une procuration suffit-elle pour des renseignements de santé, ou vise-t-elle seulement les
+   biens ? Que faire si le parent est inapte et n'a aucun représentant ?
+2. **Partage dans la famille.** L'aidant principal invite des membres à différents niveaux (complet,
+   coordination, lecture seule). Le consentement de la personne aidée doit-il nommer chaque membre ou
+   chaque niveau ?
+3. **Communication hors Québec.** Les documents sont envoyés, pseudonymisés, à un fournisseur d'IA
+   (Claude, Anthropic), dont le traitement peut avoir lieu aux États-Unis. EFVP, entente écrite et
+   mesures requises ; ce que le consentement doit en dire.
+4. **Pseudonymisation.** Les noms, le NAM et les adresses sont remplacés avant l'envoi ; les
+   renseignements restent personnels. Est-ce une mesure suffisante, avec quel risque résiduel déclaré ?
+5. **Textes de consentement.** Six consentements distincts et révocables (politique, renseignements de
+   santé, traitement IA des documents, courriels, évaluation du pilote, consentement de la personne
+   aidée). Clarté, granularité, durée, effets d'une révocation.
+6. **Conservation et destruction.** Durées pour les documents, extractions et journaux ; à la
+   suppression d'un dossier, le journal ne garde que la trace de la suppression (pendant combien de
+   temps ?) ; sauvegardes du fournisseur conservées jusqu'à leur expiration.
+7. **Journal des accès.** Granularité prévue (ouverture du dossier, téléchargements, membres,
+   consentements, suppression). Suffisant ? Qui doit pouvoir le consulter ?
+8. **Droits des personnes.** Accès, rectification, suppression et portabilité (export structuré) :
+   procédure et délais de réponse.
+9. **Gouvernance.** Responsable de la protection des renseignements personnels, politique de
+   confidentialité publiée, registre et procédure d'incident de confidentialité (avis à la CAI et aux
+   personnes).
+10. **Sous-traitants.** Supabase (Canada), Netlify (fichiers statiques seulement), fournisseur de
+    courriel, fournisseur d'IA, OCR éventuel : ententes nécessaires.
+11. **Intervenantes Relais.** Statut, confidentialité, secret professionnel, tenue de dossiers si ce sont
+    des professionnelles membres d'un ordre ; accès limité aux dossiers que l'aidant leur confie.
+12. **Avertissements.** Pas de conseil médical, pas un service d'urgence, admissibilité aux programmes à
+    confirmer, lettres préparées par l'IA à relire : formulation et responsabilité.
+13. **Maltraitance.** Conduite si un texte ou un document évoque de la maltraitance envers la personne
+    aidée ; obligations de signalement éventuelles.
+14. **Évaluation du pilote.** Consentement à l'usage des réponses (temps gagné, satisfaction) ; faut-il
+    un comité d'éthique si les résultats sont publiés ou faits avec un partenaire de recherche ?
+
+## B. Travailleuse sociale — sécurité, ton et parcours
+
+1. **Lexique de détresse et corpus de test.** Phrases qui doivent toujours déclencher l'écran
+   d'urgence et phrases qui ne doivent pas le faire, y compris des expressions québécoises. Préférence
+   assumée : en cas de doute, on déclenche.
+2. **Écran d'urgence.** Texte, ordre des ressources (911, 9-8-8, Info-Social 811, autres), ton, ce qu'on
+   promet sur le rappel d'une intervenante, suivi après l'affichage.
+3. **Ressources.** Vérification de chaque numéro, des heures et des régions (urgence, crise, répit,
+   Info-aidant, maltraitance) ; qui vérifie et à quelle fréquence.
+4. **Bilan hebdomadaire.** Les 3 questions proposées (fatigue, débordement, isolement), l'échelle de 1 à
+   5, le seuil (total ≥ 12 ou une réponse à 5) et la formulation des suggestions de répit. Le bilan doit
+   rester privé et ne pas passer pour un outil clinique.
+5. **Documents qui évoquent une crise** (ex. note clinique mentionnant des idées suicidaires) : afficher
+   l'écran d'urgence à l'aidant, ou seulement un bandeau discret ?
+6. **Demandes d'intervenante.** Triage, priorités, délai de réponse, conduite quand la demande vient de
+   l'écran d'urgence ou arrive hors des heures de service.
+7. **Ton et lisibilité.** Relecture des textes : accueil, consentements, résumés, écrans d'erreur et
+   d'urgence.
+8. **Navigateur de droits.** Éviter les faux espoirs (« admissibilité à confirmer »), rôle de
+   l'évaluation du CLSC, pièces à fournir présentées simplement.
+9. **Dynamiques familiales.** Niveaux d'accès adaptés aux conflits (retrait d'un membre, visibilité),
+   place de la personne aidée (dignité, autodétermination, accès en lecture).
+10. **Préparer un rendez-vous.** Contenu de la page imprimable et exemples de questions à poser, sans
+    conseil médical.
