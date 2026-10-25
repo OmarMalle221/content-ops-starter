@@ -109,8 +109,10 @@ export function toWebhookDto(s: WebhookSubscription) {
 }
 export type WebhookDto = ReturnType<typeof toWebhookDto>;
 
-export function deliveryNextActions(d: WebhookDelivery): string[] {
-  return d.status === 'FAILED' || d.status === 'EXHAUSTED' ? ['RETRY'] : [];
+export function deliveryNextActions(d: WebhookDelivery, now = new Date()): string[] {
+  // A delivery being sent (live claim) cannot be retried until that attempt completes.
+  const beingSent = d.claimedUntil !== null && d.claimedUntil > now;
+  return (d.status === 'FAILED' || d.status === 'EXHAUSTED') && !beingSent ? ['RETRY'] : [];
 }
 
 export function toWebhookDeliveryDto(d: WebhookDelivery) {

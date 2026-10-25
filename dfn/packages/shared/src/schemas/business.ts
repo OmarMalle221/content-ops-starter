@@ -9,6 +9,9 @@ export const lineItemSchema = z.object({
 });
 export type LineItemInput = z.infer<typeof lineItemSchema>;
 
+/** Tax in basis points of the subtotal (e.g. 1800 = 18 % TVA). */
+const taxBpsSchema = z.number().int().min(0).max(5000);
+
 const documentBase = {
   /** Issuing organisation; defaults to the caller's personal workspace (see resolveActingOrganization). */
   organizationId: z.string().uuid().optional(),
@@ -17,8 +20,11 @@ const documentBase = {
   customerEmail: emailSchema.optional(),
   currencyCode: currencySchema,
   lines: z.array(lineItemSchema).min(1).max(50),
-  /** Tax expressed in basis points of the subtotal (e.g. 1800 = 18 % TVA). */
-  taxBps: z.number().int().min(0).max(5000).default(0),
+  /**
+   * Tax expressed in basis points of the subtotal (e.g. 1800 = 18 % TVA). Persisted on the document
+   * (Invoice.taxBps / Quote.taxBps): totals are always recomputed from it, never the other way round.
+   */
+  taxBps: taxBpsSchema.default(0),
   notes: z.string().trim().max(2000).optional(),
 };
 
@@ -29,7 +35,11 @@ export const createInvoiceSchema = z.object({
 });
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 
-export const updateInvoiceSchema = createInvoiceSchema.partial();
+/**
+ * Draft edit: omitted fields keep their stored value (`taxBps` included). `.partial()` keeps inner
+ * defaults (Zod 4), so the field is redeclared without its default.
+ */
+export const updateInvoiceSchema = createInvoiceSchema.extend({ taxBps: taxBpsSchema }).partial();
 
 export const recordInvoicePaymentSchema = z.object({
   amount: decimalAmountSchema,
@@ -55,7 +65,8 @@ export const createQuoteSchema = z.object({
 });
 export type CreateQuoteInput = z.infer<typeof createQuoteSchema>;
 
-export const updateQuoteSchema = createQuoteSchema.partial();
+/** Draft edit: omitted fields keep their stored value (`taxBps` included, redeclared without default). */
+export const updateQuoteSchema = createQuoteSchema.extend({ taxBps: taxBpsSchema }).partial();
 
 export const convertQuoteSchema = z.object({
   target: z.enum(['INVOICE', 'PROTECT_TRANSACTION']),

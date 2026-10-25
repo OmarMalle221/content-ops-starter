@@ -1,4 +1,4 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import type { Prisma, PrismaTransactionClient } from '@dfn/database';
@@ -29,6 +29,7 @@ import { moneyDto } from '../../common/serialize';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RiskService } from '../risk/risk.service';
 import { LEDGER } from './ledger.provider';
 
 export const SANDBOX_DISCLAIMER_FR = 'Données fictives — Aucun fonds réel';
@@ -67,6 +68,7 @@ function startOfUtcDay(now = new Date()): Date {
 
 @Injectable()
 export class WalletsService {
+  private readonly logger = new Logger(WalletsService.name);
   private readonly fx: FxRateProvider;
 
   constructor(
@@ -75,6 +77,7 @@ export class WalletsService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
     @Inject(ENV) private readonly env: Env,
+    private readonly risk: RiskService,
   ) {
     this.fx = createFxRateProvider(env.FX_PROVIDER);
   }
@@ -101,7 +104,15 @@ export class WalletsService {
       },
       db,
     );
-    return db.wallet.create({ data: { organizationId, currencyCode, ledgerAccountId: account.id } });
+    // Concurrency-safe: a parallel first use of the same wallet must not fail with a unique
+    // violation (which would also abort an enclosing transaction).
+    await db.wallet.createMany({
+      data: [{ organizationId, currencyCode, ledgerAccountId: account.id }],
+      skipDuplicates: true,
+    });
+    return db.wallet.findUniqueOrThrow({
+      where: { organizationId_currencyCode: { organizationId, currencyCode } },
+    });
   }
 
   private assertAccess(auth: AuthContext, organizationId: string) {
@@ -244,20 +255,21 @@ export class WalletsService {
     const limitMinor = selfDepositLimitMinor(this.env.SANDBOX_SELF_DEPOSIT_DAILY_LIMIT, currencyCode);
     let usedMinor = 0n;
     if (walletAccountId) {
-      const today = await db.ledgerTransaction.findMany({
-        where: {
-          kind: 'DEPOSIT',
-          status: 'POSTED',
-          reference: organizationId,
-          postedAt: { gte: startOfUtcDay() },
-          AND: [
-            { metadata: { path: ['selfService'], equals: true } },
-            { metadata: { path: ['currencyCode'], equals: currencyCode } },
-          ],
-        },
-        include: { entries: { where: { accountId: walletAccountId, direction: 'CREDIT' } } },
-      });
-      for (const t of today) for (const e of t.entries) usedMinor += e.amountMinor;
+      // One aggregate over today's self-service deposits credited to this wallet (constant cost,
+      // whatever the number of deposits of the day).
+      const [row] = await db.$queryRaw<Array<{ used: bigint | null }>>`
+        SELECT COALESCE(SUM(e."amountMinor"), 0)::bigint AS used
+        FROM "LedgerEntry" e
+        JOIN "LedgerTransaction" t ON t.id = e."ledgerTransactionId"
+        WHERE e."accountId" = ${walletAccountId}::uuid
+          AND e.direction = 'CREDIT'
+          AND t.kind = 'DEPOSIT'
+          AND t.status = 'POSTED'
+          AND t.reference = ${organizationId}
+          AND t."postedAt" >= ${startOfUtcDay()}
+          AND t.metadata ->> 'selfService' = 'true'
+          AND t.metadata ->> 'currencyCode' = ${currencyCode}`;
+      usedMinor = BigInt(row?.used ?? 0);
     }
     const remainingMinor = limitMinor - usedMinor > 0n ? limitMinor - usedMinor : 0n;
     return {
@@ -484,6 +496,20 @@ export class WalletsService {
       body: `${minorToDecimalString(amountMinor, currencyCode)} ${currencyCode} fictifs ont été crédités sur le portefeuille ${membership.organizationName} (sandbox — aucun fonds réel).`,
       data: { organizationId, currencyCode, ledgerTransactionId: result.posted.id },
     });
+    // Post-commit AML evaluation (structuring of many small deposits). The deposit is booked: an
+    // evaluation failure is logged, never returned to the caller.
+    try {
+      await this.risk.evaluateAndRecord({
+        event: 'wallet.self_deposit',
+        userId: auth.userId,
+        organizationId,
+        amountMinor,
+        currencyCode,
+        operationReference: result.posted.id,
+      });
+    } catch (err) {
+      this.logger.error(`risk evaluation after self-deposit ${result.posted.id} failed: ${String(err)}`);
+    }
     const remainingMinor =
       result.limitMinor - result.usedMinor > 0n ? result.limitMinor - result.usedMinor : 0n;
     return {

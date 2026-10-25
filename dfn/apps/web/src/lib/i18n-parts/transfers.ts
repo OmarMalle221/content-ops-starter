@@ -96,6 +96,8 @@ export const transfersPart = definePart(
       reviewRequired:
         'Ce transfert est en attente d’une revue de conformité. Aucun fonds fictif n’a été débité.',
       reviewReason: 'Motif de la revue',
+      /** Members receive a placeholder reason (rule codes are staff-only); staff reasons are shown as sent. */
+      reviewReasons: { COMPLIANCE_REVIEW: 'Contrôle de conformité de routine' },
       reviewNote: 'Note de revue',
       riskScore: 'Score de risque',
       failedInfo:
@@ -157,6 +159,8 @@ export const transfersPart = definePart(
       approve: 'Approuver',
       reject: 'Rejeter',
       note: 'Note de revue (obligatoire)',
+      noteVisibleHint:
+        'Cette note est montrée au client (détail et historique du transfert ; en cas de rejet, elle est citée dans sa notification). N’y écrivez aucun élément interne : règle ou code de risque, score, soupçon ou déclaration envisagée (interdiction de divulgation).',
       approveTitle: 'Approuver et exécuter le débit fictif ?',
       approveDescription:
         'Le portefeuille fictif de l’organisation sera débité et le partenaire simulé prendra le relais.',
@@ -266,6 +270,7 @@ export const transfersPart = definePart(
       review: 'Open the review queue',
       reviewRequired: 'This transfer awaits a compliance review. No fictitious funds have been debited.',
       reviewReason: 'Review reason',
+      reviewReasons: { COMPLIANCE_REVIEW: 'Routine compliance check' },
       reviewNote: 'Review note',
       riskScore: 'Risk score',
       failedInfo:
@@ -327,6 +332,8 @@ export const transfersPart = definePart(
       approve: 'Approve',
       reject: 'Reject',
       note: 'Review note (required)',
+      noteVisibleHint:
+        'This note is shown to the customer (transfer details and history; on rejection it is quoted in their notification). Do not write anything internal: risk rule or code, score, suspicion or a contemplated report (tipping-off).',
       approveTitle: 'Approve and execute the fictitious debit?',
       approveDescription:
         'The organisation’s fictitious wallet will be debited and the simulated partner takes over.',

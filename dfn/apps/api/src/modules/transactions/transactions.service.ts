@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import type { Prisma } from '@dfn/database';
 import { renderProtectContract, type ProtectContractTerms } from '@dfn/contracts';
 import {
+  globalRoleHas,
   CANCELLABLE_TRANSACTION_STATES,
   ErrorCode,
   Permission,
@@ -279,10 +280,19 @@ export class TransactionsService {
   async list(auth: AuthContext, query: ListTransactionsQuery) {
     const orgIds = auth.memberships.map((m) => m.organizationId);
     const asBuyer: Prisma.TransactionWhereInput = { buyerOrganizationId: { in: orgIds } };
+    // Seller-side transactions the user joined personally (invitation accepted before an
+    // organisation was attached) are resolved up front: a `parties: { some }` filter becomes a
+    // correlated EXISTS over every candidate row, far too slow on large tables (docs/operations/PERFORMANCE.md).
+    const sellerPartyTxIds = (
+      await this.prisma.transactionParty.findMany({
+        where: { role: 'SELLER', userId: auth.userId },
+        select: { transactionId: true },
+      })
+    ).map((p) => p.transactionId);
     const asSeller: Prisma.TransactionWhereInput = {
       OR: [
         { sellerOrganizationId: { in: orgIds } },
-        { parties: { some: { role: 'SELLER', userId: auth.userId } } },
+        ...(sellerPartyTxIds.length ? [{ id: { in: sellerPartyTxIds } }] : []),
       ],
     };
     const scope: Prisma.TransactionWhereInput =
@@ -343,7 +353,13 @@ export class TransactionsService {
       this.payments.escrowBalance(tx),
       this.verificationSnapshot(tx),
     ]);
-    return toTransactionDto(tx, role, { escrowBalanceMinor, verification, userId: auth.userId });
+    return toTransactionDto(tx, role, {
+      escrowBalanceMinor,
+      verification,
+      userId: auth.userId,
+      canSimulatePartner: globalRoleHas(auth.globalRole, Permission.SANDBOX_PARTNER_SIMULATE),
+      partyOrgRole: this.access.partyOrgRole(auth, tx, role),
+    });
   }
 
   async events_(auth: AuthContext, id: string) {
@@ -554,7 +570,7 @@ export class TransactionsService {
 
   async resendInvitation(auth: AuthContext, id: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER');
     const seller = tx.parties.find((p) => p.role === 'SELLER');
     if (!seller || seller.status !== 'INVITED')
       throw DomainError.invalidTransition('The seller has already responded');
@@ -607,7 +623,7 @@ export class TransactionsService {
 
   async acceptTerms(auth: AuthContext, id: string, contractVersionId: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER', 'SELLER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER', 'SELLER');
     const version = tx.contract?.currentVersion;
     if (!version || version.id !== contractVersionId)
       throw DomainError.conflict('Contract version is not current');
@@ -678,7 +694,7 @@ export class TransactionsService {
     req: Request,
   ) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER');
     const verification = await this.verificationSnapshot(tx);
     if (!verification.fundingAllowed) {
       throw new DomainError(
@@ -696,7 +712,9 @@ export class TransactionsService {
 
   async cancel(auth: AuthContext, id: string, reason: string, req: Request) {
     const { tx, role } = await this.access.loadFor(auth, id);
-    this.access.assertRole(role, 'BUYER', 'SELLER', 'STAFF');
+    // Only the parties cancel (with TRANSACTION_MANAGE): staff are read-only on Protect transactions
+    // (no support write).
+    this.access.assertPartyCan(auth, tx, role, 'BUYER', 'SELLER');
     if (!CANCELLABLE_TRANSACTION_STATES.includes(tx.status)) {
       throw DomainError.invalidTransition(
         `A ${tx.status} transaction cannot be cancelled; open a dispute instead`,

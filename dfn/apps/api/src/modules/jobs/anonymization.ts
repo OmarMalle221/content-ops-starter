@@ -32,6 +32,7 @@ export interface AnonymizedUserFields {
   country: string | null;
   mfaSecretEnc: null;
   mfaEnabled: false;
+  mfaLastUsedStep: null;
   passwordHash: string;
   securityPreferences: null;
   status: UserStatus;
@@ -59,6 +60,7 @@ export function buildAnonymizedUser(
     country: user.country,
     mfaSecretEnc: null,
     mfaEnabled: false,
+    mfaLastUsedStep: null,
     passwordHash,
     securityPreferences: null,
     status: 'DEACTIVATED',

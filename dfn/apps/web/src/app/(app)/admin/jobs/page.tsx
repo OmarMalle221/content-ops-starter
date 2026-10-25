@@ -18,6 +18,7 @@ import {
 } from '@dfn/ui';
 import { StatusBadge } from '@/components/status-badge';
 import { RunJobButton } from '@/components/admin/jobs-actions';
+import { JobLeasesCard, formatTimestamp, type JobLease } from '@/components/admin/jobs-leases';
 import { summaryPreview } from '@/components/admin/jobs-summary';
 import { apiFetch } from '@/lib/api-server';
 import { formatDate } from '@/lib/format';
@@ -35,13 +36,33 @@ interface JobRun {
   durationMs: number | null;
   summary: Record<string, unknown> | null;
   error: string | null;
+  instanceId: string | null;
+  heartbeatAt: string | null;
 }
 interface JobsResponse {
   sandbox: boolean;
   schedulerEnabled: boolean;
+  driver: 'inprocess' | 'bullmq';
+  instanceId: string;
+  leaseSeconds: number;
   intervalMinutes: number;
   anonymizeAfterDays: number;
-  jobs: Array<{ name: string; registered: boolean; lastRun: JobRun | null }>;
+  leases: JobLease[];
+  scheduler: {
+    driver: string;
+    enabled: boolean;
+    started: boolean;
+    queue: string | null;
+    nextRuns: Record<string, string>;
+    error?: string;
+  };
+  jobs: Array<{
+    name: string;
+    registered: boolean;
+    lastRun: JobRun | null;
+    lease: JobLease | null;
+    nextRunAt: string | null;
+  }>;
 }
 interface RunsResponse {
   items: JobRun[];
@@ -81,6 +102,12 @@ export default async function AdminJobsPage({
     return label === `jobsAdmin.names.${name}` ? name : label;
   };
   const runsHref = (p: number, job = jobFilter) => `/admin/jobs?${job ? `job=${job}&` : ''}page=${p}`;
+  const driverLabel = (driver: string) => {
+    const label = t(`jobsAdmin.drivers.${driver}`);
+    return label === `jobsAdmin.drivers.${driver}` ? driver : label;
+  };
+  const driverDescription = t(`jobsAdmin.driverDescriptions.${data.driver}`);
+  const heartbeatSeconds = Math.max(1, Math.round(data.leaseSeconds / 3));
 
   return (
     <div className="space-y-6">
@@ -91,11 +118,18 @@ export default async function AdminJobsPage({
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           label={t('jobsAdmin.scheduler')}
           value={data.schedulerEnabled ? t('jobsAdmin.enabled') : t('jobsAdmin.disabled')}
-          hint={`${t('jobsAdmin.every')} ${data.intervalMinutes} ${t('jobsAdmin.minutes')}`}
+          hint={`${t('jobsAdmin.driver')}: ${driverLabel(data.driver)} · ${t('jobsAdmin.every')} ${data.intervalMinutes} ${t('jobsAdmin.minutes')}`}
+        />
+        <Stat
+          label={t('jobsAdmin.instance')}
+          value={<span className="break-all font-mono text-base">{data.instanceId}</span>}
+          hint={t('jobsAdmin.instanceHint')
+            .replace('{lease}', String(data.leaseSeconds))
+            .replace('{heartbeat}', String(heartbeatSeconds))}
         />
         <Stat
           label={t('jobsAdmin.registered')}
@@ -109,10 +143,31 @@ export default async function AdminJobsPage({
         />
       </div>
 
+      <JobLeasesCard
+        leases={data.leases}
+        instanceId={data.instanceId}
+        locale={locale}
+        t={t}
+        jobLabel={jobLabel}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>{t('jobsAdmin.job')}</CardTitle>
-          <CardDescription>{t('jobsAdmin.bullmq')}</CardDescription>
+          <CardDescription>
+            {driverLabel(data.driver)}
+            {data.scheduler.queue ? (
+              <span className="font-mono text-xs"> · {data.scheduler.queue}</span>
+            ) : null}
+            {driverDescription !== `jobsAdmin.driverDescriptions.${data.driver}`
+              ? ` — ${driverDescription}`
+              : null}
+          </CardDescription>
+          {data.scheduler.error ? (
+            <p className="text-xs text-destructive">
+              {t('jobsAdmin.schedulerError')}: {data.scheduler.error}
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent>
           <Table>
@@ -121,6 +176,7 @@ export default async function AdminJobsPage({
                 <TableHead>{t('jobsAdmin.job')}</TableHead>
                 <TableHead>{t('common.status')}</TableHead>
                 <TableHead>{t('jobsAdmin.lastRun')}</TableHead>
+                <TableHead>{t('jobsAdmin.nextRun')}</TableHead>
                 <TableHead>{t('jobsAdmin.triggeredBy')}</TableHead>
                 <TableHead>{t('jobsAdmin.summary')}</TableHead>
                 <TableHead />
@@ -144,6 +200,16 @@ export default async function AdminJobsPage({
                       ) : (
                         <Badge variant="muted">{t('jobsAdmin.notRegistered')}</Badge>
                       )}
+                      {job.lease && !job.lease.expired ? (
+                        <p className="mt-1 max-w-[12rem] break-all text-[11px] text-muted-foreground">
+                          {t('jobsAdmin.runningOn')}{' '}
+                          <span className="font-mono">
+                            {job.lease.ownerId === data.instanceId
+                              ? t('jobsAdmin.thisInstance')
+                              : job.lease.ownerId}
+                          </span>
+                        </p>
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       {job.lastRun ? (
@@ -157,6 +223,9 @@ export default async function AdminJobsPage({
                       ) : (
                         <span className="text-xs text-muted-foreground">{t('jobsAdmin.never')}</span>
                       )}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {job.nextRunAt ? formatDate(job.nextRunAt, locale, true) : t('jobsAdmin.notScheduled')}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {job.lastRun?.triggeredBy ?? '—'}
@@ -216,6 +285,7 @@ export default async function AdminJobsPage({
                   <TableHead>{t('jobsAdmin.job')}</TableHead>
                   <TableHead>{t('common.status')}</TableHead>
                   <TableHead>{t('jobsAdmin.triggeredBy')}</TableHead>
+                  <TableHead>{t('jobsAdmin.instanceColumn')}</TableHead>
                   <TableHead>{t('jobsAdmin.duration')}</TableHead>
                   <TableHead>{t('jobsAdmin.summary')}</TableHead>
                 </TableRow>
@@ -235,6 +305,14 @@ export default async function AdminJobsPage({
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {run.triggeredBy}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      <p className="max-w-[10rem] break-all font-mono">{run.instanceId ?? '—'}</p>
+                      {run.status === 'RUNNING' && run.heartbeatAt ? (
+                        <p className="text-[11px]">
+                          {t('jobsAdmin.heartbeatAt')}: {formatTimestamp(run.heartbeatAt, locale)}
+                        </p>
+                      ) : null}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {formatDuration(run.durationMs)}

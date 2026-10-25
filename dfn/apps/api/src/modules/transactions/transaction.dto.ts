@@ -1,6 +1,25 @@
-import { computeFeeMinor, minorToDecimalString } from '@dfn/shared';
-import { moneyDto } from '../../common/serialize';
+import type { OrgRole } from '@dfn/database';
+import { Permission, computeFeeMinor, minorToDecimalString, orgRoleHas } from '@dfn/shared';
+import { linkedDocumentDto, moneyDto } from '../../common/serialize';
 import type { TransactionWithRelations, ViewerRole } from './transaction-access.service';
+
+/**
+ * Party actions offered only when the party's organisation role grants TRANSACTION_MANAGE — the
+ * rule `TransactionAccessService.assertPartyCan` enforces. SIMULATE_PARTNER_CONFIRMATION is the
+ * sandbox stand-in for the funding confirmation, so it follows REQUEST_FUNDING.
+ */
+const MANAGE_ACTIONS: ReadonlySet<string> = new Set([
+  'RESEND_INVITATION',
+  'CANCEL',
+  'ACCEPT_TERMS',
+  'REQUEST_FUNDING',
+  'SIMULATE_PARTNER_CONFIRMATION',
+  'SUBMIT_MILESTONE',
+  'APPROVE_MILESTONE',
+  'REQUEST_CHANGES',
+]);
+/** Dispute actions: DISPUTE_OPEN (`DisputesService.open`). */
+const DISPUTE_ACTIONS: ReadonlySet<string> = new Set(['OPEN_DISPUTE', 'REQUEST_REFUND']);
 
 export interface VerificationSnapshot {
   buyerIdentity: string;
@@ -15,6 +34,10 @@ export function nextActionsFor(
   role: ViewerRole,
   verification: VerificationSnapshot,
   userId: string,
+  /** Staff may only simulate the partner when they hold SANDBOX_PARTNER_SIMULATE (ADMIN). */
+  canSimulatePartner = false,
+  /** The party's role in its own organisation (see `TransactionAccessService.partyOrgRole`). */
+  partyOrgRole: OrgRole | null = null,
 ): string[] {
   const actions: string[] = [];
   const buyerParty = tx.parties.find((p) => p.role === 'BUYER');
@@ -40,7 +63,8 @@ export function nextActionsFor(
   }
   if (tx.status === 'AWAITING_FUNDING') {
     const pending = tx.fundingRequests.find((f) => f.status === 'PENDING');
-    if (pending && (role === 'BUYER' || role === 'STAFF')) actions.push('SIMULATE_PARTNER_CONFIRMATION');
+    if (pending && (role === 'BUYER' || (role === 'STAFF' && canSimulatePartner)))
+      actions.push('SIMULATE_PARTNER_CONFIRMATION');
     if (!pending && role === 'BUYER') actions.push('REQUEST_FUNDING');
     if (role === 'BUYER') actions.push('CANCEL');
   }
@@ -59,13 +83,28 @@ export function nextActionsFor(
   if (!['SETTLED', 'REFUNDED', 'CANCELLED', 'EXPIRED'].includes(tx.status) && role !== 'STAFF')
     actions.push('UPLOAD_DOCUMENT');
   void userId;
-  return actions;
+  // A party acts for its organisation: each action is offered only when its organisation role
+  // grants the permission the API checks (a VIEWER is offered none).
+  if (role === 'STAFF') return actions;
+  const can = (permission: Permission) => Boolean(partyOrgRole && orgRoleHas(partyOrgRole, permission));
+  return actions.filter((action) => {
+    if (MANAGE_ACTIONS.has(action)) return can(Permission.TRANSACTION_MANAGE);
+    if (DISPUTE_ACTIONS.has(action)) return can(Permission.DISPUTE_OPEN);
+    if (action === 'UPLOAD_DOCUMENT') return can(Permission.DOCUMENT_UPLOAD);
+    return true;
+  });
 }
 
 export function toTransactionDto(
   tx: TransactionWithRelations,
   role: ViewerRole,
-  extras: { escrowBalanceMinor: bigint; verification: VerificationSnapshot; userId: string },
+  extras: {
+    escrowBalanceMinor: bigint;
+    verification: VerificationSnapshot;
+    userId: string;
+    canSimulatePartner?: boolean;
+    partyOrgRole?: OrgRole | null;
+  },
 ) {
   const ccy = tx.currencyCode;
   const buyerParty = tx.parties.find((p) => p.role === 'BUYER');
@@ -153,7 +192,7 @@ export function toTransactionDto(
         id: e.id,
         note: e.note,
         createdAt: e.createdAt,
-        document: e.document,
+        document: linkedDocumentDto(e.document),
       })),
     })),
     funding: latestFunding
@@ -171,7 +210,14 @@ export function toTransactionDto(
     verification: extras.verification,
     disputes: tx.disputes,
     documentCount: tx._count.documents,
-    nextActions: nextActionsFor(tx, role, extras.verification, extras.userId),
+    nextActions: nextActionsFor(
+      tx,
+      role,
+      extras.verification,
+      extras.userId,
+      extras.canSimulatePartner ?? false,
+      extras.partyOrgRole ?? null,
+    ),
     acceptedAt: tx.acceptedAt,
     fundedAt: tx.fundedAt,
     settledAt: tx.settledAt,

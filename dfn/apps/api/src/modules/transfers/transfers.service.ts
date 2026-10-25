@@ -1,7 +1,6 @@
 import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import type { Request } from 'express';
-import { authenticator } from 'otplib';
 import type { Prisma, PrismaTransactionClient, Transfer } from '@dfn/database';
 import {
   LedgerService,
@@ -11,6 +10,7 @@ import {
 } from '@dfn/financial-ledger';
 import { SANDBOX_PROVIDER_CODE } from '@dfn/payment-adapters';
 import {
+  globalRoleHas,
   ErrorCode,
   Permission,
   TransferEventType,
@@ -20,6 +20,7 @@ import {
   orgRoleHas,
   parseDecimalToMinor,
   securityPreferencesSchema,
+  StepUpOperation,
   transferMachine,
   type AuthorizeTransferInput,
   type CreateTransferInput,
@@ -28,15 +29,17 @@ import {
 } from '@dfn/shared';
 import type { RiskFacts } from '@dfn/compliance';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
-import { decryptString, randomToken } from '../../common/crypto';
+import { randomToken } from '../../common/crypto';
 import { DomainError } from '../../common/domain-error';
 import { DomainEventsBus } from '../../common/events/domain-events';
 import { paginate } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { moneyDto } from '../../common/serialize';
+import { staffUserWhere } from '../../common/staff-recipients';
 import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
+import { MfaVerifierService } from '../auth/mfa-verifier.service';
 import type { JobResult } from '../jobs/job-registry';
 import { LEDGER } from '../ledger/ledger.provider';
 import { WalletsService } from '../ledger/wallets.service';
@@ -117,6 +120,7 @@ export class TransfersService {
     private readonly risk: RiskService,
     private readonly bus: DomainEventsBus,
     @Inject(ENV) private readonly env: Env,
+    private readonly mfa: MfaVerifierService,
   ) {}
 
   // ───────────────────────────── Access ─────────────────────────────
@@ -332,7 +336,7 @@ export class TransfersService {
 
   private async notifyStaff(transfer: TransferWithRelations, title: string, body: string) {
     const staff = await this.prisma.user.findMany({
-      where: { status: 'ACTIVE', deletedAt: null, globalRole: { in: ['ADMIN', 'COMPLIANCE'] } },
+      where: staffUserWhere(this.env),
       select: { id: true },
     });
     await this.notifications.notifyMany(
@@ -531,10 +535,20 @@ export class TransfersService {
 
   // ───────────────────────────── Authorise ─────────────────────────────
 
-  private async assertMfa(auth: AuthContext, input: AuthorizeTransferInput) {
+  /**
+   * Transfer step-up. The proof — TOTP code (anti-replay), recovery code or passkey assertion for
+   * a STEP_UP challenge of this session issued for THIS transfer — is checked by
+   * MfaVerifierService (ADR-0009).
+   */
+  private async assertMfa(
+    auth: AuthContext,
+    transferId: string,
+    input: AuthorizeTransferInput,
+    req?: Request,
+  ) {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: auth.userId },
-      select: { mfaEnabled: true, mfaSecretEnc: true, securityPreferences: true },
+      select: { mfaEnabled: true, securityPreferences: true },
     });
     const parsed = securityPreferencesSchema.safeParse(user.securityPreferences ?? {});
     const prefs = parsed.success
@@ -542,16 +556,17 @@ export class TransfersService {
       : { requireMfaForTransfers: true, transferAlerts: true, dailyTransferLimit: null };
     const mfaRequired = user.mfaEnabled && prefs.requireMfaForTransfers !== false;
     if (mfaRequired) {
-      const secret = user.mfaSecretEnc
-        ? decryptString(this.env.DOCUMENT_ENCRYPTION_KEY, user.mfaSecretEnc)
-        : null;
-      if (!input.mfaCode || !secret || !authenticator.verify({ token: input.mfaCode, secret })) {
-        throw new DomainError(
-          ErrorCode.MFA_REQUIRED,
-          'A valid two-factor code is required to authorise this transfer',
-          HttpStatus.UNAUTHORIZED,
-        );
-      }
+      await this.mfa.assertFreshProof(
+        auth,
+        input,
+        { operation: StepUpOperation.TRANSFER_AUTHORIZE, resourceId: transferId },
+        {
+          code: ErrorCode.MFA_REQUIRED,
+          message: 'A valid two-factor code is required to authorise this transfer',
+          status: HttpStatus.UNAUTHORIZED,
+        },
+        req,
+      );
     }
     return { mfaVerified: mfaRequired, dailyTransferLimit: prefs.dailyTransferLimit ?? null };
   }
@@ -602,7 +617,7 @@ export class TransfersService {
       });
     }
     transferMachine.assertTransition(transfer.status, 'AUTHORIZED');
-    const { mfaVerified, dailyTransferLimit } = await this.assertMfa(auth, input);
+    const { mfaVerified, dailyTransferLimit } = await this.assertMfa(auth, transfer.id, input, req);
 
     if (dailyTransferLimit) {
       const limitMinor = nominalLimitToMinor(dailyTransferLimit, transfer.sourceCurrency);
@@ -633,7 +648,11 @@ export class TransfersService {
       destinationCountry: transfer.destinationCountry,
       beneficiaryCreatedAt: beneficiary?.createdAt ?? null,
     });
-    const evaluation = await this.risk.evaluateAndRecord({ ...facts, event: 'transfer.authorized' });
+    const evaluation = await this.risk.evaluateAndRecord({
+      ...facts,
+      event: 'transfer.authorized',
+      operationReference: transfer.reference,
+    });
     const meta = requestMeta(req);
 
     if (evaluation.recommendation === 'MANUAL_REVIEW') {
@@ -1253,7 +1272,12 @@ export class TransfersService {
       this.prisma.transfer.count({ where }),
     ]);
     return {
-      ...paginate(items.map(toTransferSummary), total, query.page, query.pageSize),
+      ...paginate(
+        items.map((t) => toTransferSummary(t, { isStaff: isStaff(auth) })),
+        total,
+        query.page,
+        query.pageSize,
+      ),
       simulated: true,
       disclaimer: TRANSFER_DISCLAIMER_FR,
     };
@@ -1302,7 +1326,7 @@ export class TransfersService {
     return {
       ...paginate(
         items.map((t) => ({
-          ...toTransferSummary(t),
+          ...toTransferSummary(t, { isStaff: true }),
           createdBy: t.createdBy
             ? {
                 id: t.createdBy.id,
@@ -1453,8 +1477,11 @@ export class TransfersService {
 
   /** Helper for controllers: the viewer may act on the sandbox partner events of this transfer. */
   assertPartnerSimulationAllowed(auth: AuthContext, transfer: Pick<Transfer, 'organizationId'>) {
-    if (isStaff(auth)) return;
+    if (globalRoleHas(auth.globalRole, Permission.SANDBOX_PARTNER_SIMULATE)) return;
     const membership = membershipFor(auth, transfer.organizationId);
+    if (!membership && isStaff(auth)) {
+      throw DomainError.forbidden('Simulating partner events requires the sandbox partner permission');
+    }
     if (!membership) throw DomainError.notFound('Transfer');
     if (!orgRoleHas(membership.role, Permission.TRANSFER_CREATE)) {
       throw DomainError.forbidden(`Your role (${membership.role}) does not allow simulating partner events`);

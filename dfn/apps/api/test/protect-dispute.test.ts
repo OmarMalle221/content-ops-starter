@@ -57,6 +57,12 @@ describe('Scenario 2 — dispute freezes releases', () => {
     expect(opened.status, JSON.stringify(opened.body)).toBe(201);
     expect(opened.body.status).toBe('OPEN');
     expect(opened.body.evidences).toHaveLength(1);
+    // Evidence carries the antivirus verdict and a download link (never one for an INFECTED file).
+    expect(opened.body.evidences[0].document).toMatchObject({
+      id: photo,
+      scan: { status: 'CLEAN', engine: 'sandbox-eicar' },
+      downloadUrl: `/v1/documents/${photo}/download`,
+    });
     const disputeId = opened.body.id;
 
     tx = (await actors.buyer.get(`/v1/transactions/${txId}`)).body;

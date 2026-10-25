@@ -10,14 +10,15 @@ Monorepo pnpm : **Next.js 15** (web) · **NestJS 11** (API REST + OpenAPI) · **
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md)                          | vision, personas, six modules, workflows, critères d'acceptation                                                        |
 | [ARCHITECTURE.md](ARCHITECTURE.md) · [docs/architecture](docs/architecture) | monolithe modulaire, flux Protect, registre, tâches planifiées, simulation DDA                                          |
-| [DATA_MODEL.md](DATA_MODEL.md)                                              | 51 tables, invariants, conservation et anonymisation                                                                    |
+| [DATA_MODEL.md](DATA_MODEL.md)                                              | 57 tables, invariants, conservation et anonymisation                                                                    |
 | [SECURITY.md](SECURITY.md) · [docs/security](docs/security)                 | security-by-design, clés API, webhooks, idempotence                                                                     |
-| [ROADMAP.md](ROADMAP.md)                                                    | phases 0–6, état d'avancement, rapport de livraison                                                                     |
+| [ROADMAP.md](ROADMAP.md)                                                    | phases 0–7, état d'avancement, rapports de livraison                                                                    |
+| [docs/operations](docs/operations)                                          | exploitation : runbook, rotation des clés, observabilité, performances mesurées                                         |
 | [docs/api](docs/api)                                                        | guide API partenaires + `openapi.json`                                                                                  |
 | [docs/compliance](docs/compliance)                                          | checklists CANAFE, Banque du Canada, AMF Québec, BCEAO, BCRG, KYC/KYB, AML, données, litiges, stablecoin, autorisations |
-| [docs/decisions](docs/decisions)                                            | ADR 0001–0008                                                                                                           |
+| [docs/decisions](docs/decisions)                                            | ADR 0001–0016                                                                                                           |
 
-## Ce qui est livré (phases 0 à 5, sandbox)
+## Ce qui est livré (phases 0 à 7, sandbox)
 
 - **Fondations** : inscription/connexion, sessions serveur en cookie httpOnly, verrouillage après 5 échecs, **MFA TOTP**, organisations personnelles/entreprises, rôles, invitations, **journal d'audit**, notifications, design system, navigation FR/EN.
 - **Diaspora Protect (P0)** : transactions à jalons, invitation du vendeur, **contrat numérique versionné et haché**, acceptation des conditions, **KYC/KYB simulées**, demande de financement, **partenaire simulé** confirmant la réception des fonds fictifs, documents **chiffrés au repos**, soumission/validation des preuves, **libérations fictives** jalon par jalon, **litiges avec gel automatique des libérations**, décisions motivées, appel, remboursement, historique complet.
@@ -31,7 +32,11 @@ Monorepo pnpm : **Next.js 15** (web) · **NestJS 11** (API REST + OpenAPI) · **
 - **Conformité** : moteur de règles explicable (13 règles dont 5 pour les transferts), alertes, file de revue, historique des décisions ; interfaces prêtes pour des fournisseurs KYC/sanctions agréés.
 - **Administration** : utilisateurs, vérifications, litiges, anomalies, transferts, tâches, journal d'audit, registre + réconciliation, laboratoire DDA.
 
-Non livré (voir ROADMAP, phase 6) : fournisseurs KYC / FX agréés (interfaces seulement), passkeys, stockage objet, build compilé, tests de charge, **relecture juridique des checklists de conformité** (tâche humaine).
+- **Phase 6 — durcissement** : **passkeys** (connexion sans mot de passe, vérification renforcée), anti-rejeu TOTP et **codes de secours**, **trousseau de clés** par usage avec rotation, **stockage chiffré local ou compatible S3**, **tâches distribuées** (baux, BullMQ) et limites de débit Redis, **files de revue conformité** (échéances, assignation, export) et détection du **fractionnement**, **registre des portes réglementaires** (suivi uniquement, quatre yeux), **adaptateurs partenaires de référence** jamais activables en sandbox, personnel en lecture seule dans les espaces clients, **liens clients soumis à acceptation**, **build compilé**, conteneurs durcis, **sauvegarde/restauration testées**, tests de charge et 9 parcours Playwright.
+
+- **Phase 7 — volet technique (livré en sandbox)** : **clés gérées par un KMS** (enveloppe, `local` simulé ou AWS KMS, cycle de vie et rotation planifiée, retrait de la clé historique), **observabilité** (`/metrics` Prometheus, traces `traceparent`, alertes et tableau de bord, profil compose), **antivirus** avant stockage (`sandbox` = simulation EICAR, `clamd`), **purge différée** alignée sur la rétention, **migration local → S3** vérifiée et tests live S3/KMS contre un émulateur AWS, **step-up lié à l'opération**, verrouillage atomique des tentatives, rôles d'organisation appliqués aux actions Protect, adresse client fixée par le web.
+
+Non livré (voir ROADMAP, phase 7) : contrats et intégration de fournisseurs agréés, audit de sécurité indépendant, essai contre un vrai service S3 et un vrai KMS, et surtout la **relecture juridique des checklists de conformité** (tâche humaine).
 
 ## Démarrage rapide
 
@@ -44,7 +49,8 @@ Node.js ≥ 22, pnpm ≥ 10 (`corepack enable`), PostgreSQL 16 et Redis 7 (ou Do
 ```bash
 cd dfn
 cp .env.example .env            # puis remplacer SESSION_SECRET et DOCUMENT_ENCRYPTION_KEY (openssl rand -hex 32)
-docker compose up --build       # web http://localhost:3000 — API http://localhost:4000/docs
+# + POSTGRES_PASSWORD et REDIS_PASSWORD (voir docs/operations/RUNBOOK.md)
+docker compose up --build       # migrations, API compilée, web — http://localhost:3000, API http://localhost:4000/docs
 docker compose --profile seed run --rm seed   # comptes et transactions de démonstration
 ```
 
@@ -59,7 +65,7 @@ pnpm db:seed
 pnpm dev                        # API :4000 (ts-node --watch) + web :3000 (next dev)
 ```
 
-Les variables de `.env` sont lues par l'API ; le web lit `API_INTERNAL_URL` (défaut `http://localhost:4000`). Les variables des phases 3–5 (`JOBS_*`, `ANONYMIZE_AFTER_DAYS`, `FX_*`, `SANDBOX_SELF_DEPOSIT_DAILY_LIMIT`, `WEBHOOK_*`, `IDEMPOTENCY_TTL_HOURS`) sont documentées dans `.env.example`.
+Les variables de `.env` sont lues par l'API ; le web lit `API_INTERNAL_URL` (défaut `http://localhost:4000`), **figée au moment de `next build`** (réécriture de `/api/v1/*` seulement : `/metrics` et `/docs` ne passent pas par le web). Les variables des phases 3 à 6 (`JOBS_*`, `ANONYMIZE_AFTER_DAYS`, `FX_*`, `SANDBOX_SELF_DEPOSIT_DAILY_LIMIT`, `WEBHOOK_*`, `IDEMPOTENCY_TTL_HOURS`, `ENCRYPTION_KEYRING`, `STORAGE_DRIVER`/`S3_*`, `WEBAUTHN_*`, `JOBS_DRIVER`, `RATE_LIMIT_STORE`, `TRUST_PROXY`, `REQUIRE_STAFF_MFA`, `REVIEW_SLA_HOURS_*`, `STRUCTURING_*`) sont documentées dans `.env.example`.
 
 ### Comptes de démonstration (seed)
 
@@ -72,6 +78,27 @@ Les variables de `.env` sont lues par l'API ; le web lit `API_INTERNAL_URL` (dé
 | `ibrahima@demo.dfn`   | membre de « Dakar Auto Import »                 |
 
 Mot de passe : `Demo-Sandbox-2026!Protect` (ou `SEED_DEMO_PASSWORD`). Comptes sandbox : à régénérer avant tout déploiement partagé ; activez la MFA depuis _Paramètres_.
+
+### Données de démonstration étendues (phase 6)
+
+Le seed (`pnpm db:seed`, soit `pnpm --filter @dfn/database seed`) ajoute un jeu complet pour parcourir Wallet, Transfer, Business, l'API partenaires et la file de conformité. Tout est **fictif** (« Données fictives — Aucun fonds réel ») et **idempotent** : chaque enregistrement est retrouvé par une clé de seed, chaque écriture comptable porte une clé d'idempotence fixe ; relancer le seed ne crée aucune donnée métier de plus (seuls une entrée d'audit `system.seed` et un rapport de réconciliation s'ajoutent à chaque exécution). Les soldes ne sont jamais stockés : ils découlent d'écritures équilibrées passées par `LedgerService`, et le seed se termine par `LedgerService.reconcile()` — il échoue au moindre écart ou à la moindre transaction déséquilibrée.
+
+| Domaine                      | Données créées                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Portefeuilles                | dépôts sandbox : `moussa@demo.dfn` +10 000,00 CAD et +800,00 EUR, « Dakar Auto Import » +2 500 000 XOF. Soldes après seed : Moussa **11 238,39 CAD · 800,00 EUR** ; Dakar Auto Import **24 500,00 CAD · 2 500 000 XOF**                                                                                                                                                                                                                                                                                     |
+| Bénéficiaires (Moussa)       | « Awa Diop (démo) » (Sénégal, XOF, compte bancaire), « Mame Diarra Sarr (démo) » (Sénégal, XOF, mobile money), « Mamadou Bah (démo) » (Guinée, GNF, mobile money) — identifiants chiffrés, seule la forme masquée `••••1234` est affichée                                                                                                                                                                                                                                                                   |
+| Transferts (Moussa)          | `DFT-<année>-DEMO01` **SETTLED** (300,00 CAD → Awa Diop), `DEMO02` **PROCESSING** (450,00 CAD → Mame Diarra Sarr ; la tâche `TRANSFER_PROCESSING` ou le bouton _Simuler le règlement du partenaire_ le règle), `DEMO03` **REVIEW_REQUIRED** (9 400,00 CAD → Mamadou Bah, score 65 : structuration + bénéficiaire récent ; rien n'est débité avant la revue) — mêmes écritures que l'API : portefeuille → `FX_CLEARING` + `PLATFORM_FEES`, puis `FX_CLEARING` → règlement partenaire pour le transfert réglé |
+| Conformité                   | deux alertes sur `DEMO03`, **assignées à `compliance@demo.dfn`** : `STRUCTURING` (HIGH, échéance 24 h, ouverte) et `NEW_BENEFICIARY_HIGH_VALUE` (MEDIUM, échéance 72 h, en revue) — _Administration › Anomalies_ (`/admin/risk`)                                                                                                                                                                                                                                                                            |
+| Business (Dakar Auto Import) | client « Moussa Ndiaye » **lié** à l'espace de Moussa (lien `ACCEPTED`) ; factures `INV-<année>-0001` brouillon (TVA 18 %), `0002` envoyée, `0003` partiellement payée (500,00 CAD payés depuis le portefeuille de Moussa, écriture au registre), `0004` payée (virement fictif enregistré) ; devis `QUO-<année>-0001` brouillon, `0002` envoyé, `0003` accepté (prêt à convertir) — taux de taxe (`taxBps`) enregistré                                                                                     |
+| API partenaires              | clé sandbox « Clé sandbox de démonstration (seed) » de Dakar Auto Import (lecture seule, 60 req/min, 90 jours) : **le secret `dfn_sk_…` n'est affiché qu'une fois dans la console du seed** (seul son hachage SHA-256 est stocké ; à la relance, seul le préfixe est rappelé — faire tourner la clé depuis _Développeurs_ si besoin) ; webhook **désactivé** vers `https://example.invalid/webhooks` (domaine réservé, jamais joignable)                                                                    |
+
+Le seed chiffre les identifiants de bénéficiaires et le secret du webhook comme l'API : `DOCUMENT_ENCRYPTION_KEY` (et `ENCRYPTION_KEYRING` s'il est utilisé) doivent avoir **les mêmes valeurs que pour l'API**. Les variables absentes de l'environnement sont lues dans le `.env` à la racine du monorepo ; sans clé disponible, bénéficiaires, transferts, alertes et webhook sont ignorés avec un avertissement (le reste est créé).
+
+```bash
+DATABASE_URL=postgresql://…/dfn pnpm --filter @dfn/database seed   # deux exécutions successives : la seconde n'ajoute rien
+```
+
+Parcours suggérés : `moussa@demo.dfn` → _Portefeuille_ (soldes, filtres, relevé CSV) puis _Transferts_ (`DEMO02` à régler, `DEMO03` en revue) ; `compliance@demo.dfn` → _Administration › Anomalies_ (`/admin/risk`) et _Administration › Transferts_ (approuver ou rejeter `DEMO03`) ; `awa@demo.dfn` → _Business_ (facture partiellement payée, devis à convertir) et _Développeurs_. Les journeys Playwright de la phase 6 (`apps/web/e2e/{wallet,transfers,business,developers}.spec.ts`) rejouent ces écrans avec des comptes neufs ; les tests de charge et de concurrence sont décrits dans [docs/operations/PERFORMANCE.md](docs/operations/PERFORMANCE.md).
 
 ## Scénarios de démonstration
 
@@ -98,20 +125,23 @@ Mot de passe : `Demo-Sandbox-2026!Protect` (ou `SEED_DEMO_PASSWORD`). Comptes sa
 
 ## Commandes
 
-| Commande                                | Effet                                                                                                                                                                                                                 |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm typecheck` / `pnpm lint`          | TypeScript strict sur tous les paquets, ESLint (API et web)                                                                                                                                                           |
-| `pnpm test:unit`                        | tests unitaires des paquets (money, machines à états, schémas, règles de risque, adaptateurs, FX, contrats) + **tests du registre contre PostgreSQL** (`TEST_DATABASE_URL`)                                           |
-| `pnpm test:api`                         | tests d'intégration NestJS + supertest : auth, gouvernance, **Protect (2 scénarios obligatoires)**, wallet, tâches et anonymisation, transferts, business, API partenaires (clés, scopes, idempotence, webhooks), DDA |
-| `pnpm test:e2e`                         | Playwright (web + API en cours d'exécution)                                                                                                                                                                           |
-| `pnpm --filter @dfn/api openapi:export` | régénère `docs/api/openapi.json`                                                                                                                                                                                      |
-| `pnpm format` / `pnpm format:check`     | Prettier                                                                                                                                                                                                              |
+| Commande                                        | Effet                                                                                                                                                                                                                 |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm typecheck` / `pnpm lint`                  | TypeScript strict sur tous les paquets, ESLint (API et web)                                                                                                                                                           |
+| `pnpm test:unit`                                | tests unitaires des paquets (money, machines à états, schémas, règles de risque, adaptateurs, FX, contrats) + **tests du registre contre PostgreSQL** (`TEST_DATABASE_URL`)                                           |
+| `pnpm test:api`                                 | tests d'intégration NestJS + supertest : auth, gouvernance, **Protect (2 scénarios obligatoires)**, wallet, tâches et anonymisation, transferts, business, API partenaires (clés, scopes, idempotence, webhooks), DDA |
+| `pnpm test:e2e`                                 | Playwright (web + API en cours d'exécution)                                                                                                                                                                           |
+| `pnpm build:api` / `node apps/api/dist/main.js` | bundle compilé de l'API (tsup) et démarrage de production                                                                                                                                                             |
+| `pnpm --filter @dfn/api test:load`              | tests de charge autocannon (`BASE_URL`), objectifs p95 du PRD                                                                                                                                                         |
+| `pnpm ops:backup` / `pnpm ops:restore-test`     | sauvegarde chiffrable et exercice de restauration avec réconciliation du registre                                                                                                                                     |
+| `pnpm --filter @dfn/api openapi:export`         | régénère `docs/api/openapi.json`                                                                                                                                                                                      |
+| `pnpm format` / `pnpm format:check`             | Prettier                                                                                                                                                                                                              |
 
-Tests exécutés dans cette itération : 53 tests unitaires/ledger, 108 tests d'intégration API, 3 tests Playwright — tous verts (rapport de livraison dans `ROADMAP.md` §12).
+Tests exécutés après la revue d'intégration de la phase 7 (2026-10-23) : 156 tests unitaires de paquets, 332 tests d'intégration API (tests live S3 et KMS contre moto inclus), 4 tests unitaires du web, 9 parcours Playwright et exercice de restauration ; démarrage de fumée et tests de charge à la livraison du volet technique — tous verts (rapports dans `ROADMAP.md` §14 et §14.1).
 
 ## Déploiement sandbox
 
-`docs/architecture` et `docker-compose.yml` décrivent le déploiement : quatre conteneurs (`api`, `web`, `postgres`, `redis`). Avant tout environnement partagé : secrets uniques, `COOKIE_SECURE=true` derrière TLS, `CORS_ORIGINS` et `WEB_PUBLIC_URL` réels, sauvegardes PostgreSQL testées, stockage des documents sur un volume chiffré (adaptateur S3 prévu), une seule réplique de l'API tant que le planificateur est en mémoire. **Aucun déploiement en production n'est autorisé sans validation juridique et contractuelle** (voir `docs/compliance/AUTHORIZATIONS_CHECKLIST.md`).
+`docker-compose.yml` décrit la pile : `postgres`, `redis`, une tâche `migrate` exécutée avant l'API, l'`api` compilée (utilisateur non root, système de fichiers en lecture seule), le `web`, et en option `s3` + `s3-init` (SeaweedFS, profil `s3`) et `seed` (profil `seed`). La procédure complète (secrets, mise à l'échelle, sauvegardes, exercice de restauration, incidents) est dans `docs/operations/RUNBOOK.md`. Avant tout environnement partagé : secrets uniques, `ENCRYPTION_KEYRING` renseigné, `COOKIE_SECURE=true` derrière TLS, `CORS_ORIGINS`, `WEB_PUBLIC_URL` et `WEBAUTHN_*` réels, `REQUIRE_STAFF_MFA=true`, API publiée sur la boucle locale ou derrière un proxy déclaré dans `TRUST_PROXY`, et pour plusieurs réplicas `JOBS_DRIVER=bullmq`, `RATE_LIMIT_STORE=redis`, `STORAGE_DRIVER=s3`. **Aucun déploiement en production n'est autorisé sans validation juridique et contractuelle** (voir `docs/compliance/AUTHORIZATIONS_CHECKLIST.md` et `/admin/gates`).
 
 ## Structure
 

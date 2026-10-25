@@ -1,9 +1,12 @@
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { LogOut, Menu, Plus, X } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { LogOut, Menu, Plus, ShieldAlert, X } from 'lucide-react';
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Badge,
   Button,
   DropdownMenu,
@@ -24,7 +27,10 @@ export interface ShellUser {
   firstName: string;
   lastName: string;
   email: string;
+  /** Effective role from /v1/auth/me ('USER' while a staff account still needs MFA). */
   globalRole: string;
+  /** REQUIRE_STAFF_MFA: staff role on record, staff tools off until MFA is enabled. */
+  staffMfaRequired?: boolean;
 }
 
 export function AppShell({
@@ -38,6 +44,7 @@ export function AppShell({
 }) {
   const { t } = useI18n();
   const router = useRouter();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const staff = user.globalRole !== 'USER';
 
@@ -117,7 +124,25 @@ export function AppShell({
           </div>
         ) : null}
         <main className="flex-1 px-4 py-6 lg:px-8 lg:py-8">
-          <div className="mx-auto w-full max-w-6xl animate-fade-in">{children}</div>
+          <div className="mx-auto w-full max-w-6xl animate-fade-in">
+            {user.staffMfaRequired ? (
+              <Alert variant="warning" className="mb-6">
+                <ShieldAlert className="size-4" />
+                <AlertTitle>{t('passkeys.staffMfa.title')}</AlertTitle>
+                <AlertDescription className="space-y-3">
+                  <p>{t('passkeys.staffMfa.body')}</p>
+                  {pathname === '/settings' ? (
+                    <p className="font-medium">{t('passkeys.staffMfa.onSettings')}</p>
+                  ) : (
+                    <Button asChild size="sm">
+                      <Link href="/settings">{t('passkeys.staffMfa.action')}</Link>
+                    </Button>
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {children}
+          </div>
         </main>
       </div>
     </div>

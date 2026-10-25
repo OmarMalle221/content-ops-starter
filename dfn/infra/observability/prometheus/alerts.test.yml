@@ -1,0 +1,323 @@
+# promtool unit tests of alerts.yml — run: promtool test rules alerts.test.yml (CI: quality job).
+# SANDBOX: synthetic series only. Each case shows when a rule fires and when it stays quiet.
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  # API down after 2 minutes, not while it answers
+  - interval: 1m
+    input_series:
+      - series: 'up{job="dfn-api", instance="api:4000"}'
+        values: '0x10'
+      - series: 'up{job="dfn-api", instance="api2:4000"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DfnApiDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DfnApiDown
+        exp_alerts:
+          - exp_labels:
+              instance: 'api:4000'
+              job: 'dfn-api'
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: 'Prometheus could not scrape api:4000 for 2 minutes (process down, port closed, token refused or metrics disabled).'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnapidown'
+              summary: 'API replica api:4000 is not answering GET /metrics'
+  # No API replica discovered for 5 minutes
+  - interval: 1m
+    input_series:
+      - series: 'dfn_api_info{job="other"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DfnApiAbsent
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DfnApiAbsent
+        exp_alerts:
+          - exp_labels:
+              job: 'dfn-api'
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: 'The dfn-api scrape job has no target for 5 minutes: the api service is gone or its DNS name does not resolve from Prometheus.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnapiabsent'
+              summary: 'No API replica is discovered'
+  # 5xx above 5 % with real traffic for 10 minutes; ignored under 0.2 req/s
+  - interval: 1m
+    input_series:
+      - series: 'dfn_http_requests_total{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", status="200"}'
+        values: '0+90x30'
+      - series: 'dfn_http_requests_total{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", status="500"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DfnApiHigh5xxRatio
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DfnApiHigh5xxRatio
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: 'Over the last 5 minutes 10% of the requests (all replicas) ended in a server error, with at least 0.2 req/s of traffic.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnapihigh5xxratio'
+              summary: 'More than 5 % of API answers are 5xx'
+  # 5xx ratio high but traffic below 0.2 req/s: no page
+  - interval: 1m
+    input_series:
+      - series: 'dfn_http_requests_total{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", status="200"}'
+        values: '0+5x30'
+      - series: 'dfn_http_requests_total{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", status="500"}'
+        values: '0+5x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DfnApiHigh5xxRatio
+        exp_alerts: []
+  # p95 latency above 1 s for 10 minutes
+  - interval: 1m
+    input_series:
+      - series: 'dfn_http_request_duration_seconds_bucket{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", le="0.5"}'
+        values: '0+1x30'
+      - series: 'dfn_http_request_duration_seconds_bucket{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", le="1"}'
+        values: '0+1x30'
+      - series: 'dfn_http_request_duration_seconds_bucket{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", le="2.5"}'
+        values: '0+20x30'
+      - series: 'dfn_http_request_duration_seconds_bucket{job="dfn-api", instance="api:4000", method="GET", route="/v1/transactions", le="+Inf"}'
+        values: '0+20x30'
+      - series: 'dfn_http_request_duration_seconds_bucket{job="dfn-api", instance="api:4000", method="GET", route="/metrics", le="+Inf"}'
+        values: '0+500x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DfnApiHighLatencyP95
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: 'The 95th percentile of the response time of the routed requests (all replicas) is 2.421s over the last 5 minutes.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnapihighlatencyp95'
+              summary: 'API p95 latency above 1 s'
+  # Registered job that never succeeded for an hour; quiet once it has a success
+  - interval: 1m
+    input_series:
+      - series: 'dfn_maintenance_job_registered{job="dfn-api", instance="api:4000", job_name="RECONCILIATION"}'
+        values: '1x80'
+      - series: 'dfn_maintenance_job_registered{job="dfn-api", instance="api:4000", job_name="DOCUMENT_PURGE"}'
+        values: '1x80'
+      - series: 'dfn_maintenance_job_last_success_age_seconds{job="dfn-api", instance="api:4000", job_name="DOCUMENT_PURGE"}'
+        values: '60x80'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DfnMaintenanceJobNeverSucceeded
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: DfnMaintenanceJobNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              job_name: 'RECONCILIATION'
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: 'A replica registers RECONCILIATION with the scheduler, yet no COMPLETED MaintenanceRun exists after an hour (four ticks): the scheduler never started (JOBS_ENABLED, JOBS_DRIVER / Redis), no replica runs it, or every run so far failed.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnmaintenancejobneversucceeded'
+              summary: 'Maintenance job RECONCILIATION is registered but has never succeeded'
+  # Last run FAILED for 30 minutes
+  - interval: 1m
+    input_series:
+      - series: 'dfn_maintenance_job_last_run_status{job="dfn-api", instance="api:4000", job_name="KEY_LIFECYCLE", status="FAILED"}'
+        values: '1x40'
+      - series: 'dfn_maintenance_job_last_run_status{job="dfn-api", instance="api:4000", job_name="KEY_LIFECYCLE", status="COMPLETED"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DfnMaintenanceJobFailed
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: DfnMaintenanceJobFailed
+        exp_alerts:
+          - exp_labels:
+              job_name: 'KEY_LIFECYCLE'
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: 'The latest run of KEY_LIFECYCLE is FAILED and no later run succeeded within 30 minutes (two scheduler ticks).'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnmaintenancejobfailed'
+              summary: 'Maintenance job KEY_LIFECYCLE keeps failing'
+  # Antivirus without verdict: two refusals page, one does not; size-limit refusals have their own alert
+  - interval: 1m
+    input_series:
+      - series: 'dfn_document_scans_total{job="dfn-api", instance="api:4000", engine="clamd", outcome="UNAVAILABLE", reason="UNREACHABLE"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2 3 3 3 3'
+      - series: 'dfn_document_scans_total{job="dfn-api", instance="api:4000", engine="clamd", outcome="UNAVAILABLE", reason="SIZE_LIMIT"}'
+        values: '0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'dfn_document_scans_total{job="dfn-api", instance="api:4000", engine="clamd", outcome="CLEAN", reason="none"}'
+        values: '0+3x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DfnDocumentScanUnavailable
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DfnDocumentScanUnavailable
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: DfnDocumentScanUnavailable
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: 'Uploads refused with 503 SCAN_UNAVAILABLE over 15 minutes (fail closed): about 2; no document can be added until the scanner answers again.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfndocumentscanunavailable'
+              summary: 'Uploads are refused: the antivirus gives no verdict'
+      - eval_time: 5m
+        alertname: DfnDocumentScanSizeLimit
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DfnDocumentScanSizeLimit
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: 'Uploads refused with 503 SCAN_UNAVAILABLE (SIZE_LIMIT) over 1 hour: about 1; the engine accepts less than MAX_UPLOAD_MB (clamd StreamMaxLength).'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfndocumentscansizelimit'
+              summary: 'The antivirus refuses files below the upload limit'
+  # Infected document row
+  - interval: 1m
+    input_series:
+      - series: 'dfn_documents{job="dfn-api", instance="api:4000", scan_status="INFECTED"}'
+        values: '0 0 1 1'
+      - series: 'dfn_documents{job="dfn-api", instance="api:4000", scan_status="CLEAN"}'
+        values: '5x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DfnDocumentInfected
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DfnDocumentInfected
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: '1 Document rows are INFECTED. Uploads refuse infected files before storage, so such a row means a later scan or a manual change: the blob must stay unserved.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfndocumentinfected'
+              summary: 'A document row carries the INFECTED verdict'
+  # Purpose with managed keys but none ACTIVE for 15 minutes; a purpose without managed keys is quiet
+  - interval: 1m
+    input_series:
+      - series: 'dfn_encryption_keys{job="dfn-api", instance="api:4000", purpose="documents", status="ACTIVE"}'
+        values: '0x30'
+      - series: 'dfn_encryption_keys{job="dfn-api", instance="api:4000", purpose="documents", status="DECRYPT_ONLY"}'
+        values: '1x30'
+      - series: 'dfn_encryption_keys{job="dfn-api", instance="api:4000", purpose="mfa", status="ACTIVE"}'
+        values: '0x30'
+      - series: 'dfn_encryption_keys{job="dfn-api", instance="api:4000", purpose="mfa", status="DECRYPT_ONLY"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DfnEncryptionKeyNoActive
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DfnEncryptionKeyNoActive
+        exp_alerts:
+          - exp_labels:
+              purpose: 'documents'
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: 'Values of purpose documents can be opened but nothing new can be sealed with a managed key (all keys STAGED, DECRYPT_ONLY or RETIRED).'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnencryptionkeynoactive'
+              summary: 'Purpose documents has managed keys but none ACTIVE'
+  # Reconciliation: differences page at once; never run for an hour warns
+  - interval: 1m
+    input_series:
+      - series: 'dfn_ledger_reconciliation_last_completed_differences{job="dfn-api", instance="api:4000"}'
+        values: '0 2 2'
+      - series: 'dfn_ledger_reconciliation_last_run_status{job="dfn-api", instance="api:4000", status="COMPLETED"}'
+        values: '0x70'
+      - series: 'dfn_ledger_reconciliation_last_run_status{job="dfn-api", instance="api:4000", status="FAILED"}'
+        values: '0x70'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DfnReconciliationDifferences
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'critical'
+            exp_annotations:
+              description: 'The latest COMPLETED reconciliation found 2 differences between ledger entries and balances.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnreconciliationdifferences'
+              summary: 'The ledger reconciliation found differences'
+      - eval_time: 30m
+        alertname: DfnReconciliationNeverRun
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: DfnReconciliationNeverRun
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: 'No ReconciliationJob row exists after an hour of exposure: the RECONCILIATION job never ran (scheduler never started) and no on-demand reconciliation was done.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnreconciliationneverrun'
+              summary: 'The ledger reconciliation has never run'
+  # Webhook backlog over 100 for 15 minutes
+  - interval: 1m
+    input_series:
+      - series: 'dfn_webhook_deliveries_due{job="dfn-api", instance="api:4000"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DfnWebhookBacklog
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DfnWebhookBacklog
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: '150 deliveries are PENDING or FAILED with an elapsed back-off for 15 minutes: partner endpoints down, or the WEBHOOK_RETRY job not running.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnwebhookbacklog'
+              summary: 'More than 100 webhook deliveries are waiting for an attempt'
+  # Domain gauge collection errors for 15 minutes
+  - interval: 1m
+    input_series:
+      - series: 'dfn_metrics_collect_errors_total{job="dfn-api", instance="api:4000", collector="webhooks"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DfnMetricsCollectErrors
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: DfnMetricsCollectErrors
+        exp_alerts:
+          - exp_labels:
+              collector: 'webhooks'
+              instance: 'api:4000'
+              service: 'dfn-api'
+              severity: 'warning'
+            exp_annotations:
+              description: 'The webhooks collector failed or timed out on every scrape for 15 minutes: its gauges are absent, the database is slow or unreachable from this replica.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnmetricscollecterrors'
+              summary: 'Domain gauges of api:4000 are not refreshed (webhooks)'
+  # The watchdog fires from the first evaluation, without any input series
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: DfnAlertingWatchdog
+        exp_alerts:
+          - exp_labels:
+              service: 'dfn-alerting'
+              severity: 'none'
+            exp_annotations:
+              description: 'Fires continuously by design: when the external dead man switch stops receiving it, alerts can no longer be delivered.'
+              runbook_url: 'docs/operations/OBSERVABILITY.md#dfnalertingwatchdog'
+              summary: 'Alerting pipeline heartbeat (always firing)'

@@ -13,7 +13,7 @@ import {
 } from '@dfn/ui';
 import { ReconcileButton } from '@/components/admin/admin-actions';
 import { apiFetch } from '@/lib/api-server';
-import { formatDate } from '@/lib/format';
+import { formatDate, formatMoney, moneyFromMinor } from '@/lib/format';
 import { getT } from '@/lib/i18n-server';
 
 export default async function AdminLedgerPage() {
@@ -25,7 +25,8 @@ export default async function AdminLedgerPage() {
           <div>
             <CardTitle>{t('admin.ledger')}</CardTitle>
             <CardDescription>
-              {data.accounts.length} accounts · {data.transactions.total} postings · {t('app.sandbox')}
+              {data.accounts.length} {t('admin.ledgerAccounts')} · {data.transactions.total}{' '}
+              {t('admin.ledgerPostings')} · {t('app.sandbox')}
             </CardDescription>
           </div>
           <ReconcileButton />
@@ -34,10 +35,10 @@ export default async function AdminLedgerPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Normal</TableHead>
-                <TableHead className="text-right">Balance (minor)</TableHead>
+                <TableHead>{t('admin.accountCode')}</TableHead>
+                <TableHead>{t('admin.accountType')}</TableHead>
+                <TableHead>{t('admin.normalBalance')}</TableHead>
+                <TableHead className="text-right">{t('admin.balance')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -46,7 +47,9 @@ export default async function AdminLedgerPage() {
                   <TableCell className="font-mono text-xs">{a.code}</TableCell>
                   <TableCell className="text-xs">{a.type}</TableCell>
                   <TableCell className="text-xs">{a.normalBalance}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{a.balance}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {formatMoney(moneyFromMinor(a.balance, a.currencyCode), locale)}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -55,7 +58,7 @@ export default async function AdminLedgerPage() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Postings</CardTitle>
+          <CardTitle>{t('admin.postings')}</CardTitle>
         </CardHeader>
         <CardContent>
           <ul className="divide-y text-sm">
@@ -72,7 +75,8 @@ export default async function AdminLedgerPage() {
                 <ul className="mt-1 grid gap-1 font-mono text-xs text-muted-foreground sm:grid-cols-2">
                   {tx.entries.map((e: any) => (
                     <li key={e.id}>
-                      {e.direction.padEnd(6)} {e.amountMinor} {e.currencyCode} → {e.account.code}
+                      {e.direction.padEnd(6)}{' '}
+                      {formatMoney(moneyFromMinor(e.amountMinor, e.currencyCode), locale)} → {e.account.code}
                     </li>
                   ))}
                 </ul>
@@ -84,14 +88,15 @@ export default async function AdminLedgerPage() {
       {data.reconciliations.length ? (
         <Card>
           <CardHeader>
-            <CardTitle>Reconciliation jobs</CardTitle>
+            <CardTitle>{t('admin.reconciliationJobs')}</CardTitle>
           </CardHeader>
           <CardContent>
             <ul className="space-y-1 text-sm">
               {data.reconciliations.map((j: any) => (
                 <li key={j.id} className="flex items-center justify-between">
                   <span>
-                    {j.status} · {j.accountsChecked} accounts · {j.differencesFound} differences
+                    {j.status} · {j.accountsChecked} {t('admin.ledgerAccounts')} · {j.differencesFound}{' '}
+                    {t('admin.differences')}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     {formatDate(j.startedAt, locale, true)}

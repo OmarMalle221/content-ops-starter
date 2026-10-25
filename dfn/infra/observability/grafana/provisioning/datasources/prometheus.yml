@@ -1,0 +1,15 @@
+# Grafana datasource provisioning (profile "observability"): the Prometheus of the same compose
+# stack. Read-only in the UI; the uid is referenced by the dashboards of ../../dashboards.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus (DFN sandbox)
+    uid: dfn-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST

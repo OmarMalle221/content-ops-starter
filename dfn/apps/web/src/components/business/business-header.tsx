@@ -43,7 +43,11 @@ export function BusinessHeader({
         {myRole ? <Badge variant="secondary">{myRole}</Badge> : null}
         <Badge variant="sandbox">{t('app.sandbox')}</Badge>
       </div>
-      <BusinessTabs organizationId={organizationId} canViewReports={ws.canViewReports} />
+      <BusinessTabs
+        organizationId={organizationId}
+        canViewReports={ws.canViewReports}
+        canDecideLinks={ws.canDecideLinks}
+      />
     </>
   );
 }

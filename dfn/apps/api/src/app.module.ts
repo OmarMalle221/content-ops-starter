@@ -5,6 +5,8 @@ import { LoggerModule } from 'nestjs-pino';
 import { loadEnv, type Env } from './config/env';
 import { EnvModule } from './config/env.module';
 import { PrismaModule } from './common/prisma/prisma.module';
+import { RedisConnectionService, RedisModule } from './common/redis';
+import { RedisThrottlerStorage } from './common/throttler';
 import { DomainEventsModule } from './common/events/domain-events';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { SessionAuthGuard } from './common/guards/session-auth.guard';
@@ -33,6 +35,10 @@ import { BusinessModule } from './modules/business/business.module';
 import { ApiPlatformModule } from './modules/api-platform/api-platform.module';
 import { DdaModule } from './modules/dda/dda.module';
 import { JobsModule } from './modules/jobs/jobs.module';
+import { GatesModule } from './modules/gates/gates.module';
+import { KeysModule } from './modules/keys/keys.module';
+import { ObservabilityModule } from './modules/observability/observability.module';
+import { traceLogFields } from './modules/observability/trace-context';
 
 export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> = {}) {
   const env = loadEnv(envOverrides);
@@ -59,13 +65,26 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
             ],
             censor: '[REDACTED]',
           },
-          autoLogging: env.NODE_ENV !== 'test',
+          // Prometheus scrapes (every 15 s) are not worth a line each; they are counted as metrics.
+          autoLogging: env.NODE_ENV !== 'test' && { ignore: (req) => req.url === '/metrics' },
+          // W3C trace context (modules/observability/trace-context.ts): trace_id / span_id become
+          // bindings of the request logger, so every line of the request — the completion line and
+          // what services log through nestjs-pino — carries them; the same ids are returned in the
+          // `traceparent` response header.
+          customProps: traceLogFields,
           genReqId: (req) => (req.headers['x-request-id'] as string) ?? crypto.randomUUID(),
         },
       }),
-      ThrottlerModule.forRoot({
-        throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
-        skipIf: () => env.NODE_ENV === 'test',
+      ThrottlerModule.forRootAsync({
+        imports: [RedisModule],
+        inject: [RedisConnectionService],
+        useFactory: (redis: RedisConnectionService) => ({
+          throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
+          skipIf: () => env.NODE_ENV === 'test',
+          // RATE_LIMIT_STORE=redis: the per-IP throttle is shared by every replica (keys dfn:rl:throttler:*);
+          // memory (default): @nestjs/throttler's in-process storage.
+          storage: env.RATE_LIMIT_STORE === 'redis' ? new RedisThrottlerStorage(redis) : undefined,
+        }),
       }),
       PrismaModule,
       DomainEventsModule,
@@ -89,6 +108,9 @@ export function buildAppModule(envOverrides: Partial<Record<keyof Env, string>> 
       ApiPlatformModule,
       DdaModule,
       JobsModule,
+      GatesModule,
+      KeysModule,
+      ObservabilityModule,
     ],
     controllers: [HealthController, ReferenceController],
     providers: [

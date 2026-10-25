@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { registerThroughUi } from './journey-helpers';
 
 const PASSWORD = 'CorrectHorse42Battery';
 const run = Date.now().toString(36);
@@ -6,15 +7,8 @@ const buyerEmail = `e2e-buyer-${run}@example.com`;
 const sellerEmail = `e2e-seller-${run}@example.com`;
 
 async function register(page: Page, email: string, firstName: string, lastName: string, country: string) {
-  await page.goto('/register');
-  await page.getByLabel(/Prénom|First name/).fill(firstName);
-  await page.getByLabel(/^Nom$|Last name/).fill(lastName);
-  await page.getByLabel(/Courriel|Email/).fill(email);
-  await page.getByLabel(/Pays|Country/).selectOption(country);
-  await page.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
-  await expect(page).toHaveURL(/\/dashboard/);
+  // Throttle-tolerant (the API accepts 5 registrations per minute and client IP).
+  await registerThroughUi(page, { email, firstName, lastName, country });
 }
 
 async function verifyIdentity(page: Page) {
@@ -34,6 +28,10 @@ test('sandbox banner is always visible and the API is tagged', async ({ page, re
   await expect(page.getByRole('status')).toContainText(/Aucun fonds réel|No real funds/);
   const health = await request.get('/api/v1/health');
   expect(health.headers()['x-dfn-mode']).toBe('sandbox');
+  // Only the versioned API is proxied: the API's operational endpoints are not reachable through
+  // the web origin (/metrics would otherwise see the web server as a loopback peer).
+  expect((await request.get('/api/metrics')).status()).toBe(404);
+  expect((await request.get('/api/docs')).status()).toBe(404);
 });
 
 test('buyer creates a protected transaction, seller joins, funding is simulated and a milestone is released', async ({
@@ -72,9 +70,14 @@ test('buyer creates a protected transaction, seller joins, funding is simulated 
   await seller.getByLabel(/Pays|Country/).selectOption('SN');
   await seller.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
   await seller.getByRole('checkbox').check();
-  await seller.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
-  // Registering with the invitation token joins the transaction automatically.
-  await expect(seller).toHaveURL(/\/invite\//);
+  // Registering with the invitation token joins the transaction automatically. The submit is
+  // retried while the API throttles registrations (5 per minute and client IP); the form keeps
+  // its values and the register URL only carries `next` URL-encoded.
+  await expect(async () => {
+    if (/\/invite\//.test(seller.url())) return;
+    await seller.getByRole('button', { name: /Créer un compte|Create an account/ }).click();
+    await expect(seller).toHaveURL(/\/invite\//, { timeout: 10_000 });
+  }).toPass({ timeout: 90_000, intervals: [2_000, 5_000, 10_000] });
   await seller.getByRole('link', { name: /Détails|Details/ }).click();
   await expect(seller).toHaveURL(/\/transactions\//);
   const txUrl = seller.url();
@@ -86,7 +89,7 @@ test('buyer creates a protected transaction, seller joins, funding is simulated 
   await page.goto('/login');
   await page.getByLabel(/Courriel|Email/).fill(buyerEmail);
   await page.getByLabel(/Mot de passe|Password/).fill(PASSWORD);
-  await page.getByRole('button', { name: /Se connecter|Sign in/ }).click();
+  await page.getByRole('button', { name: /^(Se connecter|Sign in)$/ }).click();
   await expect(page).toHaveURL(/\/dashboard/);
   await page.goto(txUrl);
   await page.getByRole('button', { name: /Accepter les conditions|Accept terms/ }).click();
@@ -99,6 +102,21 @@ test('buyer creates a protected transaction, seller joins, funding is simulated 
   await seller.goto(txUrl);
   const milestone1 = seller.getByRole('listitem').filter({ hasText: 'Embarquement' }).first();
   await milestone1.getByRole('button', { name: /Ajouter un document|Add a document/ }).click();
+  // The EICAR test file (assembled in two halves) is refused by the sandbox scanner, and the
+  // refusal says that scanner is a simulation.
+  const eicar = ['X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR', '-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'].join('');
+  await seller.getByLabel(/Fichier|File/).setInputFiles({
+    name: 'eicar.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from(`%PDF-1.4\n% ${eicar}\n%%EOF\n`, 'latin1'),
+  });
+  await seller
+    .getByRole('button', { name: /Téléverser|Upload/ })
+    .last()
+    .click();
+  await expect(
+    seller.getByRole('dialog').getByText(/antivirus simulé du bac à sable|simulated sandbox antivirus/),
+  ).toBeVisible();
   await seller.getByLabel(/Fichier|File/).setInputFiles({
     name: 'bol.pdf',
     mimeType: 'application/pdf',

@@ -20,13 +20,13 @@ defaults:
 env:
   DFN_MODE: sandbox
   SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789abcdef
-  DOCUMENT_ENCRYPTION_KEY: '3333333333333333333333333333333333333333333333333333333333333333'
+  DOCUMENT_ENCRYPTION_KEY: 'd8589ba73fe5a7384a765be0bfc726238777660de457f465d9616cbbb38b375d'
 
 jobs:
   quality:
-    name: Typecheck, lint, unit, ledger & API integration tests
+    name: Typecheck, lint, unit, ledger & API integration tests, compiled build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -37,9 +37,18 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U dfn" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn_test?schema=public
       TEST_DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn_test?schema=public
+      # Redis-backed tests (BullMQ scheduler, distributed leases, rate limits) read TEST_REDIS_URL and
+      # use their own logical database; they skip cleanly when no Redis is configured.
+      REDIS_URL: redis://localhost:6379/0
+      TEST_REDIS_URL: redis://localhost:6379/5
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,14 +63,58 @@ jobs:
       - run: pnpm --filter @dfn/database migrate:deploy
       - run: pnpm format:check
       - run: pnpm typecheck
+      - name: Typecheck ops scripts (infra/ops)
+        run: pnpm --filter @dfn/api exec tsc --noEmit -p ../../infra/ops/tsconfig.json
+      - name: Lint ops shell scripts
+        run: shellcheck -x infra/ops/*.sh
       - run: pnpm --filter @dfn/api lint
       - run: pnpm --filter @dfn/web lint
+      - name: Build compiled API (tsup + SWC decorator metadata)
+        run: pnpm build:api
+      - name: Smoke boot of the compiled API (health, register, me, OpenAPI, graceful SIGTERM)
+        env:
+          NODE_ENV: production
+          API_PORT: '4100'
+          API_PUBLIC_URL: http://localhost:4100
+          STORAGE_DIR: /tmp/dfn-smoke-storage
+          LOG_LEVEL: info
+          SMOKE_LOG: ${{ github.workspace }}/dfn/api-smoke.log
+        run: bash infra/ops/smoke-api.sh --boot --base-url http://127.0.0.1:4100
       - run: pnpm test:unit
+      - name: AWS emulator for the live S3 and KMS tests (moto, sandbox credentials)
+        run: |
+          # Own virtualenv (the runner's system Python refuses ad-hoc installs), console-script
+          # entry point, generous start-up wait; the server log is printed when it does not answer.
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install --quiet 'moto[server]==5.1.4'
+          ("$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 5055 > moto.log 2>&1 &)
+          for _ in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:5055/moto-api/ && break; sleep 2; done
+          curl -sf -o /dev/null http://127.0.0.1:5055/moto-api/ || { echo '::error::moto did not start'; cat moto.log; exit 1; }
+          echo "moto ready: $("$RUNNER_TEMP/moto/bin/python" -c 'import moto; print(moto.__version__)')"
       - run: pnpm test:api
-      - run: pnpm audit --audit-level=high || echo "::warning::pnpm audit reported issues — review before any non-sandbox deployment"
+        env:
+          S3_TEST_ENDPOINT: http://127.0.0.1:5055
+          S3_TEST_BUCKET: dfn-ci-live
+          S3_TEST_ACCESS_KEY_ID: test
+          S3_TEST_SECRET_ACCESS_KEY: test
+          S3_TEST_REGION: us-east-1
+          KMS_TEST_ENDPOINT: http://127.0.0.1:5055
+          KMS_TEST_REGION: us-east-1
+      # Blocking: high and critical advisories fail the build. Accepted exceptions (dev tooling only)
+      # are listed in package.json pnpm.auditConfig.ignoreGhsas and justified in SECURITY.md.
+      - run: pnpm audit --audit-level=high
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-quality-logs
+          path: |
+            dfn/api-smoke.log
+            dfn/moto.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   e2e:
-    name: Build & Playwright end-to-end
+    name: Build & Playwright end-to-end (compiled API)
     runs-on: ubuntu-latest
     needs: quality
     timeout-minutes: 30
@@ -98,13 +151,15 @@ jobs:
       - run: pnpm db:generate
       - run: pnpm --filter @dfn/database migrate:deploy
       - run: pnpm --filter @dfn/web exec playwright install --with-deps chromium
+      - run: pnpm build:api
       - run: pnpm --filter @dfn/web build
-      - name: Start API and web
+      - name: Start compiled API and web
         run: |
-          (pnpm --filter @dfn/api start > api.log 2>&1 &)
+          (node --enable-source-maps apps/api/dist/main.js > api.log 2>&1 &)
           (pnpm --filter @dfn/web start > web.log 2>&1 &)
-          for i in $(seq 1 60); do curl -sf http://localhost:4000/v1/health && break; sleep 2; done
-          for i in $(seq 1 60); do curl -sf http://localhost:3000/ > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://localhost:4000/v1/health && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://localhost:3000/ > /dev/null && break; sleep 2; done
+          curl -sf http://localhost:4000/v1/health > /dev/null
       - run: pnpm --filter @dfn/web test:e2e
         env: { CI: 'true' }
       - uses: actions/upload-artifact@v4
@@ -116,3 +171,231 @@ jobs:
             dfn/api.log
             dfn/web.log
           retention-days: 7
+
+  backup-restore:
+    name: Backup / restore drill (pg_dump → scratch DB → migrate status, counts, ledger reconcile)
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dfn
+          POSTGRES_PASSWORD: dfn
+          POSTGRES_DB: dfn
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dfn" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://dfn:dfn@localhost:5432/dfn?schema=public
+      SEED_DEMO_PASSWORD: ci-drill-Sandbox-2026!seed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dfn/pnpm-lock.yaml
+      - name: PostgreSQL 16 client tools and age
+        run: |
+          sudo apt-get update -qq
+          if ! pg_dump --version | grep -Eq ' (1[6-9]|[2-9][0-9])\.'; then
+            sudo apt-get install -y -qq postgresql-client-16
+          fi
+          sudo apt-get install -y -qq age
+          pg_dump --version
+          age --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm --filter @dfn/database migrate:deploy
+      - name: Seed fictitious demo data (balanced ledger postings)
+        run: pnpm db:seed
+      - run: pnpm build:api
+      - name: Restore drill, encrypted with a throwaway age key
+        run: |
+          age-keygen -o "$RUNNER_TEMP/drill-age.key" 2>/dev/null
+          BACKUP_AGE_RECIPIENT="$(age-keygen -y "$RUNNER_TEMP/drill-age.key")"
+          export BACKUP_AGE_RECIPIENT
+          export BACKUP_AGE_IDENTITY_FILE="$RUNNER_TEMP/drill-age.key"
+          bash infra/ops/restore-test.sh
+      - name: Restore drill, compiled-free path (ts-node reconcile, plain archive)
+        env:
+          DFN_RECONCILE_RUNNER: source
+        run: bash infra/ops/restore-test.sh
+
+  profiles:
+    name: Compose profiles s3 + observability (SeaweedFS S3, Prometheus, Alertmanager, Grafana, Jaeger)
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway .env with the profiles' credentials (none committed or defaulted)
+        run: |
+          grep -vE '^(SESSION_SECRET|DOCUMENT_ENCRYPTION_KEY|STORAGE_DRIVER)=' .env.example > .env
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "POSTGRES_APP_PASSWORD=$(openssl rand -hex 16)"
+            echo "REDIS_PASSWORD=$(openssl rand -hex 16)"
+            echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "DOCUMENT_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "STORAGE_DRIVER=s3"
+            echo "S3_ACCESS_KEY_ID=dfn-api-$(openssl rand -hex 4)"
+            echo "S3_SECRET_ACCESS_KEY=$(openssl rand -hex 24)"
+            echo "S3_ADMIN_ACCESS_KEY_ID=dfn-admin-$(openssl rand -hex 4)"
+            echo "S3_ADMIN_SECRET_ACCESS_KEY=$(openssl rand -hex 24)"
+            echo "METRICS_TOKEN=$(openssl rand -hex 24)"
+            echo "GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+            # Alert destinations: the webhook sink started next to the stack (infra/ci).
+            echo "ALERT_WEBHOOK_URL=http://dfn-alert-sink:8080/team"
+            echo "ALERT_WEBHOOK_URL_CRITICAL=http://dfn-alert-sink:8080/oncall"
+            echo "ALERT_WATCHDOG_URL=http://dfn-alert-sink:8080/watchdog"
+            # Spans of the API to the Jaeger of the profile (checked by check-profiles.sh --traces).
+            echo "OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318"
+          } >> .env
+      - name: Validate prometheus.yml and alerts.yml with promtool, and run the rule unit tests
+        run: |
+          docker run --rm --entrypoint /bin/promtool -v "$PWD/infra/observability/prometheus:/t:ro" -w /t \
+            prom/prometheus:v3.5.0 test rules alerts.test.yml
+          # credentials_file must exist for `check config`: a placeholder in a throwaway copy.
+          mkdir -p "$RUNNER_TEMP/prom" && cp infra/observability/prometheus/*.yml "$RUNNER_TEMP/prom/"
+          printf x > "$RUNNER_TEMP/prom/token"
+          sed -i -e 's#/run/secrets/metrics_token#/t/token#' -e 's#/etc/prometheus/alerts.yml#/t/alerts.yml#' "$RUNNER_TEMP/prom/prometheus.yml"
+          docker run --rm --entrypoint /bin/promtool -v "$RUNNER_TEMP/prom:/t:ro" prom/prometheus:v3.5.0 check config /t/prometheus.yml
+      - name: Validate alertmanager.yml (every rendering of the entrypoint) and its routes with amtool
+        run: |
+          src=infra/observability/alertmanager/alertmanager.yml
+          mkdir -p "$RUNNER_TEMP/am" && printf 'https://example.invalid/hook' > "$RUNNER_TEMP/am/url"
+          cp "$src" "$RUNNER_TEMP/am/all.yml"
+          sed '/# webhook$/d; /# webhook-critical$/d' "$src" > "$RUNNER_TEMP/am/watchdog-only.yml"
+          sed '/# watchdog$/d' "$src" > "$RUNNER_TEMP/am/no-watchdog.yml"
+          sed '/# webhook$/d; /# webhook-critical$/d; /# watchdog$/d' "$src" > "$RUNNER_TEMP/am/none.yml"
+          amtool() {
+            docker run --rm --entrypoint /bin/amtool -v "$RUNNER_TEMP/am:/am:ro" \
+              -v "$RUNNER_TEMP/am/url:/run/alertmanager/webhook_url:ro" \
+              -v "$RUNNER_TEMP/am/url:/run/alertmanager/webhook_url_critical:ro" \
+              -v "$RUNNER_TEMP/am/url:/run/alertmanager/watchdog_url:ro" prom/alertmanager:v0.29.0 "$@"
+          }
+          for f in all watchdog-only no-watchdog none; do amtool check-config "/am/$f.yml"; done
+          amtool config routes test --config.file=/am/all.yml --verify.receivers=watchdog alertname=DfnAlertingWatchdog severity=none
+          amtool config routes test --config.file=/am/all.yml --verify.receivers=oncall alertname=DfnApiDown severity=critical
+          amtool config routes test --config.file=/am/all.yml --verify.receivers=team alertname=DfnWebhookBacklog severity=warning
+      - name: Build images and start the stack with the s3 and observability profiles
+        run: |
+          docker compose --profile s3 --profile observability up -d --build
+          docker run -d --name dfn-alert-sink --network dfn-sandbox_default \
+            -v "$PWD/infra/ci:/sink:ro" python:3.13-alpine python -u /sink/webhook-sink.py 8080
+      - name: Wait for API, Prometheus and Grafana
+        run: |
+          for _ in $(seq 1 90); do curl -sf http://127.0.0.1:4000/v1/health > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:9090/-/ready > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:3001/api/health > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:16686/ && break; sleep 2; done
+          docker compose --profile s3 --profile observability ps -a
+          test "$(docker compose --profile s3 ps -a s3-init --format '{{.ExitCode}}')" = "0"
+      - name: Documents on the S3 server, metrics in Prometheus, dashboards in Grafana, alerts delivered, traces in Jaeger
+        run: |
+          GRAFANA_ADMIN_PASSWORD="$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)" bash infra/ops/check-profiles.sh --send-test-alert --traces
+          # Each receiver got its alerts at its own destination: the watchdog sent by Prometheus, the
+          # test warning of check-profiles, and a critical test alert posted here.
+          curl -sf -X POST -H 'Content-Type: application/json' http://127.0.0.1:9093/api/v2/alerts \
+            -d '[{"labels":{"alertname":"DfnCiCriticalTest","severity":"critical","stack":"dfn-sandbox","test":"true"}}]'
+          for _ in $(seq 1 20); do docker logs dfn-alert-sink 2>&1 | grep -q '"/oncall".*DfnCiCriticalTest' && break; sleep 3; done
+          docker logs dfn-alert-sink 2>&1 | tee "$RUNNER_TEMP/sink.log"
+          grep -q '"/watchdog".*DfnAlertingWatchdog' "$RUNNER_TEMP/sink.log"
+          grep -q '"/team".*DfnNotificationTest' "$RUNNER_TEMP/sink.log"
+          grep -q '"/oncall".*DfnCiCriticalTest' "$RUNNER_TEMP/sink.log"
+          if grep -q '"/team".*DfnCiCriticalTest' "$RUNNER_TEMP/sink.log"; then echo "critical alert also sent to team" >&2; exit 1; fi
+          # The document of the check is an object of the private bucket (not a local file):
+          # listed with the administrator identity (SigV4), refused to an anonymous caller.
+          env_val() { grep "^$1=" .env | cut -d= -f2-; }
+          bucket="$(env_val S3_BUCKET)"; bucket="${bucket:-dfn-documents}"
+          printf 'user = "%s:%s"\n' "$(env_val S3_ADMIN_ACCESS_KEY_ID)" "$(env_val S3_ADMIN_SECRET_ACCESS_KEY)" > "$RUNNER_TEMP/s3.curl"
+          curl -sf --aws-sigv4 'aws:amz:us-east-1:s3' -K "$RUNNER_TEMP/s3.curl" \
+            "http://127.0.0.1:8333/$bucket?list-type=2" > "$RUNNER_TEMP/bucket.xml"
+          grep -o '<Key>[^<]*</Key>' "$RUNNER_TEMP/bucket.xml" | tee "$RUNNER_TEMP/bucket.txt"
+          test "$(wc -l < "$RUNNER_TEMP/bucket.txt")" -ge 1
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8333/$bucket?list-type=2")" = "403"
+          test -z "$(docker compose exec -T api sh -c 'find /data/storage -type f 2>/dev/null | head -1')"
+      - name: Stack logs
+        if: always()
+        run: |
+          docker compose --profile s3 --profile observability logs --no-color --timestamps > compose-profiles.log 2>&1 || true
+          docker logs dfn-alert-sink >> compose-profiles.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-compose-profiles-logs
+          path: dfn/compose-profiles.log
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f dfn-alert-sink || true
+          docker compose --profile s3 --profile observability down -v --remove-orphans
+
+  containers:
+    name: Docker images & compose stack (read-only API, migrate one-shot, BullMQ + Redis)
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway .env for the stack (no secret is committed or defaulted)
+        run: |
+          grep -vE '^(SESSION_SECRET|DOCUMENT_ENCRYPTION_KEY)=' .env.example > .env
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "POSTGRES_APP_PASSWORD=$(openssl rand -hex 16)"
+            echo "REDIS_PASSWORD=$(openssl rand -hex 16)"
+            echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "DOCUMENT_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+          } >> .env
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Build images and start the stack
+        run: docker compose up -d --build
+      - name: Wait for API and web
+        run: |
+          for _ in $(seq 1 90); do curl -sf http://127.0.0.1:4000/v1/health > /dev/null && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:3000/login && break; sleep 2; done
+          docker compose ps -a
+          test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = "0"
+      - name: Smoke test through the containers
+        run: |
+          bash infra/ops/smoke-api.sh --base-url http://127.0.0.1:4000
+          curl -sf http://127.0.0.1:3000/login | grep -q 'Aucun fonds réel'
+          curl -sf http://127.0.0.1:3000/api/v1/health | grep -q '"mode":"sandbox"'
+          test "$(docker compose exec -T api id -u)" = "10001"
+          # Read-only root filesystem (ADR-0013), checked on the containers themselves: the uid
+          # alone could not write to the root-owned /app anyway.
+          for s in api web; do
+            test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$(docker compose ps -q "$s")")" = "true"
+            docker compose exec -T "$s" sh -c 'grep -Eq "^[^ ]+ / [^ ]+ ro[, ]" /proc/mounts'
+          done
+          # The API runs as the least-privilege database role, without DDL rights.
+          docker compose exec -T postgres psql -U dfn -d dfn -At -c "SELECT rolsuper FROM pg_roles WHERE rolname = 'dfn_app'" | grep -qx f
+      - name: Graceful stop
+        run: |
+          docker compose stop -t 30 api web
+          # 0 or 143 (SIGTERM re-raised after a clean shutdown); 1 = shutdown watchdog, 137 = killed.
+          for s in api web; do
+            code="$(docker compose ps -a "$s" --format '{{.ExitCode}}')"
+            echo "$s exit code: $code"
+            [[ "$code" == 0 || "$code" == 143 ]]
+          done
+      - name: Stack logs
+        if: always()
+        run: docker compose logs --no-color --timestamps > compose.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dfn-compose-logs
+          path: dfn/compose.log
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans

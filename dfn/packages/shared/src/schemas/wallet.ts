@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BeneficiaryMethod, LedgerTransactionKind } from '../enums';
 import { countrySchema, currencySchema, decimalAmountSchema, paginationSchema } from './common';
+import { mfaProofShape } from './passkeys';
 
 export const createBeneficiarySchema = z
   .object({
@@ -45,18 +46,18 @@ export const securityPreferencesSchema = z.object({
   /** Optional self-imposed daily limit per currency, decimal string. */
   dailyTransferLimit: decimalAmountSchema.optional().nullable(),
   /**
-   * TOTP code, required only when a user who has MFA enabled lowers a protection (turns the
-   * transfer step-up off, raises or removes the daily limit). Never stored.
+   * Fresh MFA proof (TOTP code, recovery code or passkey assertion — see mfaProofShape), required
+   * only when a user who has MFA enabled lowers a protection (turns the transfer step-up off,
+   * raises or removes the daily limit). Never stored.
    */
-  mfaCode: z
-    .string()
-    .regex(/^\d{6}$/)
-    .optional(),
+  ...mfaProofShape,
 });
 export type SecurityPreferencesInput = z.infer<typeof securityPreferencesSchema>;
 
 /** Effective preferences when the user never saved any (User.securityPreferences is null). */
-export const DEFAULT_SECURITY_PREFERENCES: Required<Omit<SecurityPreferencesInput, 'mfaCode'>> = {
+export const DEFAULT_SECURITY_PREFERENCES: Required<
+  Omit<SecurityPreferencesInput, 'mfaCode' | 'passkeyAssertion'>
+> = {
   requireMfaForTransfers: true,
   transferAlerts: true,
   dailyTransferLimit: null,

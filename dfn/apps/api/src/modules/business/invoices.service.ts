@@ -27,9 +27,11 @@ import { JobRegistry, type JobResult } from '../jobs/job-registry';
 import { LEDGER } from '../ledger/ledger.provider';
 import { WalletsService } from '../ledger/wallets.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RiskService } from '../risk/risk.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import {
   OPEN_INVOICE_STATUSES,
+  acceptedLinkedOrganizationId,
   documentAccessFor,
   invoiceInclude,
   printableDocument,
@@ -43,10 +45,11 @@ import {
   clampNonNegative,
   computeDocumentTotals,
   csvLine,
-  deriveTaxBps,
+  linkedCustomerUserIds,
   parseDay,
   retryOnUniqueViolation,
   startOfUtcDay,
+  storedTaxBps,
 } from './business.utils';
 
 const INVOICE_STATUSES = new Set<string>(Object.values(InvoiceStatusEnum));
@@ -69,6 +72,7 @@ export class InvoicesService implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly bus: DomainEventsBus,
     private readonly registry: JobRegistry,
+    private readonly risk: RiskService,
   ) {}
 
   onModuleInit() {
@@ -95,10 +99,18 @@ export class InvoicesService implements OnModuleInit {
     return { invoice, access };
   }
 
-  /** Only the issuing organisation (INVOICE_MANAGE) or staff may change a document. */
-  private assertIssuerManage(auth: AuthContext, invoice: InvoiceWithRelations, access: DocumentAccess) {
+  /**
+   * Only the issuing organisation (INVOICE_MANAGE) may change a document. Non-member staff are
+   * read-only; an ADMIN may act for support with a reason (audited — see authorizeWrite).
+   */
+  private async assertIssuerManage(
+    auth: AuthContext,
+    invoice: InvoiceWithRelations,
+    access: DocumentAccess,
+    req: Request,
+  ) {
     if (access.role === 'CUSTOMER') throw DomainError.forbidden('Only the issuing organisation can do this');
-    return this.orgs.assertMember(auth, invoice.organizationId, Permission.INVOICE_MANAGE);
+    return this.orgs.authorizeWrite(auth, invoice.organizationId, Permission.INVOICE_MANAGE, req);
   }
 
   private async assertCounterparty(organizationId: string, counterpartyId: string | undefined) {
@@ -129,19 +141,19 @@ export class InvoicesService implements OnModuleInit {
     return members.map((m) => m.userId);
   }
 
-  private async customerUserId(email: string | null): Promise<string | null> {
-    if (!email) return null;
-    const user = await this.prisma.user.findUnique({ where: { email }, select: { id: true, status: true } });
-    return user && user.status === 'ACTIVE' ? user.id : null;
+  /** Customer-side recipients: members of the counterparty organisation, only once it ACCEPTED the link. */
+  private customerRecipients(invoice: InvoiceWithRelations): Promise<string[]> {
+    return linkedCustomerUserIds(this.prisma, invoice.counterparty);
   }
 
   // ───────────────────────────── CRUD ───────────────────────────────────────
 
   async create(auth: AuthContext, input: CreateInvoiceInput, req: Request) {
-    const membership = this.orgs.resolveActingOrganization(
+    const membership = await this.orgs.resolveActingOrganizationForWrite(
       auth,
       input.organizationId,
       Permission.INVOICE_MANAGE,
+      req,
     );
     const organizationId = membership.organizationId;
     await this.assertCounterparty(organizationId, input.counterpartyId);
@@ -167,6 +179,7 @@ export class InvoicesService implements OnModuleInit {
             currencyCode: input.currencyCode,
             dueDate,
             subtotalMinor: totals.subtotalMinor,
+            taxBps: input.taxBps,
             taxMinor: totals.taxMinor,
             totalMinor: totals.totalMinor,
             notes: input.notes ?? null,
@@ -184,7 +197,9 @@ export class InvoicesService implements OnModuleInit {
               number,
               total: minorToDecimalString(totals.totalMinor, input.currencyCode),
               currency: input.currencyCode,
+              taxBps: input.taxBps,
               transactionId: input.transactionId ?? null,
+              support: membership.via === 'STAFF_SUPPORT',
             },
             ...meta,
           },
@@ -213,11 +228,14 @@ export class InvoicesService implements OnModuleInit {
     const scope: Prisma.InvoiceWhereInput = {};
     if (query.organizationId) {
       this.orgs.assertMember(auth, query.organizationId, Permission.TRANSACTION_READ);
-      if (query.scope === 'RECEIVED') scope.counterparty = { linkedOrganizationId: query.organizationId };
+      // RECEIVED = addressed to the organisation through an ACCEPTED counterparty link only.
+      if (query.scope === 'RECEIVED')
+        scope.counterparty = { linkedOrganizationId: query.organizationId, linkStatus: 'ACCEPTED' };
       else scope.organizationId = query.organizationId;
     } else if (!isStaff(auth)) {
       const orgIds = auth.memberships.map((m) => m.organizationId);
-      if (query.scope === 'RECEIVED') scope.counterparty = { linkedOrganizationId: { in: orgIds } };
+      if (query.scope === 'RECEIVED')
+        scope.counterparty = { linkedOrganizationId: { in: orgIds }, linkStatus: 'ACCEPTED' };
       else scope.organizationId = { in: orgIds };
     }
     const statuses = this.statusFilter(query.status);
@@ -258,7 +276,7 @@ export class InvoicesService implements OnModuleInit {
 
   async update(auth: AuthContext, id: string, input: Partial<CreateInvoiceInput>, req: Request) {
     const { invoice, access } = await this.loadFor(auth, id);
-    this.assertIssuerManage(auth, invoice, access);
+    const actor = await this.assertIssuerManage(auth, invoice, access, req);
     if (invoice.status !== 'DRAFT') {
       throw DomainError.invalidTransition(`Only draft invoices can be edited (current: ${invoice.status})`);
     }
@@ -276,7 +294,9 @@ export class InvoicesService implements OnModuleInit {
         quantity: l.quantity,
         unitPrice: minorToDecimalString(l.unitPriceMinor, invoice.currencyCode),
       }));
-    const taxBps = input.taxBps ?? deriveTaxBps(invoice.subtotalMinor, invoice.taxMinor);
+    // The persisted rate is kept exactly when the edit does not resend it (never re-derived from
+    // rounded amounts, except for legacy rows — see storedTaxBps).
+    const taxBps = input.taxBps ?? storedTaxBps(invoice);
     const totals = computeDocumentTotals(lines, taxBps, currencyCode);
     const dueDate = input.dueDate ? parseDay(input.dueDate, 'dueDate') : undefined;
     const meta = requestMeta(req);
@@ -293,6 +313,7 @@ export class InvoicesService implements OnModuleInit {
           dueDate,
           notes: input.notes !== undefined ? input.notes : undefined,
           subtotalMinor: totals.subtotalMinor,
+          taxBps,
           taxMinor: totals.taxMinor,
           totalMinor: totals.totalMinor,
           lines: { create: totals.lines },
@@ -305,7 +326,7 @@ export class InvoicesService implements OnModuleInit {
           action: 'invoice.updated',
           entityType: 'Invoice',
           entityId: id,
-          metadata: { fields: Object.keys(input) },
+          metadata: { fields: Object.keys(input), taxBps, support: actor.via === 'STAFF_SUPPORT' },
           ...meta,
         },
         db,
@@ -318,7 +339,7 @@ export class InvoicesService implements OnModuleInit {
 
   async send(auth: AuthContext, id: string, req: Request) {
     const { invoice, access } = await this.loadFor(auth, id);
-    this.assertIssuerManage(auth, invoice, access);
+    await this.assertIssuerManage(auth, invoice, access, req);
     invoiceMachine.assertTransition(invoice.status, 'SENT');
     const meta = requestMeta(req);
     await this.prisma.$transaction(async (db) => {
@@ -336,10 +357,10 @@ export class InvoicesService implements OnModuleInit {
         db,
       );
     });
-    const customerId = await this.customerUserId(invoice.customerEmail);
-    if (customerId) {
-      await this.notifications.notify({
-        userId: customerId,
+    // Only a customer organisation that ACCEPTED the link is notified (consent).
+    const customers = await this.customerRecipients(invoice);
+    if (customers.length) {
+      await this.notifications.notifyMany(customers, {
         type: 'invoice.sent',
         title: `Facture ${invoice.number} reçue (sandbox)`,
         body: `${invoice.organization.name} vous a adressé la facture ${invoice.number} de ${minorToDecimalString(invoice.totalMinor, invoice.currencyCode)} ${invoice.currencyCode} (fictifs). ${BUSINESS_DISCLAIMER_FR}.`,
@@ -351,7 +372,7 @@ export class InvoicesService implements OnModuleInit {
 
   async cancel(auth: AuthContext, id: string, input: CancelDocumentInput, req: Request) {
     const { invoice, access } = await this.loadFor(auth, id);
-    this.assertIssuerManage(auth, invoice, access);
+    await this.assertIssuerManage(auth, invoice, access, req);
     invoiceMachine.assertTransition(invoice.status, 'CANCELLED');
     const meta = requestMeta(req);
     await this.prisma.$transaction(async (db) => {
@@ -370,10 +391,9 @@ export class InvoicesService implements OnModuleInit {
       );
     });
     if (invoice.status !== 'DRAFT') {
-      const customerId = await this.customerUserId(invoice.customerEmail);
-      if (customerId) {
-        await this.notifications.notify({
-          userId: customerId,
+      const customers = await this.customerRecipients(invoice);
+      if (customers.length) {
+        await this.notifications.notifyMany(customers, {
           type: 'invoice.cancelled',
           title: `Facture ${invoice.number} annulée`,
           body: `${invoice.organization.name} a annulé la facture ${invoice.number} (sandbox).`,
@@ -444,6 +464,12 @@ export class InvoicesService implements OnModuleInit {
     return { status: target, paidMinor, totalMinor: BigInt(locked.totalMinor), previous: locked.status };
   }
 
+  /**
+   * Post-commit effects of a payment (wallet, external or Protect release). The payment is already
+   * booked, so this never throws: the `invoice.paid` domain event (partner webhooks) is emitted
+   * first, and a notification failure is only logged — it can neither cancel the event nor turn
+   * into an error for the caller (who would retry and book a second payment).
+   */
   private async afterPayment(
     invoice: InvoiceWithRelations,
     result: { status: InvoiceStatus; paidMinor: bigint },
@@ -451,25 +477,10 @@ export class InvoicesService implements OnModuleInit {
     actorUserId: string | null,
   ) {
     const ccy = invoice.currencyCode;
-    const amount = minorToDecimalString(payment.amountMinor, ccy);
-    const title =
-      result.status === 'PAID'
-        ? `Facture ${invoice.number} payée (fictif)`
-        : `Paiement partiel sur ${invoice.number} (fictif)`;
-    const body = `${amount} ${ccy} fictifs enregistrés (${payment.method}) sur la facture ${invoice.number}. Solde dû : ${minorToDecimalString(clampNonNegative(invoice.totalMinor - result.paidMinor), ccy)} ${ccy}. ${BUSINESS_DISCLAIMER_FR}.`;
-    const recipients = await this.orgMemberUserIds(invoice.organizationId);
-    const customerId = await this.customerUserId(invoice.customerEmail);
-    if (customerId) recipients.push(customerId);
-    await this.notifications.notifyMany(recipients, {
-      type: result.status === 'PAID' ? 'invoice.paid' : 'invoice.payment_recorded',
-      title,
-      body,
-      data: { invoiceId: invoice.id, paymentId: payment.id, organizationId: invoice.organizationId },
-    });
     if (result.status === 'PAID') {
       const organizationIds = [invoice.organizationId];
-      if (invoice.counterparty?.linkedOrganizationId)
-        organizationIds.push(invoice.counterparty.linkedOrganizationId);
+      const customerOrganizationId = acceptedLinkedOrganizationId(invoice.counterparty);
+      if (customerOrganizationId) organizationIds.push(customerOrganizationId);
       this.bus.emit({
         type: 'invoice.paid',
         organizationIds,
@@ -488,6 +499,26 @@ export class InvoicesService implements OnModuleInit {
           simulated: true,
         },
       });
+    }
+    try {
+      const amount = minorToDecimalString(payment.amountMinor, ccy);
+      const title =
+        result.status === 'PAID'
+          ? `Facture ${invoice.number} payée (fictif)`
+          : `Paiement partiel sur ${invoice.number} (fictif)`;
+      const body = `${amount} ${ccy} fictifs enregistrés (${payment.method}) sur la facture ${invoice.number}. Solde dû : ${minorToDecimalString(clampNonNegative(invoice.totalMinor - result.paidMinor), ccy)} ${ccy}. ${BUSINESS_DISCLAIMER_FR}.`;
+      const recipients = await this.orgMemberUserIds(invoice.organizationId);
+      recipients.push(...(await this.customerRecipients(invoice)));
+      await this.notifications.notifyMany(recipients, {
+        type: result.status === 'PAID' ? 'invoice.paid' : 'invoice.payment_recorded',
+        title,
+        body,
+        data: { invoiceId: invoice.id, paymentId: payment.id, organizationId: invoice.organizationId },
+      });
+    } catch (err) {
+      this.logger.error(
+        `notifications after payment ${payment.id} (${payment.method}) on invoice ${invoice.id} failed: ${String(err)}`,
+      );
     }
   }
 
@@ -524,7 +555,7 @@ export class InvoicesService implements OnModuleInit {
     }
 
     if (input.method === 'EXTERNAL_RECORDED') {
-      this.assertIssuerManage(auth, invoice, access);
+      const actor = await this.assertIssuerManage(auth, invoice, access, req);
       const result = await this.prisma.$transaction(async (db) => {
         const applied = await this.applyPayment(db, id, {
           id: paymentId,
@@ -549,6 +580,7 @@ export class InvoicesService implements OnModuleInit {
               currency: ccy,
               reference: input.reference ?? null,
               status: applied.status,
+              support: actor.via === 'STAFF_SUPPORT',
             },
             ...meta,
           },
@@ -565,8 +597,9 @@ export class InvoicesService implements OnModuleInit {
       return this.get(auth, id);
     }
 
-    // WALLET_SIMULATED: the customer pays from the wallet of the organisation linked to the counterparty.
-    const linked = invoice.counterparty?.linkedOrganizationId ?? null;
+    // WALLET_SIMULATED: the customer pays from the wallet of the organisation linked to the counterparty
+    // — only once that organisation ACCEPTED the link (a pending request never enables a payment).
+    const linked = acceptedLinkedOrganizationId(invoice.counterparty);
     const payerOrgId = input.organizationId ?? linked ?? undefined;
     const payerMembership = payerOrgId ? membershipFor(auth, payerOrgId) : undefined;
     if (!linked || !payerOrgId || payerOrgId !== linked || !payerMembership) {
@@ -641,13 +674,20 @@ export class InvoicesService implements OnModuleInit {
       );
       return { ...applied, ledgerTransactionId: posted.id };
     });
-    await this.notifications.notify({
-      userId: auth.userId,
-      type: 'invoice.wallet_payment_sent',
-      title: `Paiement fictif envoyé — ${invoice.number}`,
-      body: `${minorToDecimalString(amountMinor, ccy)} ${ccy} fictifs ont été débités du portefeuille ${payerMembership.organizationName} pour la facture ${invoice.number}. ${BUSINESS_DISCLAIMER_FR}.`,
-      data: { invoiceId: id, paymentId, ledgerTransactionId: result.ledgerTransactionId },
-    });
+    // The payment is committed: a notification failure is logged, never returned as an error
+    // (the payer would retry and book a second payment).
+    try {
+      await this.notifications.notify({
+        userId: auth.userId,
+        type: 'invoice.wallet_payment_sent',
+        title: `Paiement fictif envoyé — ${invoice.number}`,
+        body: `${minorToDecimalString(amountMinor, ccy)} ${ccy} fictifs ont été débités du portefeuille ${payerMembership.organizationName} pour la facture ${invoice.number}. ${BUSINESS_DISCLAIMER_FR}.`,
+        data: { invoiceId: id, paymentId, ledgerTransactionId: result.ledgerTransactionId },
+      });
+    } catch (err) {
+      this.logger.error(`payer notification after wallet payment ${paymentId} failed: ${String(err)}`);
+    }
+    // Never throws: emits invoice.paid, then notifies (a notification failure is logged).
     await this.afterPayment(
       invoice,
       result,
@@ -659,6 +699,20 @@ export class InvoicesService implements OnModuleInit {
       },
       auth.userId,
     );
+    // Post-commit AML evaluation (structuring across wallet payments). The payment is already
+    // booked: an evaluation failure is logged, never turned into an error for the payer.
+    try {
+      await this.risk.evaluateAndRecord({
+        event: 'invoice.wallet_payment',
+        userId: auth.userId,
+        organizationId: payerOrgId,
+        amountMinor,
+        currencyCode: ccy,
+        operationReference: paymentId,
+      });
+    } catch (err) {
+      this.logger.error(`risk evaluation after wallet payment ${paymentId} failed: ${String(err)}`);
+    }
     return this.get(auth, id);
   }
 

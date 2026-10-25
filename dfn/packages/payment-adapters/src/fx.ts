@@ -1,4 +1,4 @@
-import { getCurrency } from '@dfn/shared';
+import { ProviderKind, assertSandboxProviderCode, getCurrency } from '@dfn/shared';
 
 /**
  * FX rate provider contract. Rates are rational numbers (numerator/denominator) so every
@@ -117,11 +117,11 @@ export function quoteTransferFee(
   return { feeBps, fixedFeeMinor, feeMinor: fixedFeeMinor + variable };
 }
 
+/**
+ * FX_PROVIDER — sandbox only. Any other code ("reference" included) throws
+ * ProviderNotActivatableError; HttpReferenceFxRateProvider is built explicitly by contract tests.
+ */
 export function createFxRateProvider(code: string | undefined): FxRateProvider {
-  switch ((code ?? 'sandbox').toLowerCase()) {
-    case 'sandbox':
-      return new SandboxFxRateProvider();
-    default:
-      throw new Error(`FX provider "${code}" is not available. This build is sandbox-only.`);
-  }
+  assertSandboxProviderCode(ProviderKind.FX, code);
+  return new SandboxFxRateProvider();
 }

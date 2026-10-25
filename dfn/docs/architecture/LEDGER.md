@@ -32,5 +32,5 @@ Implémentation : `packages/financial-ledger/src/ledger.service.ts` (tests : `pa
 
 ## Limites connues (sandbox)
 
-- Les snapshots sont pris à la demande (endpoint admin) ; un job périodique est prévu en phase 3.
-- Les conversions de devises (phase 4) seront modélisées par deux écritures liées via un compte de compensation FX.
+- Les snapshots sont pris par la tâche planifiée `BALANCE_SNAPSHOTS` (un par compte actif, ancre de la réconciliation) et à la demande (endpoint admin).
+- Les conversions de devises (Diaspora Transfer) sont modélisées par deux écritures liées via un compte de compensation `FX_CLEARING:<devise>` ; les taux restent simulés.

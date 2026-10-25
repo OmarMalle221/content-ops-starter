@@ -41,7 +41,7 @@ export class MilestonesService {
     req: Request,
   ) {
     const { tx, role } = await this.access.loadFor(auth, transactionId);
-    this.access.assertRole(role, 'SELLER');
+    this.access.assertPartyCan(auth, tx, role, 'SELLER');
     if (!['FUNDED', 'IN_PROGRESS', 'DISPUTED'].includes(tx.status)) {
       throw DomainError.invalidTransition(
         `Milestones can be submitted once the transaction is funded (current: ${tx.status})`,
@@ -114,7 +114,7 @@ export class MilestonesService {
     req: Request,
   ) {
     const { tx, role } = await this.access.loadFor(auth, transactionId);
-    this.access.assertRole(role, 'BUYER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER');
     const milestone = tx.milestones.find((m) => m.id === milestoneId);
     if (!milestone) throw DomainError.notFound('Milestone');
     milestoneMachine.assertTransition(milestone.status, 'CHANGES_REQUESTED');
@@ -164,7 +164,7 @@ export class MilestonesService {
     req: Request,
   ) {
     const { tx, role } = await this.access.loadFor(auth, transactionId);
-    this.access.assertRole(role, 'BUYER');
+    this.access.assertPartyCan(auth, tx, role, 'BUYER');
     const milestone = tx.milestones.find((m) => m.id === milestoneId);
     if (!milestone) throw DomainError.notFound('Milestone');
     milestoneMachine.assertTransition(milestone.status, 'APPROVED');

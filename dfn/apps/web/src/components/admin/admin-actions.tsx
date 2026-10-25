@@ -94,16 +94,26 @@ export function ReviewVerificationButtons({ id }: { id: string }) {
   );
 }
 
+const RISK_ALERT_ACTIONS = ['START_REVIEW', 'CONFIRM', 'DISMISS', 'CONTEST'] as const;
+
+/**
+ * Review decisions on a risk alert. The offered actions come from the server (`nextActions` of the
+ * review-queue DTO); the status-based fallback keeps older payloads working. Every action requires
+ * a note (min. 3 characters), recorded with its author in the alert history and the audit trail.
+ */
 export function RiskAlertActions({ alert }: { alert: any }) {
   const { t } = useI18n();
   const router = useRouter();
   const [note, setNote] = useState('');
-  const options =
-    alert.status === 'OPEN'
+  const options: string[] = Array.isArray(alert.nextActions)
+    ? RISK_ALERT_ACTIONS.filter((a) => alert.nextActions.includes(a))
+    : alert.status === 'OPEN'
       ? ['START_REVIEW', 'CONFIRM', 'DISMISS']
       : alert.status === 'REVIEWING'
         ? ['CONFIRM', 'DISMISS']
-        : ['CONTEST'];
+        : alert.status === 'CONTESTED'
+          ? ['START_REVIEW', 'CONFIRM', 'DISMISS']
+          : ['CONTEST'];
   return (
     <div className="flex flex-wrap gap-1">
       {options.map((action) => (
@@ -115,16 +125,24 @@ export function RiskAlertActions({ alert }: { alert: any }) {
             </Button>
           }
           title={`${t(`admin.riskActions.${action}`)} — ${alert.ruleCode}`}
+          description={t('reviewQueue.noteHint')}
           disabled={note.trim().length < 3}
           onConfirm={() =>
             api(`/v1/admin/risk-alerts/${alert.id}/actions`, { method: 'POST', json: { action, note } }).then(
-              () => router.refresh(),
+              () => {
+                setNote('');
+                router.refresh();
+              },
             )
           }
         >
           <div className="space-y-2">
-            <Label htmlFor={`note-${alert.id}`}>{t('admin.note')}</Label>
-            <Textarea id={`note-${alert.id}`} value={note} onChange={(e) => setNote(e.target.value)} />
+            <Label htmlFor={`note-${alert.id}-${action}`}>{t('admin.note')}</Label>
+            <Textarea
+              id={`note-${alert.id}-${action}`}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
           </div>
         </ActionDialog>
       ))}

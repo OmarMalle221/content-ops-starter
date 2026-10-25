@@ -4,6 +4,12 @@ import { businessPart } from './i18n-parts/business';
 import { developersPart } from './i18n-parts/developers';
 import { ddaPart } from './i18n-parts/dda';
 import { jobsPart } from './i18n-parts/jobs';
+import { passkeysPart } from './i18n-parts/passkeys';
+import { reviewQueuePart } from './i18n-parts/reviews';
+import { gatesAdminPart } from './i18n-parts/gates';
+import { counterpartyLinksPart } from './i18n-parts/links';
+import { keysAdminPart } from './i18n-parts/keys';
+import { documentStoragePart } from './i18n-parts/storage';
 
 export type Locale = 'fr' | 'en';
 export const LOCALE_COOKIE = 'dfn_locale';
@@ -88,6 +94,31 @@ const baseFr = {
     empty: 'Rien à afficher pour le moment.',
   },
   roles: { BUYER: 'Acheteur', SELLER: 'Vendeur', STAFF: 'Équipe DFN' },
+  statusByEntity: {
+    quote: {
+      ACCEPTED: 'Accepté',
+      DECLINED: 'Refusé',
+      EXPIRED: 'Expiré',
+      CONVERTED: 'Converti en facture',
+      SENT: 'Envoyé',
+      DRAFT: 'Brouillon',
+    },
+    transfer: {
+      SETTLED: 'Réglé (simulé)',
+      FAILED: 'Échoué (simulé)',
+      PROCESSING: 'En traitement (simulé)',
+      AUTHORIZED: 'Autorisé',
+      CANCELLED: 'Annulé',
+      EXPIRED: 'Devis expiré',
+    },
+    invoice: {
+      PAID: 'Payée (fictif)',
+      PARTIALLY_PAID: 'Partiellement payée',
+      SENT: 'Envoyée',
+      DRAFT: 'Brouillon',
+      CANCELLED: 'Annulée',
+    },
+  },
   status: {
     DRAFT: 'Brouillon',
     PENDING_ACCEPTANCE: 'En attente du vendeur',
@@ -359,7 +390,9 @@ const baseFr = {
     mfaEnable: 'Activer',
     mfaDisable: 'Désactiver',
     mfaSetupHint:
-      'Ajoutez ce secret dans votre application d’authentification puis saisissez le code généré.',
+      'Ajoutez ce secret dans votre application d’authentification, saisissez le code généré puis confirmez avec votre mot de passe actuel. Vos autres sessions seront fermées.',
+    mfaCode: 'Code de l’application',
+    mfaPasswordInvalid: 'Mot de passe actuel incorrect : la double authentification n’a pas été activée.',
     sessions: 'Sessions actives',
     revokeOthers: 'Déconnecter les autres sessions',
     identity: 'Vérification d’identité (simulée)',
@@ -377,6 +410,18 @@ const baseFr = {
   admin: {
     title: 'Administration',
     users: 'Utilisateurs',
+    organizations: 'Organisations',
+    volume: 'Volume',
+    fees: 'frais',
+    ledgerAccounts: 'comptes',
+    ledgerPostings: 'écritures',
+    postings: 'Écritures',
+    accountCode: 'Compte',
+    accountType: 'Type',
+    normalBalance: 'Sens normal',
+    balance: 'Solde',
+    reconciliationJobs: 'Réconciliations',
+    differences: 'écarts',
     verifications: 'Vérifications',
     disputes: 'Litiges',
     risk: 'Anomalies',
@@ -397,6 +442,8 @@ const baseFr = {
     transfers: 'Transferts',
     jobs: 'Tâches planifiées',
     dda: 'Laboratoire DDA',
+    gates: 'Portes réglementaires',
+    keys: 'Clés et stockage',
     note: 'Note',
     role: 'Rôle',
     riskActions: {
@@ -438,6 +485,12 @@ const fr = {
   ...developersPart.fr,
   ...ddaPart.fr,
   ...jobsPart.fr,
+  ...passkeysPart.fr,
+  ...reviewQueuePart.fr,
+  ...gatesAdminPart.fr,
+  ...counterpartyLinksPart.fr,
+  ...keysAdminPart.fr,
+  ...documentStoragePart.fr,
 };
 export type Dictionary = typeof fr;
 
@@ -520,6 +573,31 @@ const baseEn: typeof baseFr = {
     empty: 'Nothing to show yet.',
   },
   roles: { BUYER: 'Buyer', SELLER: 'Seller', STAFF: 'DFN staff' },
+  statusByEntity: {
+    quote: {
+      ACCEPTED: 'Accepted',
+      DECLINED: 'Declined',
+      EXPIRED: 'Expired',
+      CONVERTED: 'Converted to invoice',
+      SENT: 'Sent',
+      DRAFT: 'Draft',
+    },
+    transfer: {
+      SETTLED: 'Settled (simulated)',
+      FAILED: 'Failed (simulated)',
+      PROCESSING: 'Processing (simulated)',
+      AUTHORIZED: 'Authorized',
+      CANCELLED: 'Cancelled',
+      EXPIRED: 'Quote expired',
+    },
+    invoice: {
+      PAID: 'Paid (fictitious)',
+      PARTIALLY_PAID: 'Partially paid',
+      SENT: 'Sent',
+      DRAFT: 'Draft',
+      CANCELLED: 'Cancelled',
+    },
+  },
   status: {
     DRAFT: 'Draft',
     PENDING_ACCEPTANCE: 'Awaiting seller',
@@ -791,7 +869,10 @@ const baseEn: typeof baseFr = {
     mfa: 'Two-factor authentication (TOTP)',
     mfaEnable: 'Enable',
     mfaDisable: 'Disable',
-    mfaSetupHint: 'Add this secret to your authenticator app then enter the generated code.',
+    mfaSetupHint:
+      'Add this secret to your authenticator app, enter the generated code and confirm with your current password. Your other sessions will be signed out.',
+    mfaCode: 'Authenticator code',
+    mfaPasswordInvalid: 'Incorrect current password: two-factor authentication was not enabled.',
     sessions: 'Active sessions',
     revokeOthers: 'Sign out other sessions',
     identity: 'Identity verification (simulated)',
@@ -809,6 +890,18 @@ const baseEn: typeof baseFr = {
   admin: {
     title: 'Administration',
     users: 'Users',
+    organizations: 'Organizations',
+    volume: 'Volume',
+    fees: 'fees',
+    ledgerAccounts: 'accounts',
+    ledgerPostings: 'postings',
+    postings: 'Postings',
+    accountCode: 'Account',
+    accountType: 'Type',
+    normalBalance: 'Normal side',
+    balance: 'Balance',
+    reconciliationJobs: 'Reconciliation jobs',
+    differences: 'differences',
     verifications: 'Verifications',
     disputes: 'Disputes',
     risk: 'Anomalies',
@@ -829,6 +922,8 @@ const baseEn: typeof baseFr = {
     transfers: 'Transfers',
     jobs: 'Scheduled jobs',
     dda: 'DDA lab',
+    gates: 'Regulatory gates',
+    keys: 'Keys & storage',
     note: 'Note',
     role: 'Role',
     riskActions: {
@@ -867,6 +962,12 @@ const en: Dictionary = {
   ...developersPart.en,
   ...ddaPart.en,
   ...jobsPart.en,
+  ...passkeysPart.en,
+  ...reviewQueuePart.en,
+  ...gatesAdminPart.en,
+  ...counterpartyLinksPart.en,
+  ...keysAdminPart.en,
+  ...documentStoragePart.en,
 };
 
 export const dictionaries: Record<Locale, Dictionary> = { fr, en };

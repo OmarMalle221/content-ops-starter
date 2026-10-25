@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { StepUpOperation } from '@dfn/shared';
 import {
   Button,
   Card,
@@ -12,11 +13,14 @@ import {
   Label,
   Select,
 } from '@dfn/ui';
-import { api, errorMessage } from '@/lib/api-client';
+import { ClientApiError, api, errorMessage, localizedApiError } from '@/lib/api-client';
 import { formatDate } from '@/lib/format';
 import { LOCALE_COOKIE } from '@/lib/i18n';
 import { useI18n } from '@/lib/i18n-client';
 import { FormMessage } from '@/components/form-message';
+import { RecoveryCodesDisplay } from '@/components/security/recovery-codes-card';
+import { StepUpFields } from '@/components/security/step-up-fields';
+import { isMfaCodeInput } from '@/components/security/webauthn-client';
 
 export function ProfileForm({ user }: { user: any }) {
   const { t } = useI18n();
@@ -171,6 +175,8 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
   const router = useRouter();
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [code, setCode] = useState('');
+  const [enrolPassword, setEnrolPassword] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [msg, setMsg] = useState<{ error?: string; success?: string }>({});
   const [loading, setLoading] = useState(false);
   async function run(fn: () => Promise<unknown>) {
@@ -179,9 +185,11 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
     try {
       await fn();
       setCode('');
+      setEnrolPassword('');
       router.refresh();
     } catch (err) {
-      setMsg({ error: errorMessage(err) });
+      // Enable / disable answer 400 VALIDATION_FAILED for a wrong code: context wording first.
+      setMsg({ error: localizedApiError(err, t, 'passkeys.mfa.errors') });
     } finally {
       setLoading(false);
     }
@@ -208,49 +216,90 @@ export function MfaCard({ enabled }: { enabled: boolean }) {
             <code className="block break-all rounded-md border bg-muted p-3 text-[10px] text-muted-foreground">
               {setup.otpauthUrl}
             </code>
-            <div className="flex gap-2">
-              <Input
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="123456"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                className="w-40"
-              />
-              <Button
-                loading={loading}
-                disabled={code.length !== 6}
-                onClick={() =>
-                  run(async () => {
-                    await api('/v1/auth/mfa/enable', { method: 'POST', json: { code } });
-                    setSetup(null);
-                  })
-                }
-              >
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (code.length !== 6 || !enrolPassword) return;
+                void run(async () => {
+                  const res = await api<{ enabled: boolean; recoveryCodes: string[] }>(
+                    '/v1/auth/mfa/enable',
+                    {
+                      method: 'POST',
+                      json: { code, currentPassword: enrolPassword },
+                    },
+                  ).catch((err: unknown) => {
+                    // Wrong current password: say so in the interface language.
+                    if (err instanceof ClientApiError && err.body.code === 'STEP_UP_REQUIRED') {
+                      throw new Error(t('settings.mfaPasswordInvalid'));
+                    }
+                    throw err;
+                  });
+                  setSetup(null);
+                  // Shown once: the API never returns these codes again.
+                  setRecoveryCodes(res.recoveryCodes);
+                });
+              }}
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="mfa-enable-code">{t('settings.mfaCode')}</Label>
+                  <Input
+                    id="mfa-enable-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="123456"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mfa-enable-password">{t('settings.currentPassword')}</Label>
+                  <Input
+                    id="mfa-enable-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={enrolPassword}
+                    onChange={(e) => setEnrolPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+              <Button type="submit" loading={loading} disabled={code.length !== 6 || !enrolPassword}>
                 {t('common.confirm')}
               </Button>
-            </div>
+            </form>
           </div>
         ) : null}
-        {enabled ? (
-          <div className="flex gap-2">
-            <Input
-              inputMode="numeric"
-              maxLength={6}
-              placeholder="123456"
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-              className="w-40"
+        {recoveryCodes ? (
+          <>
+            <p className="text-sm text-success">{t('passkeys.mfa.enabledWithCodes')}</p>
+            <RecoveryCodesDisplay codes={recoveryCodes} onDone={() => setRecoveryCodes(null)} />
+          </>
+        ) : null}
+        {enabled && !recoveryCodes ? (
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!isMfaCodeInput(code)) return;
+              void run(() => api('/v1/auth/mfa/disable', { method: 'POST', json: { code } }));
+            }}
+          >
+            <p className="text-xs text-muted-foreground">{t('passkeys.mfa.disableHint')}</p>
+            <StepUpFields
+              id="mfa-disable-code"
+              operation={StepUpOperation.MFA_DISABLE}
+              code={code}
+              onCodeChange={setCode}
+              onPasskey={(passkeyAssertion) =>
+                run(() => api('/v1/auth/mfa/disable', { method: 'POST', json: { passkeyAssertion } }))
+              }
             />
-            <Button
-              variant="destructive"
-              loading={loading}
-              disabled={code.length !== 6}
-              onClick={() => run(() => api('/v1/auth/mfa/disable', { method: 'POST', json: { code } }))}
-            >
+            <Button type="submit" variant="destructive" loading={loading} disabled={!isMfaCodeInput(code)}>
               {t('settings.mfaDisable')}
             </Button>
-          </div>
+          </form>
         ) : null}
         <FormMessage error={msg.error} success={msg.success} />
       </CardContent>

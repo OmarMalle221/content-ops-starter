@@ -124,7 +124,7 @@ export default async function TransfersPage({
                     {formatMoney(x.destination, locale)}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={x.status} />
+                    <StatusBadge status={x.status} entity="transfer" />
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
                     {formatDate(x.createdAt, locale, true)}

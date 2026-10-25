@@ -3,8 +3,9 @@
  *
  * IMPORTANT: results produced by the sandbox adapter are *simulated*. They are tagged with
  * `simulated: true` and the statuses SIMULATED_PASS / SIMULATED_FAIL so that no UI can present
- * them as a real verification. A licensed provider adapter (Phase 3+) will return
- * provider-specific references that compliance staff can audit.
+ * them as a real verification. The HTTP reference adapters (./http-reference.ts, contract tests
+ * only — never reachable through the factories) return `simulated: false` and never produce a
+ * pass status: a provider approval maps to PENDING with `requiresManualReview: true`.
  */
 export type KycOutcomeStatus = 'PENDING' | 'SIMULATED_PASS' | 'SIMULATED_FAIL' | 'REJECTED';
 
@@ -21,6 +22,9 @@ export interface IdentityCheckInput {
   sandboxOutcome?: 'PASS' | 'FAIL';
 }
 
+/** Decision as reported by a (reference) provider, before any manual compliance review. */
+export type ProviderKycDecision = 'PENDING' | 'NEEDS_REVIEW' | 'APPROVED' | 'REJECTED';
+
 export interface IdentityCheckResult {
   provider: string;
   providerRef: string;
@@ -29,6 +33,10 @@ export interface IdentityCheckResult {
   checkedAt: string;
   reasons: string[];
   raw: Record<string, unknown>;
+  /** Raw provider decision (reference adapters only). APPROVED still maps to status PENDING. */
+  providerDecision?: ProviderKycDecision;
+  /** True when a compliance officer must confirm the outcome before it has any effect. */
+  requiresManualReview?: boolean;
 }
 
 export interface BusinessCheckInput {
@@ -55,6 +63,10 @@ export interface SanctionsScreeningResult {
   status: 'CLEAR_SIMULATED' | 'POTENTIAL_MATCH_SIMULATED' | 'CLEAR' | 'POTENTIAL_MATCH';
   matches: Array<{ list: string; name: string; score: number }>;
   screenedAt: string;
+  /** Provider screening reference (reference adapters only). */
+  providerRef?: string;
+  /** True when a compliance officer must review the screening (every potential match). */
+  requiresManualReview?: boolean;
 }
 
 export interface KycProvider {

@@ -17,6 +17,8 @@ import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { moneyDto } from '../../common/serialize';
+import { staffUserWhere } from '../../common/staff-recipients';
+import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { LEDGER } from '../ledger/ledger.provider';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -47,6 +49,7 @@ export class DdaService {
     private readonly registry: DdaRegistryService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   // ───────────────────────────── Simulators ─────────────────────────────
@@ -520,7 +523,7 @@ export class DdaService {
   /** Red line: DDA never reaches tenants — only platform administrators are informed. */
   private async notifyAdmins(row: ReturnType<typeof ddaOperationDto>, summary: string) {
     const admins = await this.prisma.user.findMany({
-      where: { globalRole: 'ADMIN', status: 'ACTIVE', deletedAt: null },
+      where: staffUserWhere(this.env, ['ADMIN']),
       select: { id: true },
     });
     await this.notifications.notifyMany(

@@ -114,6 +114,22 @@
 3. Une revue trimestrielle vérifie l'exhaustivité ; les nouvelles exigences (textes modifiés) ajoutent des lignes, jamais n'en suppriment sans avis écrit.
 4. Avant toute phase live : extraction de la matrice §8 pour le module et le corridor concernés, signée par la direction, le responsable conformité et le responsable sécurité, et consignée dans un ADR.
 
+## 10. Suivi dans l'application
+
+> **Suivi uniquement — aucun statut ne permet d'activer des fonds réels ; `DFN_MODE` reste `sandbox`.** Le registre applicatif ne remplace ni ce document, ni les avis juridiques, ni la procédure du §9 : il en trace l'avancement.
+
+| Élément                  | Fonctionnement                                                                                                                                                                                                                                                       |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Écran                    | Administration → « Portes réglementaires » (`/admin/gates`) : registre R1 à R10 (ROADMAP §10), historique de chaque porte, fournisseurs configurés et portes qu'ils exigeraient                                                                                      |
+| Droits                   | Lecture : conformité et administrateurs ; écriture : administrateurs uniquement                                                                                                                                                                                      |
+| Statuts                  | `Non commencée` → `En cours` → `Seconde approbation attendue` → `Satisfaite (suivi)` ; `Révoquée` possible depuis les trois derniers (approbations effacées), puis reprise en `En cours`                                                                             |
+| Double validation        | Deux approbations par deux administrateurs différents, chacune avec une note et une référence de preuve obligatoires (texte : identifiant d'archive du coffre documentaire, numéro de dossier — aucun fichier n'est déposé dans l'application)                       |
+| Traçabilité              | Chaque transition crée un événement horodaté (auteur, statut avant/après, note), une entrée du journal d'audit (avec la référence de preuve) et une notification à tous les administrateurs                                                                          |
+| Lien avec ce document    | Les lignes du présent document se rattachent aux portes par la colonne « Référence » (par ex. CA-01 → R1) ; la référence de preuve saisie dans le registre doit pointer vers la pièce archivée conformément au §9.1                                                  |
+| Fournisseurs partenaires | Les variables `KYC_PROVIDER`, `SANCTIONS_PROVIDER`, `PAYMENT_PROVIDER`, `FX_PROVIDER`, `PAYOUT_PROVIDER` n'acceptent que `sandbox` ; tout autre code empêche le démarrage de l'API (`PROVIDER_NOT_ACTIVATABLE`), même si toutes les portes requises sont satisfaites |
+
+Références techniques : ADR-0012 (`docs/decisions/ADR-0012-portes-reglementaires-partenaires.md`) et contrats de référence des partenaires (`docs/architecture/PARTNER_ADAPTERS.md`).
+
 ---
 
 ## Annexe A — Séquencement recommandé pour le corridor de lancement (CA → SN, module A)

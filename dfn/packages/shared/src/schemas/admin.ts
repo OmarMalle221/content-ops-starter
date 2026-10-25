@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { GlobalRole, RiskAlertStatus, UserStatusEnum } from './admin-enums';
+import { GlobalRole, UserStatusEnum } from './admin-enums';
+import { foldBracketParams, reviewQueueFiltersShape } from './reviews';
 
 export const updateUserStatusSchema = z.object({
   status: z.nativeEnum(UserStatusEnum),
@@ -21,11 +22,20 @@ export const listAuditLogsQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-export const listRiskAlertsQuerySchema = z.object({
-  status: z.nativeEnum(RiskAlertStatus).optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(50),
-});
+/**
+ * Compliance review queue (GET /v1/admin/risk-alerts): repeated or comma-separated `status` and
+ * `severity`, `ruleCode`, `assignee=me|unassigned|<uuid>`, `overdue=true`, `organizationId`,
+ * `from`/`to` (creation date), `sort`, page pagination capped at 100.
+ */
+export const listRiskAlertsQuerySchema = z.preprocess(
+  foldBracketParams,
+  z.object({
+    ...reviewQueueFiltersShape,
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  }),
+);
+export type ListRiskAlertsQuery = z.infer<typeof listRiskAlertsQuerySchema>;
 
 export const sandboxDepositSchema = z.object({
   organizationId: z.string().uuid(),

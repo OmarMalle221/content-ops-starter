@@ -5,6 +5,7 @@ import { decryptString } from '../src/common/crypto';
 import { ReferenceDataService } from '../src/modules/reference/reference-data.service';
 import { MEMBER_REVIEW_REASON, toTransferDto } from '../src/modules/transfers/transfer.dto';
 import { bootTestApp, registerUser, resetDatabase, type TestContext } from './helpers/app';
+import { enableMfa, waitForFreshTotpStep } from './helpers/webauthn';
 import { BANK_BENEFICIARY, MOMO_BENEFICIARY, createWalletActors, put, selfDeposit } from './helpers/wallet';
 
 let ctx: TestContext;
@@ -102,6 +103,25 @@ describe('beneficiaries', () => {
     });
     expect(bad.status).toBe(400);
     expect(bad.body.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('never stores the mobile-money identifier in the clear-text phone field', async () => {
+    const a = await createWalletActors(ctx, '-phone');
+    const created = await a.owner.post('/v1/beneficiaries', {
+      ...MOMO_BENEFICIARY,
+      accountIdentifier: '+221 77 999 88 77',
+      phone: '+221779998877',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.phone).toBeNull();
+    expect(JSON.stringify(created.body)).not.toContain('99988');
+    const other = await a.owner.post('/v1/beneficiaries', {
+      ...MOMO_BENEFICIARY,
+      accountIdentifier: '+221770001122',
+      phone: '+221 70 123 45 67',
+    });
+    expect(other.status).toBe(201);
+    expect(other.body.phone).toBe('+221 70 123 45 67');
   });
 
   it('isolates tenants (404) and enforces org roles (403)', async () => {
@@ -352,12 +372,7 @@ describe('security preferences', () => {
     const url = '/v1/users/me/security-preferences';
     const strict = { requireMfaForTransfers: true, transferAlerts: true, dailyTransferLimit: '1000.00' };
     expect((await put(ctx, client, url, strict)).status).toBe(200);
-    const setup = await client.post('/v1/auth/mfa/setup');
-    expect(setup.status).toBe(201);
-    const secret = setup.body.secret as string;
-    expect((await client.post('/v1/auth/mfa/enable', { code: authenticator.generate(secret) })).status).toBe(
-      201,
-    );
+    const { secret } = await enableMfa(client);
 
     // Switching the step-up off, raising or removing the limit: refused without a code.
     for (const lowering of [
@@ -395,6 +410,7 @@ describe('security preferences', () => {
     expect(tightened.body.dailyTransferLimit).toBe('500.00');
 
     // A valid code lets the user lower the protections; the code itself is never stored.
+    await waitForFreshTotpStep();
     const lowered = await put(ctx, client, url, {
       requireMfaForTransfers: false,
       transferAlerts: false,
@@ -466,12 +482,14 @@ describe('transfer DTO disclosure', () => {
 
     const member = toTransferDto(transfer, { isStaff: false, role: 'OWNER' });
     expect(member.reviewReason).toBe(MEMBER_REVIEW_REASON);
-    expect(member.events[0].payload).toEqual({ riskScore: 60, reason: MEMBER_REVIEW_REASON });
+    // Neither the rule nor the risk score reach a member (no threshold probing).
+    expect(member.events[0].payload).toEqual({ reason: MEMBER_REVIEW_REASON });
     expect(member.events[1].payload).toEqual({ simulated: true });
     expect(JSON.stringify(member)).not.toContain('UNVERIFIED_TRANSFER');
-    expect(member.riskScore).toBe(60);
+    expect(member.riskScore).toBeNull();
 
     const staff = toTransferDto(transfer, { isStaff: true, role: null });
+    expect(staff.riskScore).toBe(60);
     expect(staff.reviewReason).toBe(reviewReason);
     expect((staff.events[0].payload as any).signals).toEqual(['UNVERIFIED_TRANSFER']);
 

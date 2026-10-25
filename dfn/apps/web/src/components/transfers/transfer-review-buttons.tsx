@@ -49,7 +49,12 @@ export function TransferReviewButtons({ transferId }: { transferId: string }) {
               onChange={(e) => setNote(e.target.value)}
               minLength={3}
               required
+              aria-describedby={`review-note-hint-${decision}-${transferId}`}
             />
+            {/* The note reaches the customer (AML_POLICY: measures are notified with the reason). */}
+            <p id={`review-note-hint-${decision}-${transferId}`} className="text-xs text-muted-foreground">
+              {t('xferAdmin.noteVisibleHint')}
+            </p>
           </div>
         </ActionDialog>
       ))}

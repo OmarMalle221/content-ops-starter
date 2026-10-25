@@ -8,6 +8,8 @@ import { DisputePanel } from '@/components/disputes/dispute-panel';
 import { ApiError, apiFetch, getSession } from '@/lib/api-server';
 import { formatDate, formatMoney } from '@/lib/format';
 import { getT } from '@/lib/i18n-server';
+import { ScanBadge } from '@/components/documents/scan-badge';
+import { apiHref } from '@/lib/api-href';
 
 export const metadata = { title: 'Litige' };
 
@@ -52,16 +54,28 @@ export default async function DisputeDetailPage({ params }: { params: Promise<{ 
               {d.evidences.length ? (
                 <ul className="space-y-1 text-sm">
                   {d.evidences.map((e: any) => (
-                    <li key={e.id}>
-                      <a
-                        className="text-primary hover:underline"
-                        href={`/api/v1/documents/${e.document.id}/download`}
-                      >
-                        {e.document.title}
-                      </a>{' '}
+                    <li key={e.id} className="flex flex-wrap items-center gap-2">
+                      {e.document.downloadUrl ? (
+                        <a className="text-primary hover:underline" href={apiHref(e.document.downloadUrl)}>
+                          {e.document.title}
+                        </a>
+                      ) : (
+                        // An INFECTED or deleted document is never served: title only, no link.
+                        <span className="text-muted-foreground line-through">{e.document.title}</span>
+                      )}
                       <span className="text-xs text-muted-foreground">
                         ({t(`docs.kinds.${e.document.kind}`)})
                       </span>
+                      <ScanBadge scan={e.document.scan} />
+                      {e.document.downloadUrl ? null : (
+                        <span className="text-xs text-destructive">
+                          {t(
+                            e.document.deleted
+                              ? 'documentStorage.deletedDocument'
+                              : 'documentStorage.scan.blocked',
+                          )}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -90,12 +104,16 @@ export default async function DisputeDetailPage({ params }: { params: Promise<{ 
                     </div>
                     <p className="whitespace-pre-wrap text-sm">{m.body}</p>
                     {m.document ? (
-                      <a
-                        className="mt-1 inline-block text-xs text-primary hover:underline"
-                        href={`/api/v1/documents/${m.document.id}/download`}
-                      >
-                        📎 {m.document.title}
-                      </a>
+                      <span className="mt-1 inline-flex items-center gap-2 text-xs">
+                        {m.document.downloadUrl ? (
+                          <a className="text-primary hover:underline" href={apiHref(m.document.downloadUrl)}>
+                            📎 {m.document.title}
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground line-through">📎 {m.document.title}</span>
+                        )}
+                        <ScanBadge scan={m.document.scan} />
+                      </span>
                     ) : null}
                   </li>
                 ))}

@@ -21,6 +21,7 @@ export const businessPart = definePart(
       seeQuotes: 'Voir les devis',
       noBusiness: 'Cet espace est votre espace personnel : créez une organisation pour gérer une équipe.',
       walletBalance: 'Solde portefeuille (fictif)',
+      links: 'Liaisons',
     },
     invoicing: {
       title: 'Factures',
@@ -63,7 +64,8 @@ export const businessPart = definePart(
       payWalletHint:
         'Débite le portefeuille sandbox de votre organisation et crédite celui de l’émetteur. Données fictives — Aucun fonds réel.',
       send: 'Envoyer au client',
-      sendHint: 'La facture passe en statut « Envoyée » et le client est notifié s’il possède un compte.',
+      sendHint:
+        'La facture passe en statut « Envoyée ». Le client est notifié sur la plateforme uniquement s’il a accepté la liaison avec votre organisation.',
       cancel: 'Annuler la facture',
       cancelHint: 'Une facture annulée conserve son numéro et ne peut plus être modifiée.',
       reason: 'Motif',
@@ -125,7 +127,8 @@ export const businessPart = definePart(
       empty: 'Aucun devis',
       emptyHint: 'Créez un devis pour un prospect ou un client existant.',
       send: 'Envoyer au client',
-      sendHint: 'Le devis passe en statut « Envoyé » et le client est notifié s’il possède un compte.',
+      sendHint:
+        'Le devis passe en statut « Envoyé ». Le client est notifié sur la plateforme uniquement s’il a accepté la liaison avec votre organisation.',
       acceptedAt: 'Accepté le',
       declinedAt: 'Refusé le',
       detail: 'Détail du devis',
@@ -145,7 +148,7 @@ export const businessPart = definePart(
       linked: 'Compte DFN lié',
       notLinked: 'Non lié',
       linkedHint:
-        'Un client lié à une organisation DFN peut régler vos factures depuis son portefeuille sandbox.',
+        'Un client qui accepte la liaison avec votre organisation voit vos factures et peut les régler depuis son portefeuille sandbox.',
       empty: 'Aucun client',
       emptyHint: 'Ajoutez un client pour accélérer la création de devis et de factures.',
       created: 'Client créé.',
@@ -215,6 +218,7 @@ export const businessPart = definePart(
       seeQuotes: 'See quotes',
       noBusiness: 'This is your personal workspace: create an organisation to manage a team.',
       walletBalance: 'Wallet balance (simulated)',
+      links: 'Links',
     },
     invoicing: {
       title: 'Invoices',
@@ -257,7 +261,8 @@ export const businessPart = definePart(
       payWalletHint:
         'Debits your organisation’s sandbox wallet and credits the issuer’s. Simulated data — No real funds.',
       send: 'Send to customer',
-      sendHint: 'The invoice becomes “Sent” and the customer is notified if they have an account.',
+      sendHint:
+        'The invoice becomes “Sent”. The customer is notified on the platform only if they accepted the link with your organisation.',
       cancel: 'Cancel invoice',
       cancelHint: 'A cancelled invoice keeps its number and can no longer be edited.',
       reason: 'Reason',
@@ -318,7 +323,8 @@ export const businessPart = definePart(
       empty: 'No quote',
       emptyHint: 'Create a quote for a prospect or an existing client.',
       send: 'Send to customer',
-      sendHint: 'The quote becomes “Sent” and the customer is notified if they have an account.',
+      sendHint:
+        'The quote becomes “Sent”. The customer is notified on the platform only if they accepted the link with your organisation.',
       acceptedAt: 'Accepted on',
       declinedAt: 'Declined on',
       detail: 'Quote detail',
@@ -337,7 +343,8 @@ export const businessPart = definePart(
       notes: 'Notes',
       linked: 'Linked DFN account',
       notLinked: 'Not linked',
-      linkedHint: 'A client linked to a DFN organisation can settle your invoices from its sandbox wallet.',
+      linkedHint:
+        'A client who accepts the link with your organisation sees your invoices and can settle them from its sandbox wallet.',
       empty: 'No client',
       emptyHint: 'Add a client to speed up quote and invoice creation.',
       created: 'Client created.',

@@ -5,16 +5,20 @@ import { IdentityVerificationForm } from '@/components/forms/identity-verificati
 import { MfaCard, PasswordForm, ProfileForm, SessionsCard } from '@/components/forms/settings-forms';
 import { SecurityPreferencesCard } from '@/components/forms/security-preferences-card';
 import { DeleteAccountCard } from '@/components/forms/delete-account-card';
+import { PasskeysCard, type PasskeyItem } from '@/components/security/passkeys-card';
+import { RecoveryCodesCard, type RecoveryCodesSummary } from '@/components/security/recovery-codes-card';
 import { apiFetch, getSession } from '@/lib/api-server';
 import { getT } from '@/lib/i18n-server';
 
 export const metadata = { title: 'Paramètres' };
 
 export default async function SettingsPage() {
-  const [{ t }, session, sessions] = await Promise.all([
+  const [{ t }, session, sessions, passkeys, recovery] = await Promise.all([
     getT(),
     getSession(),
     apiFetch<any[]>('/v1/auth/sessions'),
+    apiFetch<{ items: PasskeyItem[] }>('/v1/auth/passkeys'),
+    apiFetch<RecoveryCodesSummary>('/v1/auth/mfa/recovery-codes'),
   ]);
   const user = session!.user;
   const identity = user.identityVerification;
@@ -41,6 +45,8 @@ export default async function SettingsPage() {
         </Card>
         <PasswordForm />
         <MfaCard enabled={user.mfaEnabled} />
+        <RecoveryCodesCard summary={recovery} />
+        <PasskeysCard passkeys={passkeys.items} mfaEnabled={user.mfaEnabled} />
         <SecurityPreferencesCard preferences={(user as any).securityPreferences ?? null} />
         <div className="lg:col-span-2">
           <SessionsCard sessions={sessions} />

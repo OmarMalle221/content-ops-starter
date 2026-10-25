@@ -65,7 +65,7 @@ export function DocumentsTable({
             </TableCell>
             <TableCell className="max-w-[12rem] truncate">{r.customerName}</TableCell>
             <TableCell>
-              <StatusBadge status={r.status} />
+              <StatusBadge status={r.status} entity={kind === 'INVOICE' ? 'invoice' : 'quote'} />
             </TableCell>
             <TableCell className="whitespace-nowrap">
               {formatDate(r.dueDate ?? r.validUntil, locale)}

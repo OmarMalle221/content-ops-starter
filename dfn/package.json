@@ -12,6 +12,7 @@
     "dev:api": "pnpm --filter @dfn/api dev",
     "dev:web": "pnpm --filter @dfn/web dev",
     "build": "pnpm -r build",
+    "build:api": "pnpm --filter @dfn/api build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
@@ -24,7 +25,10 @@
     "db:seed": "pnpm --filter @dfn/database seed",
     "db:reset": "pnpm --filter @dfn/database reset",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yml,yaml}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,yml,yaml}\""
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,yml,yaml}\"",
+    "ops:backup": "bash infra/ops/backup.sh",
+    "ops:restore": "bash infra/ops/restore.sh",
+    "ops:restore-test": "bash infra/ops/restore-test.sh"
   },
   "devDependencies": {
     "prettier": "3.6.2",
@@ -41,6 +45,20 @@
       "sharp",
       "unrs-resolver",
       "msgpackr-extract"
-    ]
+    ],
+    "overrides": {
+      "postcss": "8.5.29",
+      "sharp": "0.35.5",
+      "body-parser@>=2.0.0 <2.4.0": "2.4.0",
+      "multer@>=2.0.0 <2.5.0": "2.5.0"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-5gmw-xhrv-c9v3",
+        "GHSA-85c8-ppgw-ccpr",
+        "GHSA-vfj7-8cjw-p6xm",
+        "GHSA-ggr8-5vv4-36mx"
+      ]
+    }
   }
 }

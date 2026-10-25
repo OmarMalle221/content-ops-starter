@@ -1,37 +1,89 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { RiskEngine, type RiskFacts } from '@dfn/compliance';
-import type { Prisma } from '@dfn/database';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  RiskEngine,
+  STRUCTURING_EVENT_KINDS,
+  STRUCTURING_RULE_CODE,
+  type RiskFacts,
+  type RiskSignal,
+} from '@dfn/compliance';
+import type { Prisma, RiskSeverity } from '@dfn/database';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { ENV, type Env } from '../../config/env';
+import { AuditService } from '../audit/audit.service';
+import { OPEN_ALERT_STATUSES, computeDueAt, severityAbove, slaHoursFrom, type SlaHours } from './review-sla';
+import { StructuringFactsService } from './structuring-facts.service';
+
+type Db = Prisma.TransactionClient | PrismaService;
+
+/** Repeated detections appended to an open STRUCTURING alert (most recent kept). */
+const MAX_STRUCTURING_UPDATES = 20;
+
+function isRootClient(db: Db): db is PrismaService {
+  return typeof (db as PrismaService).$transaction === 'function';
+}
 
 /**
  * Bridges the pure rules engine with persistence. Alerts are advisory and land in the
  * compliance review queue; nothing is blocked automatically.
+ *
+ * Every alert gets its review deadline at creation: dueAt = createdAt + REVIEW_SLA_HOURS_<SEVERITY>.
+ * STRUCTURING alerts are de-duplicated: one open alert per subject, currency and direction within
+ * the window; later detections are appended to it (and may raise its severity, never lower it).
  */
 @Injectable()
 export class RiskService {
   private readonly logger = new Logger(RiskService.name);
   private readonly engine = new RiskEngine();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(ENV) private readonly env: Env,
+    private readonly structuring: StructuringFactsService,
+    private readonly audit: AuditService,
+  ) {}
 
   listRules() {
     return this.engine.listRules();
   }
 
-  async evaluateAndRecord(facts: RiskFacts, db: Prisma.TransactionClient | PrismaService = this.prisma) {
-    const evaluation = this.engine.evaluate(facts);
+  /** Review SLA (hours) per severity. */
+  get slaHours(): SlaHours {
+    return slaHoursFrom(this.env);
+  }
+
+  /** Review deadline of an alert of this severity created at `createdAt`. */
+  slaDueAt(severity: RiskSeverity, createdAt = new Date()): Date {
+    return computeDueAt(createdAt, severity, this.slaHours);
+  }
+
+  async evaluateAndRecord(facts: RiskFacts, db: Db = this.prisma) {
+    const now = new Date();
+    let enriched = facts;
+    if (!facts.structuring && STRUCTURING_EVENT_KINDS[facts.event]) {
+      try {
+        const structuring = await this.structuring.collect(facts, now, db);
+        if (structuring) enriched = { ...facts, structuring };
+      } catch (err) {
+        // Detection must never break the business operation that triggered it.
+        this.logger.warn(
+          `risk: structuring facts unavailable for ${facts.event}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    const evaluation = this.engine.evaluate(enriched);
     for (const signal of evaluation.signals) {
-      await db.riskAlert.create({
-        data: {
-          userId: facts.userId ?? null,
-          organizationId: facts.organizationId ?? null,
-          transactionId: facts.transactionId ?? null,
-          ruleCode: signal.ruleCode,
-          severity: signal.severity,
-          score: signal.score,
-          explanation: signal.explanation as unknown as Prisma.InputJsonValue,
-        },
-      });
+      if (signal.ruleCode === STRUCTURING_RULE_CODE) {
+        try {
+          await this.recordStructuring(enriched, signal, now, db);
+        } catch (err) {
+          // Like the fact collection above: the queue entry must never break the operation.
+          this.logger.warn(
+            `risk: structuring alert not recorded for ${facts.event}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      } else {
+        await this.createAlert(facts, signal, now, db);
+      }
     }
     if (evaluation.signals.length) {
       this.logger.log(
@@ -39,6 +91,125 @@ export class RiskService {
       );
     }
     return evaluation;
+  }
+
+  private createAlert(facts: RiskFacts, signal: RiskSignal, now: Date, db: Db) {
+    return db.riskAlert.create({
+      data: {
+        userId: facts.userId ?? null,
+        organizationId: facts.organizationId ?? null,
+        transactionId: facts.transactionId ?? null,
+        ruleCode: signal.ruleCode,
+        severity: signal.severity,
+        score: signal.score,
+        explanation: signal.explanation as unknown as Prisma.InputJsonValue,
+        createdAt: now,
+        dueAt: this.slaDueAt(signal.severity, now),
+      },
+    });
+  }
+
+  /**
+   * One open STRUCTURING alert per subject / currency / direction within the window. Serialised on
+   * the de-duplication key with a transaction-scoped advisory lock, so concurrent operations of the
+   * same subject cannot open two alerts.
+   */
+  private async recordStructuring(facts: RiskFacts, signal: RiskSignal, now: Date, db: Db) {
+    const factors = signal.explanation.factors;
+    const dedupKey = String(factors.dedupKey);
+    const windowHours = Number(factors.windowHours) || this.env.STRUCTURING_WINDOW_HOURS;
+    const since = new Date(now.getTime() - windowHours * 3_600_000);
+    const run = async (tx: Prisma.TransactionClient) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dedupKey}))`;
+      const existing = await tx.riskAlert.findFirst({
+        where: {
+          ruleCode: STRUCTURING_RULE_CODE,
+          status: { in: OPEN_ALERT_STATUSES },
+          createdAt: { gte: since },
+          explanation: { path: ['factors', 'dedupKey'], equals: dedupKey },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!existing) {
+        const created = await this.createAlert(facts, signal, now, tx);
+        await this.audit.log(
+          {
+            actorUserId: null,
+            organizationId: facts.organizationId ?? null,
+            action: 'risk.structuring_detected',
+            entityType: 'RiskAlert',
+            entityId: created.id,
+            metadata: {
+              event: facts.event,
+              severity: signal.severity,
+              operationsCount: factors.operationsCount,
+              sum: factors.sum,
+              currencyCode: factors.currencyCode,
+              subjectType: factors.subjectType,
+            },
+          },
+          tx,
+        );
+        return;
+      }
+      const previous = (existing.explanation ?? {}) as Record<string, unknown>;
+      const updates = Array.isArray(previous.updates) ? [...(previous.updates as unknown[])] : [];
+      updates.push({
+        at: now.toISOString(),
+        event: facts.event,
+        severity: signal.severity,
+        operationsCount: factors.operationsCount,
+        sum: factors.sum,
+        references: factors.references,
+      });
+      const escalate = severityAbove(signal.severity, existing.severity);
+      const currentDue = existing.dueAt ?? this.slaDueAt(existing.severity, existing.createdAt);
+      // The SLA cycle restarts when a decision is contested: escalation counts from that restart,
+      // not from the creation (a reopened alert must not become overdue at once).
+      const contested = await tx.riskAlertAction.findFirst({
+        where: { alertId: existing.id, action: 'CONTEST' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+      const escalatedDue = this.slaDueAt(signal.severity, contested?.createdAt ?? existing.createdAt);
+      // The original explanation stays as detected; repeated detections are appended (bounded).
+      await tx.riskAlert.update({
+        where: { id: existing.id },
+        data: {
+          explanation: {
+            ...previous,
+            updates: updates.slice(-MAX_STRUCTURING_UPDATES),
+          } as Prisma.InputJsonValue,
+          ...(escalate
+            ? {
+                severity: signal.severity,
+                score: Math.max(existing.score, signal.score),
+                dueAt: escalatedDue < currentDue ? escalatedDue : currentDue,
+              }
+            : {}),
+        },
+      });
+      await this.audit.log(
+        {
+          actorUserId: null,
+          organizationId: facts.organizationId ?? existing.organizationId,
+          action: escalate ? 'risk.alert_escalated' : 'risk.structuring_repeated',
+          entityType: 'RiskAlert',
+          entityId: existing.id,
+          metadata: {
+            event: facts.event,
+            from: existing.severity,
+            to: escalate ? signal.severity : existing.severity,
+            operationsCount: factors.operationsCount,
+            sum: factors.sum,
+            currencyCode: factors.currencyCode,
+          },
+        },
+        tx,
+      );
+    };
+    if (isRootClient(db)) await db.$transaction(run);
+    else await run(db);
   }
 
   /** Facts helpers used by the transaction workflow. */

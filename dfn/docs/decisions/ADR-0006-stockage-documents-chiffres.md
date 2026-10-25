@@ -2,7 +2,7 @@
 
 | Champ  | Valeur                                                                                                  |
 | ------ | ------------------------------------------------------------------------------------------------------- |
-| Statut | Accepté (stockage objet S3-compatible prévu en Phase 3)                                                 |
+| Statut | Accepté, complété par l'ADR-0010 (stockage objet S3-compatible et trousseau de clés, phase 6)           |
 | Date   | 2026-10-11                                                                                              |
 | Portée | Modèle `Document`, module documents de l'API, `STORAGE_DIR`, `DOCUMENT_ENCRYPTION_KEY`, `MAX_UPLOAD_MB` |
 

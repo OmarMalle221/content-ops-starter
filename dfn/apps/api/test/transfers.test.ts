@@ -9,6 +9,7 @@ import { ReferenceDataService } from '../src/modules/reference/reference-data.se
 import { nominalLimitToMinor } from '../src/modules/transfers/transfers.service';
 import { rateDisplay, transferNextActions } from '../src/modules/transfers/transfer.dto';
 import { bootTestApp, resetDatabase, type TestContext } from './helpers/app';
+import { enableMfa, waitForFreshTotpStep } from './helpers/webauthn';
 import {
   balanceOf,
   createBeneficiary,
@@ -498,12 +499,7 @@ describe('transfer lifecycle', () => {
       organizationId: a.orgId,
       createdByUserId: a.ownerUser.id,
     });
-    const setup = await a.owner.post('/v1/auth/mfa/setup');
-    expect(setup.status).toBe(201);
-    const secret = setup.body.secret as string;
-    expect((await a.owner.post('/v1/auth/mfa/enable', { code: authenticator.generate(secret) })).status).toBe(
-      201,
-    );
+    const { secret } = await enableMfa(a.owner);
 
     const { transfer } = await quoteAndCreate(a.owner, beneficiary.id);
     const missing = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {});
@@ -513,6 +509,7 @@ describe('transfer lifecycle', () => {
     expect(wrong.status).toBe(401);
     expect(wrong.body.code).toBe('MFA_REQUIRED');
     expect(await walletBalance(ctx, a.orgId, 'CAD')).toBe(100_000n);
+    await waitForFreshTotpStep();
     const ok = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {
       mfaCode: authenticator.generate(secret),
     });
@@ -671,11 +668,13 @@ describe('compliance review', () => {
     const held = await a.owner.post(`/v1/transfers/${transfer.id}/authorize`, {});
     expect(held.status, JSON.stringify(held.body)).toBe(200);
     expect(held.body.status).toBe('REVIEW_REQUIRED');
-    expect(held.body.riskScore).toBeGreaterThanOrEqual(45);
+    // The score is staff-only (members cannot probe thresholds).
+    expect(held.body.riskScore).toBeNull();
     // Members only see a generic reason: rule codes and thresholds are reserved to staff.
     expect(held.body.reviewReason).toBe('COMPLIANCE_REVIEW');
     expect(held.body.reviewReason).not.toContain('UNVERIFIED_TRANSFER');
     const staffView = await a.compliance.get(`/v1/admin/transfers/${transfer.id}`);
+    expect(staffView.body.riskScore).toBeGreaterThanOrEqual(45);
     expect(staffView.status, JSON.stringify(staffView.body)).toBe(200);
     expect(staffView.body.reviewReason).toContain('UNVERIFIED_TRANSFER');
     expect(held.body.nextActions).toEqual(['CANCEL']);
@@ -747,12 +746,18 @@ describe('compliance review', () => {
       note: 'changed my mind',
     });
     expect(reReview.status).toBe(409);
-    // The partner can still settle the approved transfer.
-    const settled = await a.compliance.post('/v1/sandbox/partner/transfer-events', {
+    // COMPLIANCE reviews but cannot drive the simulated partner (SANDBOX_PARTNER_SIMULATE is ADMIN
+    // only); the organisation itself can still trigger the sandbox settlement of the approved transfer.
+    const denied = await a.compliance.post('/v1/sandbox/partner/transfer-events', {
       transferReference: transfer.reference,
       outcome: 'SETTLED',
     });
-    expect(settled.status).toBe(200);
+    expect(denied.status).toBe(403);
+    const settled = await a.owner.post('/v1/sandbox/partner/transfer-events', {
+      transferReference: transfer.reference,
+      outcome: 'SETTLED',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
     expect(settled.body.transfer.status).toBe('SETTLED');
 
     // Rejection path.

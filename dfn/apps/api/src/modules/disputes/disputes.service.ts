@@ -1,10 +1,11 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Prisma } from '@dfn/database';
 import {
   DISPUTABLE_TRANSACTION_STATES,
   DisputeOutcome,
   ErrorCode,
+  Permission,
   TransactionEventType,
   disputeMachine,
   minorToDecimalString,
@@ -18,6 +19,8 @@ import { isStaff, type AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
+import { staffUserWhere } from '../../common/staff-recipients';
+import { ENV, type Env } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payments.service';
@@ -27,6 +30,7 @@ import {
   type TransactionWithRelations,
 } from '../transactions/transaction-access.service';
 import { TransactionEventsService } from '../transactions/transaction-events.service';
+import { linkedDocumentDto } from '../../common/serialize';
 
 const APPEAL_WINDOW_DAYS = 7;
 
@@ -50,14 +54,40 @@ const disputeInclude = {
     orderBy: { createdAt: 'asc' as const },
     include: {
       author: { select: { id: true, firstName: true, lastName: true, globalRole: true } },
-      document: { select: { id: true, title: true, kind: true, fileName: true } },
+      document: {
+        select: {
+          id: true,
+          title: true,
+          kind: true,
+          fileName: true,
+          scanStatus: true,
+          scanEngine: true,
+          scannedAt: true,
+          deletedAt: true,
+        },
+      },
     },
   },
   decisions: {
     orderBy: { createdAt: 'asc' as const },
     include: { decidedBy: { select: { id: true, firstName: true, lastName: true } } },
   },
-  evidences: { include: { document: { select: { id: true, title: true, kind: true, fileName: true } } } },
+  evidences: {
+    include: {
+      document: {
+        select: {
+          id: true,
+          title: true,
+          kind: true,
+          fileName: true,
+          scanStatus: true,
+          scanEngine: true,
+          scannedAt: true,
+          deletedAt: true,
+        },
+      },
+    },
+  },
 } satisfies Prisma.DisputeInclude;
 
 @Injectable()
@@ -70,6 +100,7 @@ export class DisputesService {
     private readonly risk: RiskService,
     private readonly access: TransactionAccessService,
     private readonly events: TransactionEventsService,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   private toDto(d: Prisma.DisputeGetPayload<{ include: typeof disputeInclude }>, viewerIsStaff: boolean) {
@@ -104,7 +135,7 @@ export class DisputesService {
             name: `${m.author.firstName} ${m.author.lastName}`,
             staff: m.author.globalRole !== 'USER',
           },
-          document: m.document,
+          document: m.document ? linkedDocumentDto(m.document) : null,
         })),
       decisions: d.decisions.map((x) => ({
         id: x.id,
@@ -121,7 +152,7 @@ export class DisputesService {
         id: e.id,
         note: e.note,
         createdAt: e.createdAt,
-        document: e.document,
+        document: linkedDocumentDto(e.document),
       })),
       nextStates: disputeMachine.nextStates(d.status),
     };
@@ -145,7 +176,8 @@ export class DisputesService {
     kind: 'DISPUTE' | 'REFUND_REQUEST' = 'DISPUTE',
   ) {
     const { tx, role } = await this.access.loadFor(auth, transactionId);
-    this.access.assertRole(role, 'BUYER', 'SELLER');
+    // Opening a dispute freezes releases: the organisation role must grant DISPUTE_OPEN (not VIEWER).
+    this.access.assertPartyPermission(auth, tx, role, Permission.DISPUTE_OPEN, 'BUYER', 'SELLER');
     if (kind === 'REFUND_REQUEST') this.access.assertRole(role, 'BUYER');
     if (!DISPUTABLE_TRANSACTION_STATES.includes(tx.status)) {
       throw DomainError.invalidTransition(
@@ -224,7 +256,7 @@ export class DisputesService {
       data: { transactionId, disputeId: dispute.id },
     });
     const staff = await this.prisma.user.findMany({
-      where: { globalRole: { in: ['ADMIN', 'COMPLIANCE'] }, status: 'ACTIVE' },
+      where: staffUserWhere(this.env),
       select: { id: true },
     });
     await this.notifications.notifyMany(
@@ -283,6 +315,9 @@ export class DisputesService {
     if (d.status === 'CLOSED') throw DomainError.invalidTransition('Dispute is closed');
     if (input.internal && role !== 'STAFF')
       throw DomainError.forbidden('Only staff can write internal notes');
+    if (role !== 'STAFF') {
+      this.access.assertPartyPermission(auth, tx, role, Permission.DISPUTE_OPEN, 'BUYER', 'SELLER');
+    }
     if (input.documentId) {
       const doc = await this.prisma.document.findFirst({
         where: { id: input.documentId, transactionId: tx.id, deletedAt: null },
@@ -524,7 +559,7 @@ export class DisputesService {
 
   async appeal(auth: AuthContext, id: string, grounds: string, req: Request) {
     const { d, tx, role } = await this.loadDispute(auth, id);
-    this.access.assertRole(role, 'BUYER', 'SELLER');
+    this.access.assertPartyPermission(auth, tx, role, Permission.DISPUTE_OPEN, 'BUYER', 'SELLER');
     disputeMachine.assertTransition(d.status, 'APPEALED');
     if (d.appealDeadline && d.appealDeadline < new Date())
       throw new DomainError(ErrorCode.INVALID_TRANSITION, 'Appeal window has passed', HttpStatus.CONFLICT);

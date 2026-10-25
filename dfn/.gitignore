@@ -7,9 +7,19 @@ coverage
 .env
 .env.*
 !.env.example
-storage/
+# Local document storage (STORAGE_DIR=./storage from the repo root or apps/api). Anchored: an
+# unanchored "storage/" also matched the source directory apps/api/src/common/storage/.
+/storage/
+/apps/api/storage/
 playwright-report/
 test-results/
 .turbo
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+# Database backups (infra/ops/backup.sh) — never commit dumps, even sandbox ones
+backups/
+*.dump
+*.dump.age
+*.dump.gpg
+# Blob archives of the RUNBOOK §5 fallback (docker compose exec api tar …)
+storage-*.tar

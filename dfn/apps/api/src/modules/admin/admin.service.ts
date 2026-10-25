@@ -2,14 +2,19 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import type { Prisma } from '@dfn/database';
 import { LedgerService } from '@dfn/financial-ledger';
+import type {
+  AssignRiskAlertInput,
+  ExportRiskAlertsQuery,
+  ListRiskAlertsQuery,
+  RiskAlertActionName,
+} from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
 import { AuditService } from '../audit/audit.service';
 import { LEDGER } from '../ledger/ledger.provider';
-import { NotificationsService } from '../notifications/notifications.service';
-import { RiskService } from '../risk/risk.service';
+import { ReviewQueueService } from '../risk/review-queue.service';
 import { TransactionsService } from '../transactions/transactions.service';
 
 @Injectable()
@@ -17,8 +22,7 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly notifications: NotificationsService,
-    private readonly risk: RiskService,
+    private readonly reviewQueue: ReviewQueueService,
     private readonly transactions: TransactionsService,
     @Inject(LEDGER) private readonly ledger: LedgerService,
   ) {}
@@ -158,77 +162,34 @@ export class AdminService {
     return { id: userId, globalRole };
   }
 
-  async listRiskAlerts(status: string | undefined, page: number, pageSize: number) {
-    const where: Prisma.RiskAlertWhereInput = status ? { status: status as any } : {};
-    const [items, total] = await Promise.all([
-      this.prisma.riskAlert.findMany({
-        where,
-        orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: {
-          user: { select: { id: true, email: true, firstName: true, lastName: true } },
-          transaction: { select: { id: true, reference: true, title: true } },
-          actions: {
-            orderBy: { createdAt: 'asc' },
-            include: { actor: { select: { firstName: true, lastName: true } } },
-          },
-        },
-      }),
-      this.prisma.riskAlert.count({ where }),
-    ]);
-    return { items, total, page, pageSize, rules: this.risk.listRules() };
+  // ───────────── Compliance review queue: delegated to the risk module (ReviewQueueService) ─────────────
+
+  listRiskAlerts(auth: AuthContext, query: ListRiskAlertsQuery) {
+    return this.reviewQueue.list(auth, query);
   }
 
-  async actOnRiskAlert(
-    auth: AuthContext,
-    id: string,
-    action: 'START_REVIEW' | 'CONFIRM' | 'DISMISS' | 'CONTEST',
-    note: string,
-    req: Request,
-  ) {
-    const alert = await this.prisma.riskAlert.findUnique({ where: { id } });
-    if (!alert) throw DomainError.notFound('Risk alert');
-    const next = {
-      START_REVIEW: 'REVIEWING',
-      CONFIRM: 'CONFIRMED',
-      DISMISS: 'DISMISSED',
-      CONTEST: 'CONTESTED',
-    } as const;
-    const updated = await this.prisma.$transaction(async (db) => {
-      const u = await db.riskAlert.update({
-        where: { id },
-        data: {
-          status: next[action],
-          resolvedById: action === 'START_REVIEW' ? null : auth.userId,
-          resolutionNote: action === 'START_REVIEW' ? null : note,
-          resolvedAt: action === 'START_REVIEW' ? null : new Date(),
-        },
-      });
-      await db.riskAlertAction.create({ data: { alertId: id, actorUserId: auth.userId, action, note } });
-      await this.audit.log(
-        {
-          actorUserId: auth.userId,
-          action: 'admin.risk_alert_action',
-          entityType: 'RiskAlert',
-          entityId: id,
-          metadata: { action, from: alert.status, to: next[action] },
-          ...requestMeta(req),
-        },
-        db,
-      );
-      return u;
-    });
-    if (alert.userId && action !== 'START_REVIEW') {
-      await this.notifications.notify({
-        userId: alert.userId,
-        type: 'risk.alert_resolved',
-        title: 'Revue de conformité',
-        body: `Une alerte sur votre compte a été traitée (${next[action]}). Vous pouvez contester cette décision via le support.`,
-        data: { alertId: id },
-      });
-    }
-    return updated;
+  riskAlertsCsv(auth: AuthContext, query: ExportRiskAlertsQuery, req: Request) {
+    return this.reviewQueue.csv(auth, query, req);
+  }
+
+  riskAlertStats(auth: AuthContext) {
+    return this.reviewQueue.stats(auth);
+  }
+
+  riskAlertAssignees() {
+    return this.reviewQueue.assignees();
+  }
+
+  getRiskAlert(auth: AuthContext, id: string) {
+    return this.reviewQueue.get(auth, id);
+  }
+
+  assignRiskAlert(auth: AuthContext, id: string, input: AssignRiskAlertInput, req: Request) {
+    return this.reviewQueue.assign(auth, id, input, req);
+  }
+
+  actOnRiskAlert(auth: AuthContext, id: string, action: RiskAlertActionName, note: string, req: Request) {
+    return this.reviewQueue.act(auth, id, action, note, req);
   }
 
   async ledgerOverview(page: number, pageSize: number) {

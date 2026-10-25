@@ -1,0 +1,54 @@
+# Alertmanager of the "observability" compose profile (docker-compose.yml). SANDBOX: every alert
+# describes fictitious funds; annotations carry aggregate counts only, never personal data.
+#
+# Destinations are never written in this file: the container's entrypoint writes ALERT_WEBHOOK_URL,
+# ALERT_WEBHOOK_URL_CRITICAL (default: ALERT_WEBHOOK_URL) and ALERT_WATCHDOG_URL of .env to tmpfs
+# files read through url_file. A destination that is not set removes the lines tagged with its
+# marker (`# webhook`, `# webhook-critical`, `# watchdog`): the receiver then keeps the alerts
+# visible in Alertmanager without notifying anyone, and the entrypoint says so at start.
+# The payload is Alertmanager's webhook JSON (version 4): any receiver that accepts it works
+# (incident tool, chat bridge, mail relay). docs/operations/OBSERVABILITY.md §5 bis.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: team
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Always firing (alerts.yml): proves Prometheus → Alertmanager → dead man's switch. It never
+    # reaches people; the external switch pages when its heartbeat stops.
+    - matchers: ['alertname="DfnAlertingWatchdog"']
+      receiver: watchdog
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+    - matchers: ['severity="critical"']
+      receiver: oncall
+      group_wait: 10s
+      repeat_interval: 1h
+
+# No API replica at all explains every warning raised meanwhile (stale jobs, backlogs): page for
+# the cause only. `stack` is the external label of every alert of this Prometheus.
+inhibit_rules:
+  - source_matchers: ['alertname="DfnApiAbsent"']
+    target_matchers: ['severity="warning"']
+    equal: [stack]
+
+receivers:
+  - name: oncall
+    webhook_configs: # webhook-critical
+      - url_file: /run/alertmanager/webhook_url_critical # webhook-critical
+        send_resolved: true # webhook-critical
+        max_alerts: 50 # webhook-critical
+  - name: team
+    webhook_configs: # webhook
+      - url_file: /run/alertmanager/webhook_url # webhook
+        send_resolved: true # webhook
+        max_alerts: 50 # webhook
+  - name: watchdog
+    webhook_configs: # watchdog
+      - url_file: /run/alertmanager/watchdog_url # watchdog
+        send_resolved: false # watchdog

@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/shell/page-header';
 import { NewTransferFlow, type WalletBalance } from '@/components/transfers/new-transfer-flow';
 import type { BeneficiaryDto } from '@/components/transfers/types';
 import { OrgPicker } from '@/components/wallet/org-picker';
-import { apiFetchOptional, getSession } from '@/lib/api-server';
+import { apiFetchOptional, getSession, getTransferStepUpRequired } from '@/lib/api-server';
 import { getT } from '@/lib/i18n-server';
 
 export const metadata = { title: 'Nouveau transfert' };
@@ -22,9 +22,10 @@ export default async function NewTransferPage({
   const organizationId =
     sp.organizationId && orgs.some((o) => o.id === sp.organizationId) ? sp.organizationId : orgs[0].id;
   const org = orgs.find((o) => o.id === organizationId)!;
-  const [beneficiaries, summary] = await Promise.all([
+  const [beneficiaries, summary, stepUpRequired] = await Promise.all([
     apiFetchOptional<{ items: BeneficiaryDto[] }>(`/v1/beneficiaries?organizationId=${organizationId}`),
     apiFetchOptional<{ currencies: WalletBalance[] }>(`/v1/wallets/${organizationId}/summary`),
+    getTransferStepUpRequired(session),
   ]);
   return (
     <>
@@ -50,7 +51,7 @@ export default async function NewTransferPage({
           currencyCode: c.currencyCode,
           balance: c.balance,
         }))}
-        mfaEnabled={session!.user.mfaEnabled}
+        stepUpRequired={stepUpRequired}
         canAuthorize={orgRoleHas(org.role as OrgRole, Permission.TRANSFER_AUTHORIZE)}
       />
     </>

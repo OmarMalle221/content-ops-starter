@@ -1,3 +1,4 @@
+import { minorToDecimalString } from '@dfn/shared';
 import type { Locale } from './i18n';
 
 export interface MoneyDto {
@@ -12,6 +13,11 @@ const NBSP = '\u00a0';
 
 function groupThousands(integer: string, separator: string) {
   return integer.replace(/\B(?=(\d{3})+(?!\d))/g, separator);
+}
+
+/** MoneyDto of an amount the API sends as bare minor units (admin statistics, ledger balances). */
+export function moneyFromMinor(minor: string | bigint, currency: string): MoneyDto {
+  return { minor: String(minor), decimal: minorToDecimalString(minor, currency), currency };
 }
 
 /**

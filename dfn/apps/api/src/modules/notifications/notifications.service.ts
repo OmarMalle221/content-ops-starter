@@ -37,9 +37,16 @@ export class NotificationsService implements OnModuleDestroy {
     if (env.REDIS_URL && env.NODE_ENV !== 'test') {
       const connection = { url: env.REDIS_URL } as any;
       this.queue = new Queue<EmailJob>('notifications', { connection: parseRedis(env.REDIS_URL) });
-      this.worker = new Worker<EmailJob>('notifications', async (job) => this.deliverEmail(job.data), {
-        connection: parseRedis(env.REDIS_URL),
-      });
+      this.worker = new Worker<EmailJob>(
+        'notifications',
+        async (job) => {
+          // Not committed yet → throw so BullMQ retries with back-off (see deliverEmail).
+          if ((await this.deliverEmail(job.data)) === 'pending') {
+            throw new Error('notification not committed yet');
+          }
+        },
+        { connection: parseRedis(env.REDIS_URL) },
+      );
       this.worker.on('failed', (job, err) =>
         this.logger.error(`email job ${job?.id} failed: ${err.message}`),
       );
@@ -68,9 +75,14 @@ export class NotificationsService implements OnModuleDestroy {
         text: input.body,
       };
       if (this.queue) {
-        await this.queue.add('email', job, { removeOnComplete: 100, removeOnFail: 100, attempts: 3 });
+        await this.queue.add('email', job, {
+          removeOnComplete: 100,
+          removeOnFail: 100,
+          attempts: EMAIL_DELIVERY_ATTEMPTS,
+          backoff: { type: 'exponential', delay: 250 },
+        });
       } else {
-        setImmediate(() => void this.deliverEmail(job));
+        this.deliverInProcess(job, 0);
       }
     }
     return notification;
@@ -81,12 +93,43 @@ export class NotificationsService implements OnModuleDestroy {
     for (const userId of unique) await this.notify({ ...input, userId }, db);
   }
 
-  private async deliverEmail(job: EmailJob) {
+  /**
+   * The notification row is the outbox. When notify() runs inside a business transaction, the row
+   * only becomes visible once that transaction commits: until then delivery reports 'pending' and
+   * is retried with back-off; a row that never appears belongs to a rolled-back operation and no
+   * e-mail is ever sent for it. Delivery is idempotent (sentAt is set once).
+   */
+  private async deliverEmail(job: EmailJob): Promise<'sent' | 'pending' | 'skipped'> {
+    const row = await this.prisma.notification.findUnique({
+      where: { id: job.notificationId },
+      select: { sentAt: true },
+    });
+    if (!row) return 'pending';
+    if (row.sentAt) return 'skipped';
     // EMAIL_PROVIDER=log is the only transport in the sandbox build.
     this.logger.log(`[email:log] to=${maskEmail(job.to)} subject="${job.subject}"`);
-    await this.prisma.notification
-      .update({ where: { id: job.notificationId }, data: { sentAt: new Date() } })
-      .catch(() => undefined);
+    await this.prisma.notification.updateMany({
+      where: { id: job.notificationId, sentAt: null },
+      data: { sentAt: new Date() },
+    });
+    return 'sent';
+  }
+
+  /** In-process fallback (no Redis): same outbox semantics, bounded exponential retries. */
+  private deliverInProcess(job: EmailJob, attempt: number) {
+    const timer = setTimeout(
+      () => {
+        this.deliverEmail(job)
+          .then((outcome) => {
+            if (outcome !== 'pending') return;
+            if (attempt + 1 < EMAIL_DELIVERY_ATTEMPTS) this.deliverInProcess(job, attempt + 1);
+            else this.logger.debug(`notification ${job.notificationId} never committed — no e-mail sent`);
+          })
+          .catch((err) => this.logger.warn(`e-mail delivery failed: ${String(err)}`));
+      },
+      attempt === 0 ? 0 : 250 * 2 ** (attempt - 1),
+    );
+    timer.unref?.();
   }
 
   async listForUser(userId: string, page: number, pageSize: number, unreadOnly = false) {
@@ -125,6 +168,9 @@ export class NotificationsService implements OnModuleDestroy {
     await this.queue?.close();
   }
 }
+
+/** Delivery attempts while waiting for the enclosing transaction to commit (~8 s in total). */
+const EMAIL_DELIVERY_ATTEMPTS = 6;
 
 function parseRedis(url: string) {
   const u = new URL(url);

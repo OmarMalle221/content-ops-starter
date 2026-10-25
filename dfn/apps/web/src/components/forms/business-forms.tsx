@@ -113,7 +113,8 @@ export function InviteMemberCard({ organizationId }: { organizationId: string })
                 method: 'POST',
                 json: { email, role },
               });
-              setLink(`${window.location.origin}${new URL(r.acceptUrl).pathname}`);
+              // Support invitations never return the link: only the invitee receives it.
+              setLink(r.acceptUrl ? `${window.location.origin}${new URL(r.acceptUrl).pathname}` : null);
               setEmail('');
               router.refresh();
             } catch (err) {

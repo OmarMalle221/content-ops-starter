@@ -5,7 +5,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '@dfn/ui';
 import { api, errorMessage } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n-client';
+import { safeNext } from '@/lib/safe-next';
 import { FormMessage } from '@/components/form-message';
+import { PasskeyLoginButton } from '@/components/security/passkey-login-button';
 
 export function LoginForm() {
   const { t } = useI18n();
@@ -16,6 +18,12 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  function goNext(mfaRequired: boolean) {
+    const next = safeNext(params.get('next'));
+    router.push(mfaRequired ? `/mfa?next=${encodeURIComponent(next)}` : next);
+    router.refresh();
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -25,9 +33,7 @@ export function LoginForm() {
         method: 'POST',
         json: { email, password },
       });
-      const next = params.get('next') || '/dashboard';
-      router.push(res.mfaRequired ? `/mfa?next=${encodeURIComponent(next)}` : next);
-      router.refresh();
+      goNext(res.mfaRequired);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -69,6 +75,13 @@ export function LoginForm() {
           <Button type="submit" className="w-full" loading={loading}>
             {t('auth.login')}
           </Button>
+          <div className="flex items-center gap-3 text-xs uppercase text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            {t('passkeys.or')}
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          {/* A user-verifying passkey is a full sign-in: no MFA step follows. */}
+          <PasskeyLoginButton onSignedIn={() => goNext(false)} />
           <p className="text-center text-sm text-muted-foreground">
             {t('auth.noAccount')}{' '}
             <Link className="font-medium text-primary underline-offset-4 hover:underline" href="/register">

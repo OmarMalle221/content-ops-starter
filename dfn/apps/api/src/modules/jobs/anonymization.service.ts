@@ -1,7 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { Prisma } from '@dfn/database';
-import { encryptString, randomToken } from '../../common/crypto';
+import { randomToken } from '../../common/crypto';
+import { KeyPurpose } from '@dfn/shared';
+import { sealString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ENV, type Env } from '../../config/env';
@@ -27,9 +29,15 @@ export interface AnonymizationOutcome {
   beneficiariesAnonymized: number;
   counterpartiesAnonymized: number;
   customerEmailsCleared: number;
+  passkeysDeleted: number;
+  recoveryCodesDeleted: number;
+  linkRequestsRevoked: number;
 }
 
 const EMPTY_OUTCOME = {
+  passkeysDeleted: 0,
+  recoveryCodesDeleted: 0,
+  linkRequestsRevoked: 0,
   sessionsRevoked: 0,
   verificationsAnonymized: 0,
   documentsMarkedDeleted: 0,
@@ -99,6 +107,11 @@ export class AnonymizationService {
       });
       // Network identifiers of every session (revoked ones included) are personal data.
       await db.session.updateMany({ where: { userId }, data: { ip: null, userAgent: null } });
+      // Authentication material: passkeys (their names often identify a device or a person) and
+      // recovery codes are deleted, pending WebAuthn challenges too — nobody can sign in again.
+      const passkeys = await db.webAuthnCredential.deleteMany({ where: { userId } });
+      const recoveryCodes = await db.mfaRecoveryCode.deleteMany({ where: { userId } });
+      await db.authChallenge.deleteMany({ where: { userId } });
       const verifications = await db.identityVerification.updateMany({
         where: { userId },
         data: {
@@ -137,10 +150,7 @@ export class AnonymizationService {
           name: ANONYMIZED_BENEFICIARY_NAME,
           phone: null,
           email: null,
-          accountIdentifierEnc: encryptString(
-            this.env.DOCUMENT_ENCRYPTION_KEY,
-            ANONYMIZED_ACCOUNT_IDENTIFIER,
-          ),
+          accountIdentifierEnc: sealString(this.env, KeyPurpose.BENEFICIARIES, ANONYMIZED_ACCOUNT_IDENTIFIER),
           accountIdentifierMasked: ANONYMIZED_ACCOUNT_IDENTIFIER_MASKED,
           status: 'REMOVED',
         },
@@ -151,6 +161,14 @@ export class AnonymizationService {
         where: { email },
         data: { name: ANONYMIZED_COUNTERPARTY_NAME, email: null, phone: null },
       });
+      // Link requests still waiting for the user's personal workspace can no longer be decided:
+      // they lapse (linkedOrganizationId stays null — it is only ever set while ACCEPTED).
+      const linkRequests = personalOrganizationIds.length
+        ? await db.counterparty.updateMany({
+            where: { linkRequestedOrganizationId: { in: personalOrganizationIds }, linkStatus: 'PENDING' },
+            data: { linkStatus: 'REVOKED', linkDecidedAt: now },
+          })
+        : { count: 0 };
       const invoices = await db.invoice.updateMany({
         where: { customerEmail: email },
         data: { customerEmail: null },
@@ -174,6 +192,9 @@ export class AnonymizationService {
             beneficiariesAnonymized: beneficiaries.count,
             counterpartiesAnonymized: counterparties.count,
             customerEmailsCleared: invoices.count + quotes.count,
+            passkeysDeleted: passkeys.count,
+            recoveryCodesDeleted: recoveryCodes.count,
+            linkRequestsRevoked: linkRequests.count,
             blobPurge: 'follow-up: storage sweep after retention',
             auditRetention: 'AuditLog ip/userAgent follow the audit retention policy',
           },
@@ -191,6 +212,9 @@ export class AnonymizationService {
         beneficiariesAnonymized: beneficiaries.count,
         counterpartiesAnonymized: counterparties.count,
         customerEmailsCleared: invoices.count + quotes.count,
+        passkeysDeleted: passkeys.count,
+        recoveryCodesDeleted: recoveryCodes.count,
+        linkRequestsRevoked: linkRequests.count,
       } satisfies AnonymizationOutcome;
     });
     this.logger.log(`user ${userId} anonymised (${triggeredBy})`);

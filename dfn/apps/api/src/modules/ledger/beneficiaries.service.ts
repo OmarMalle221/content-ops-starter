@@ -6,9 +6,10 @@ import {
   orgRoleHas,
   type CreateBeneficiaryInput,
   type ListBeneficiariesQuery,
+  KeyPurpose,
 } from '@dfn/shared';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
-import { encryptString } from '../../common/crypto';
+import { sealString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { requestMeta } from '../../common/request-meta';
@@ -112,10 +113,15 @@ export class BeneficiariesService {
           country: input.country,
           currencyCode: input.currencyCode,
           method: input.method,
-          accountIdentifierEnc: encryptString(this.env.DOCUMENT_ENCRYPTION_KEY, identifier),
+          accountIdentifierEnc: sealString(this.env, KeyPurpose.BENEFICIARIES, identifier),
           accountIdentifierMasked: maskAccountIdentifier(identifier),
           institutionName: input.institutionName ?? null,
-          phone: input.phone ?? null,
+          // A phone identical to the account identifier would expose it in clear text next to the
+          // encrypted, masked identifier: it is dropped (the identifier already reaches the payee).
+          phone:
+            input.phone && input.phone.replace(/\s/g, '') !== identifier.replace(/\s/g, '')
+              ? input.phone
+              : null,
           email: input.email ?? null,
         },
       });

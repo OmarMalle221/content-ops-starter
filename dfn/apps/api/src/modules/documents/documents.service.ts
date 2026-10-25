@@ -1,7 +1,18 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { randomUUID } from 'node:crypto';
-import { ErrorCode, Permission, TransactionEventType, type DocumentMetadataInput } from '@dfn/shared';
+import {
+  DocumentPurgeState,
+  DocumentScanStatus,
+  ErrorCode,
+  Permission,
+  SANDBOX_SCAN_ENGINE,
+  TransactionEventType,
+  type DocumentMetadataInput,
+  type DocumentPurgeDto,
+  type DocumentScanDto,
+} from '@dfn/shared';
+import { AntivirusService } from '../../common/antivirus/antivirus.service';
 import { isStaff, membershipFor, type AuthContext } from '../../common/auth-context';
 import { DomainError } from '../../common/domain-error';
 import { sha256Hex } from '../../common/crypto';
@@ -13,7 +24,9 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { RiskService } from '../risk/risk.service';
 import { TransactionAccessService } from '../transactions/transaction-access.service';
 import { TransactionEventsService } from '../transactions/transaction-events.service';
-import { StorageService } from './storage.service';
+import { HELD_AS_EVIDENCE, HELD_BY_DISPUTE_MESSAGE, purgeAfter } from './document-purge.service';
+import { DocumentStorageService } from './storage.service';
+import { documentDownloadPath } from '../../common/serialize';
 
 const ALLOWED: Record<string, { ext: string[]; magic: (b: Buffer) => boolean }> = {
   'application/pdf': { ext: ['pdf'], magic: (b) => b.subarray(0, 5).toString('latin1') === '%PDF-' },
@@ -40,12 +53,13 @@ export interface UploadedFile {
 export class DocumentsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: StorageService,
+    private readonly storage: DocumentStorageService,
     private readonly audit: AuditService,
     private readonly organizations: OrganizationsService,
     private readonly access: TransactionAccessService,
     private readonly events: TransactionEventsService,
     private readonly risk: RiskService,
+    private readonly antivirus: AntivirusService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -76,6 +90,7 @@ export class DocumentsService {
     if (meta.transactionId) {
       const { tx, role } = await this.access.loadFor(auth, meta.transactionId);
       if (role === 'STAFF') throw DomainError.forbidden('Staff cannot upload documents on behalf of parties');
+      this.access.assertPartyPermission(auth, tx, role, Permission.DOCUMENT_UPLOAD, 'BUYER', 'SELLER');
       if (['SETTLED', 'REFUNDED', 'CANCELLED', 'EXPIRED'].includes(tx.status))
         throw DomainError.invalidTransition('Transaction is closed');
       organizationId =
@@ -91,50 +106,101 @@ export class DocumentsService {
       ).organizationId;
     }
     const sha256 = sha256Hex(file.buffer);
-    const storageKey = `${organizationId}/${randomUUID()}`;
-    await this.storage.put(storageKey, file.buffer);
-    const safeName = file.originalname.replace(/[^\w.\- ()]/g, '_').slice(0, 140);
-    const requestMeta_ = requestMeta(req);
-    const doc = await this.prisma.$transaction(async (db) => {
-      const created = await db.document.create({
-        data: {
-          organizationId,
-          uploadedByUserId: auth.userId,
-          transactionId,
+    // Scanned BEFORE anything is stored (fail closed: SCAN_UNAVAILABLE refuses the upload).
+    const scan = await this.antivirus.scan(file.buffer);
+    if (scan.status === 'INFECTED') {
+      await this.audit.log({
+        actorUserId: auth.userId,
+        organizationId,
+        action: 'document.rejected_infected',
+        entityType: 'Document',
+        entityId: null,
+        metadata: {
+          engine: scan.engine,
+          // The sandbox scanner is a simulation: its verdict is never presented as real protection.
+          ...(scan.engine === SANDBOX_SCAN_ENGINE ? { simulated: true } : {}),
+          signature: scan.signature,
           kind: meta.kind,
-          title: meta.title ?? safeName,
-          fileName: safeName,
           mimeType: file.mimetype,
           sizeBytes: file.size,
           sha256,
-          storageKey,
-          encrypted: true,
-          retentionUntil: new Date(Date.now() + 7 * 365 * 86_400_000),
-        },
-      });
-      if (transactionId) {
-        await this.events.record(
           transactionId,
-          TransactionEventType.DOCUMENT_UPLOADED,
-          auth.userId,
-          { documentId: created.id, kind: meta.kind, title: created.title },
+        },
+        ...requestMeta(req),
+      });
+      throw new DomainError(
+        ErrorCode.DOCUMENT_INFECTED,
+        scan.engine === SANDBOX_SCAN_ENGINE
+          ? 'The simulated antivirus of the sandbox (it only recognises the EICAR test file) flagged this file: it was not stored. This is not real malware protection'
+          : 'The antivirus flagged this file: it was not stored',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        { engine: scan.engine, signature: scan.signature },
+      );
+    }
+    const storageKey = `${organizationId}/${randomUUID()}`;
+    const stored = await this.storage.put(storageKey, file.buffer);
+    const safeName = file.originalname.replace(/[^\w.\- ()]/g, '_').slice(0, 140);
+    const requestMeta_ = requestMeta(req);
+    const doc = await this.prisma
+      .$transaction(async (db) => {
+        const created = await db.document.create({
+          data: {
+            organizationId,
+            uploadedByUserId: auth.userId,
+            transactionId,
+            kind: meta.kind,
+            title: meta.title ?? safeName,
+            fileName: safeName,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            sha256,
+            storageKey,
+            encrypted: true,
+            storageDriver: stored.storageDriver,
+            encryptionKeyId: stored.encryptionKeyId,
+            retentionUntil: new Date(Date.now() + 7 * 365 * 86_400_000),
+            scanStatus: scan.status,
+            scanEngine: scan.engine,
+            scannedAt: scan.scannedAt,
+          },
+        });
+        if (transactionId) {
+          await this.events.record(
+            transactionId,
+            TransactionEventType.DOCUMENT_UPLOADED,
+            auth.userId,
+            { documentId: created.id, kind: meta.kind, title: created.title },
+            db,
+          );
+        }
+        await this.audit.log(
+          {
+            actorUserId: auth.userId,
+            organizationId,
+            action: 'document.uploaded',
+            entityType: 'Document',
+            entityId: created.id,
+            metadata: {
+              kind: meta.kind,
+              sizeBytes: file.size,
+              sha256,
+              transactionId,
+              storageDriver: stored.storageDriver,
+              encryptionKeyId: stored.encryptionKeyId,
+              scanStatus: scan.status,
+              scanEngine: scan.engine,
+            },
+            ...requestMeta_,
+          },
           db,
         );
-      }
-      await this.audit.log(
-        {
-          actorUserId: auth.userId,
-          organizationId,
-          action: 'document.uploaded',
-          entityType: 'Document',
-          entityId: created.id,
-          metadata: { kind: meta.kind, sizeBytes: file.size, sha256, transactionId },
-          ...requestMeta_,
-        },
-        db,
-      );
-      return created;
-    });
+        return created;
+      })
+      .catch(async (err: unknown) => {
+        // The row was not written: do not leave an orphan blob behind.
+        await this.storage.remove({ storageKey, storageDriver: stored.storageDriver });
+        throw err;
+      });
     if (transactionId) {
       const duplicates = await this.prisma.document.count({
         where: { sha256, transactionId: { not: transactionId }, deletedAt: null },
@@ -166,7 +232,15 @@ export class DocumentsService {
     reviewNote: string | null;
     createdAt: Date;
     uploadedByUserId: string;
+    scanStatus: string;
+    scanEngine: string | null;
+    scannedAt: Date | null;
   }) {
+    const scan: DocumentScanDto = {
+      status: doc.scanStatus as DocumentScanStatus,
+      engine: doc.scanEngine,
+      scannedAt: doc.scannedAt?.toISOString() ?? null,
+    };
     return {
       id: doc.id,
       organizationId: doc.organizationId,
@@ -181,7 +255,10 @@ export class DocumentsService {
       reviewNote: doc.reviewNote,
       uploadedByUserId: doc.uploadedByUserId,
       createdAt: doc.createdAt,
-      downloadUrl: `/api/v1/documents/${doc.id}/download`,
+      scan,
+      // A document flagged INFECTED is never served: no download link. API-relative path (the web
+      // prepends its /api proxy prefix; partners resolve it against API_PUBLIC_URL).
+      downloadUrl: scan.status === DocumentScanStatus.INFECTED ? null : documentDownloadPath(doc.id),
     };
   }
 
@@ -208,10 +285,15 @@ export class DocumentsService {
     return docs.map((d) => this.toDto(d));
   }
 
-  async listMine(auth: AuthContext, organizationId?: string) {
-    const orgIds = organizationId ? [organizationId] : auth.memberships.map((m) => m.organizationId);
+  /** Organisations listed for `auth` (one requested organisation, or every membership). */
+  private listedOrganizations(auth: AuthContext, organizationId?: string): string[] {
     if (organizationId && !isStaff(auth) && !membershipFor(auth, organizationId))
       throw DomainError.notFound('Organization');
+    return organizationId ? [organizationId] : auth.memberships.map((m) => m.organizationId);
+  }
+
+  async listMine(auth: AuthContext, organizationId?: string) {
+    const orgIds = this.listedOrganizations(auth, organizationId);
     const docs = await this.prisma.document.findMany({
       where: { deletedAt: null, OR: [{ organizationId: { in: orgIds } }, { uploadedByUserId: auth.userId }] },
       orderBy: { createdAt: 'desc' },
@@ -221,10 +303,90 @@ export class DocumentsService {
     return docs.map((d) => ({ ...this.toDto(d), transaction: d.transaction }));
   }
 
+  /**
+   * Deleted documents of the same scope as `listMine`, with the fate of their blob: retained until
+   * `purgeAfter` (retention, grace period, evidence of an open dispute), then purged. Metadata
+   * only — a deleted document is never downloadable.
+   */
+  async listDeleted(auth: AuthContext, organizationId?: string) {
+    const orgIds = this.listedOrganizations(auth, organizationId);
+    const docs = await this.prisma.document.findMany({
+      where: {
+        deletedAt: { not: null },
+        OR: [{ organizationId: { in: orgIds } }, { uploadedByUserId: auth.userId }],
+      },
+      orderBy: { deletedAt: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        organizationId: true,
+        transactionId: true,
+        kind: true,
+        title: true,
+        sizeBytes: true,
+        createdAt: true,
+        deletedAt: true,
+        retentionUntil: true,
+        blobPurgedAt: true,
+        transaction: { select: { id: true, reference: true, title: true } },
+      },
+    });
+    const ids = docs.filter((d) => !d.blobPurgedAt).map((d) => d.id);
+    const held = ids.length
+      ? await this.prisma.document.findMany({
+          where: { id: { in: ids }, OR: [HELD_AS_EVIDENCE, HELD_BY_DISPUTE_MESSAGE] },
+          select: { id: true },
+        })
+      : [];
+    const heldIds = new Set(held.map((h) => h.id));
+    return docs.map((d) => {
+      const purge: DocumentPurgeDto = {
+        state: d.blobPurgedAt ? DocumentPurgeState.PURGED : DocumentPurgeState.RETAINED,
+        deletedAt: d.deletedAt!.toISOString(),
+        purgeAfter: purgeAfter(
+          { deletedAt: d.deletedAt!, retentionUntil: d.retentionUntil },
+          this.env.DOCUMENT_PURGE_GRACE_DAYS,
+        ).toISOString(),
+        purgedAt: d.blobPurgedAt?.toISOString() ?? null,
+        heldAsEvidence: heldIds.has(d.id),
+      };
+      return {
+        id: d.id,
+        organizationId: d.organizationId,
+        transactionId: d.transactionId,
+        kind: d.kind,
+        title: d.title,
+        sizeBytes: d.sizeBytes,
+        createdAt: d.createdAt,
+        transaction: d.transaction,
+        purge,
+      };
+    });
+  }
+
   async download(auth: AuthContext, id: string, req: Request) {
     const doc = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
     if (!doc || !(await this.canAccess(auth, doc))) throw DomainError.notFound('Document');
-    const bytes = await this.storage.get(doc.storageKey);
+    if (doc.scanStatus === DocumentScanStatus.INFECTED) {
+      // Flagged by the antivirus: the content is never served (not even decrypted).
+      await this.audit.log({
+        actorUserId: auth.userId,
+        organizationId: doc.organizationId,
+        action: 'document.download_refused',
+        entityType: 'Document',
+        entityId: doc.id,
+        metadata: { reason: 'INFECTED', engine: doc.scanEngine },
+        ...requestMeta(req),
+      });
+      throw new DomainError(
+        ErrorCode.DOCUMENT_INFECTED,
+        'The antivirus flagged this document: it cannot be downloaded',
+        HttpStatus.CONFLICT,
+        { documentId: doc.id, engine: doc.scanEngine },
+      );
+    }
+    // Decrypts with the recorded key and re-checks the SHA-256: never serves corrupted content.
+    const bytes = await this.storage.read(doc, auth.userId);
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId: doc.organizationId,
@@ -278,20 +440,37 @@ export class DocumentsService {
 
   async softDelete(auth: AuthContext, id: string, req: Request) {
     const doc = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
-    if (!doc) throw DomainError.notFound('Document');
-    if (doc.uploadedByUserId !== auth.userId && !isStaff(auth)) throw DomainError.forbidden();
+    // Someone who cannot see the document gets the same 404 as for an unknown id (no oracle).
+    if (!doc || !(await this.canAccess(auth, doc))) throw DomainError.notFound('Document');
+    // The uploader may delete their own document. Anyone else needs the support-write permission
+    // (ADMIN) AND a support reason, audited as `support.write` before the deletion: reading tenant
+    // data never implies the right to destroy it.
+    if (doc.uploadedByUserId !== auth.userId) {
+      await this.organizations.authorizeSupportAction(auth, doc.organizationId, 'document:delete', req);
+    }
     const used = await this.prisma.evidence.count({ where: { documentId: id } });
     if (used > 0) throw DomainError.conflict('Document is attached as evidence and cannot be deleted');
-    await this.prisma.document.update({ where: { id }, data: { deletedAt: new Date() } });
-    await this.storage.delete(doc.storageKey);
+    // Soft delete only: the encrypted blob is kept for the retention period and destroyed by the
+    // DOCUMENT_PURGE job once max(deletedAt + DOCUMENT_PURGE_GRACE_DAYS, retentionUntil) has passed.
+    const deletedAt = new Date();
+    const { count } = await this.prisma.document.updateMany({
+      where: { id, deletedAt: null },
+      data: { deletedAt },
+    });
+    if (count === 0) throw DomainError.notFound('Document');
+    const blobPurgeAfter = purgeAfter(
+      { deletedAt, retentionUntil: doc.retentionUntil },
+      this.env.DOCUMENT_PURGE_GRACE_DAYS,
+    );
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId: doc.organizationId,
       action: 'document.deleted',
       entityType: 'Document',
       entityId: id,
+      metadata: { blobRetained: true, purgeAfter: blobPurgeAfter.toISOString() },
       ...requestMeta(req),
     });
-    return { deleted: true };
+    return { deleted: true, purgeAfter: blobPurgeAfter.toISOString() };
   }
 }

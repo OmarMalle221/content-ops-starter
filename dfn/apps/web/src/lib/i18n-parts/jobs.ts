@@ -6,7 +6,7 @@ export const jobsPart = definePart(
     jobsAdmin: {
       title: 'Tâches planifiées',
       subtitle:
-        'Instantanés de soldes, réconciliation, expirations et anonymisation — exécutées par le planificateur interne, sur des données fictives.',
+        'Instantanés de soldes, réconciliation, expirations, anonymisation et tâches de sécurité — exécutées sous bail par le planificateur, sur des données fictives.',
       scheduler: 'Planificateur',
       enabled: 'Actif',
       disabled: 'Désactivé',
@@ -25,7 +25,7 @@ export const jobsPart = definePart(
       triggeredBy: 'Déclenchée par',
       runNow: 'Exécuter maintenant',
       runConfirm:
-        'La tâche s’exécute immédiatement sur les données fictives du bac à sable ; une exécution déjà en cours ailleurs sera refusée (verrou).',
+        'La tâche s’exécute immédiatement sur les données fictives du bac à sable ; elle est refusée si une autre instance détient déjà son bail.',
       lastResult: 'Résultat',
       runs: 'Historique des exécutions',
       allJobs: 'Toutes les tâches',
@@ -37,8 +37,37 @@ export const jobsPart = definePart(
       previous: 'Précédent',
       next: 'Suivant',
       page: 'Page',
-      bullmq:
-        'Évolution prévue : tâches répétables BullMQ (Redis) avec workers dédiés — les gestionnaires enregistrés restent identiques.',
+      driver: 'Moteur',
+      drivers: {
+        inprocess: 'Minuterie interne',
+        bullmq: 'BullMQ (Redis)',
+      },
+      driverDescriptions: {
+        inprocess:
+          'Chaque instance de l’API déclenche les tâches avec sa propre minuterie ; un bail en base garantit qu’une même tâche ne s’exécute jamais deux fois en parallèle.',
+        bullmq:
+          'Une planification répétable par tâche dans la file Redis « dfn-maintenance » : chaque échéance est exécutée une seule fois, par le worker d’une des instances, sous bail en base.',
+      },
+      instance: 'Cette instance',
+      instanceHint: 'bail de {lease} s, renouvelé toutes les {heartbeat} s',
+      leases: 'Baux en cours',
+      leasesDescription:
+        'Une ligne par tâche en cours d’exécution. L’instance propriétaire renouvelle son bail tant que la tâche tourne ; un bail expiré (instance arrêtée) est repris par la prochaine exécution, qui clôt l’exécution abandonnée en échec.',
+      noLeases: 'Aucune tâche en cours d’exécution.',
+      owner: 'Instance propriétaire',
+      thisInstance: 'cette instance',
+      run: 'Exécution',
+      acquiredAt: 'Acquis',
+      heartbeatAt: 'Dernier battement',
+      expiresAt: 'Expiration',
+      leaseState: 'État',
+      leaseActive: 'Actif',
+      leaseExpired: 'Expiré',
+      runningOn: 'En cours sur',
+      nextRun: 'Prochaine exécution',
+      notScheduled: 'Non planifiée',
+      schedulerError: 'File de tâches injoignable',
+      instanceColumn: 'Instance',
       names: {
         BALANCE_SNAPSHOTS: 'Instantanés de soldes',
         RECONCILIATION: 'Réconciliation du registre',
@@ -47,6 +76,12 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Traitement des transferts',
         WEBHOOK_RETRY: 'Relance des webhooks',
         INVOICE_OVERDUE: 'Factures en retard',
+        ENCRYPTION_KEY_ROTATION: 'Rotation des clés de chiffrement',
+        KEY_LIFECYCLE: 'Cycle de vie des clés KMS',
+        DOCUMENT_PURGE: 'Purge des documents supprimés',
+        STORAGE_MIGRATION: 'Migration du stockage vers S3',
+        REVIEW_SLA: 'Délais de revue conformité',
+        AUTH_CLEANUP: 'Nettoyage de l’authentification',
       },
       descriptions: {
         BALANCE_SNAPSHOTS: 'Un instantané par compte de registre actif (ancre de la réconciliation).',
@@ -57,6 +92,12 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Fait progresser les transferts en traitement (simulation partenaire).',
         WEBHOOK_RETRY: 'Relance les livraisons de webhooks en échec.',
         INVOICE_OVERDUE: 'Marque les factures échues comme en retard.',
+        ENCRYPTION_KEY_ROTATION: 'Re-chiffre les secrets et documents scellés avec une clé retirée.',
+        KEY_LIFECYCLE: 'Active les clés préparées, planifie la rotation et lance le re-chiffrement.',
+        DOCUMENT_PURGE: 'Efface les blobs des documents supprimés dont la rétention est échue.',
+        STORAGE_MIGRATION: 'Copie les blobs locaux vers le stockage objet, vérifie puis bascule.',
+        REVIEW_SLA: 'Signale les alertes de risque dont le délai de revue est dépassé.',
+        AUTH_CLEANUP: 'Purge les défis WebAuthn expirés et les sessions échues.',
       },
     },
     account: {
@@ -88,7 +129,7 @@ export const jobsPart = definePart(
     jobsAdmin: {
       title: 'Scheduled jobs',
       subtitle:
-        'Balance snapshots, reconciliation, expirations and anonymisation — run by the in-process scheduler on simulated data.',
+        'Balance snapshots, reconciliation, expirations, anonymisation and security jobs — run under lease by the scheduler on simulated data.',
       scheduler: 'Scheduler',
       enabled: 'Enabled',
       disabled: 'Disabled',
@@ -107,7 +148,7 @@ export const jobsPart = definePart(
       triggeredBy: 'Triggered by',
       runNow: 'Run now',
       runConfirm:
-        'The job runs immediately on the sandbox’s simulated data; a run already in progress elsewhere is refused (lock).',
+        'The job runs immediately on the sandbox’s simulated data; it is refused while another instance holds its lease.',
       lastResult: 'Result',
       runs: 'Run history',
       allJobs: 'All jobs',
@@ -119,8 +160,37 @@ export const jobsPart = definePart(
       previous: 'Previous',
       next: 'Next',
       page: 'Page',
-      bullmq:
-        'Planned evolution: BullMQ repeatable jobs (Redis) with dedicated workers — the registered handlers stay the same.',
+      driver: 'Driver',
+      drivers: {
+        inprocess: 'In-process timer',
+        bullmq: 'BullMQ (Redis)',
+      },
+      driverDescriptions: {
+        inprocess:
+          'Every API instance triggers the jobs with its own timer; a lease in the database guarantees that a job never runs twice in parallel.',
+        bullmq:
+          'One repeatable schedule per job in the “dfn-maintenance” Redis queue: each occurrence runs once, on the worker of one of the instances, under a database lease.',
+      },
+      instance: 'This instance',
+      instanceHint: '{lease} s lease, renewed every {heartbeat} s',
+      leases: 'Current leases',
+      leasesDescription:
+        'One row per job being executed. The owning instance renews its lease while the job runs; an expired lease (instance stopped) is taken over by the next run, which closes the abandoned run as failed.',
+      noLeases: 'No job is running.',
+      owner: 'Owning instance',
+      thisInstance: 'this instance',
+      run: 'Run',
+      acquiredAt: 'Acquired',
+      heartbeatAt: 'Last heartbeat',
+      expiresAt: 'Expires',
+      leaseState: 'State',
+      leaseActive: 'Active',
+      leaseExpired: 'Expired',
+      runningOn: 'Running on',
+      nextRun: 'Next run',
+      notScheduled: 'Not scheduled',
+      schedulerError: 'Job queue unreachable',
+      instanceColumn: 'Instance',
       names: {
         BALANCE_SNAPSHOTS: 'Balance snapshots',
         RECONCILIATION: 'Ledger reconciliation',
@@ -129,6 +199,12 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Transfer processing',
         WEBHOOK_RETRY: 'Webhook retry',
         INVOICE_OVERDUE: 'Overdue invoices',
+        ENCRYPTION_KEY_ROTATION: 'Encryption key rotation',
+        KEY_LIFECYCLE: 'KMS key lifecycle',
+        DOCUMENT_PURGE: 'Deleted document purge',
+        STORAGE_MIGRATION: 'Storage migration to S3',
+        REVIEW_SLA: 'Compliance review deadlines',
+        AUTH_CLEANUP: 'Authentication cleanup',
       },
       descriptions: {
         BALANCE_SNAPSHOTS: 'One snapshot per active ledger account (the reconciliation anchor).',
@@ -138,6 +214,12 @@ export const jobsPart = definePart(
         TRANSFER_PROCESSING: 'Advances transfers in processing (partner simulation).',
         WEBHOOK_RETRY: 'Retries failed webhook deliveries.',
         INVOICE_OVERDUE: 'Flags past-due invoices as overdue.',
+        ENCRYPTION_KEY_ROTATION: 'Re-encrypts sealed secrets and documents still using a retired key.',
+        KEY_LIFECYCLE: 'Activates staged keys, schedules rotation and runs the re-encryption.',
+        DOCUMENT_PURGE: 'Erases the blobs of deleted documents whose retention has elapsed.',
+        STORAGE_MIGRATION: 'Copies local blobs to object storage, verifies, then switches them over.',
+        REVIEW_SLA: 'Flags risk alerts whose review deadline has passed.',
+        AUTH_CLEANUP: 'Purges expired WebAuthn challenges and sessions.',
       },
     },
     account: {

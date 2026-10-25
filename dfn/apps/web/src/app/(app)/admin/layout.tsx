@@ -6,6 +6,9 @@ import { PageHeader } from '@/components/shell/page-header';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const [{ t }, session] = await Promise.all([getT(), getSession()]);
+  // REQUIRE_STAFF_MFA: staff tools stay off until the account enables MFA, which happens in the
+  // settings (the app shell explains why). `globalRole` is the effective role ('USER' meanwhile).
+  if (session?.user.staffMfaRequired) redirect('/settings');
   if (!session || session.user.globalRole === 'USER') redirect('/dashboard');
   return (
     <>

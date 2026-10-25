@@ -8,9 +8,11 @@ import {
   type SendTestWebhookInput,
   type UpdateWebhookInput,
   type WebhookDeliveriesQuery,
+  KeyPurpose,
 } from '@dfn/shared';
 import type { AuthContext } from '../../common/auth-context';
-import { encryptString, randomToken } from '../../common/crypto';
+import { randomToken } from '../../common/crypto';
+import { sealString } from '../../common/keyring';
 import { DomainError } from '../../common/domain-error';
 import { paginate } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -61,7 +63,7 @@ export class WebhooksService {
   }
 
   private encrypt(secret: string) {
-    return encryptString(this.env.DOCUMENT_ENCRYPTION_KEY, secret);
+    return sealString(this.env, KeyPurpose.WEBHOOKS, secret);
   }
 
   async list(auth: AuthContext, query: ListWebhooksQuery) {
@@ -82,7 +84,7 @@ export class WebhooksService {
 
   async create(auth: AuthContext, input: CreateWebhookRequest, req: Request) {
     const membership = this.manager(auth, input.organizationId);
-    assertSafeWebhookUrl(input.url, this.env.NODE_ENV);
+    assertSafeWebhookUrl(input.url, this.env.NODE_ENV, this.env.WEBHOOK_ALLOWED_HOSTS);
     const secret = generateWebhookSecret();
     const subscription = await this.prisma.$transaction(async (tx) => {
       const created = await tx.webhookSubscription.create({
@@ -125,7 +127,8 @@ export class WebhooksService {
   async update(auth: AuthContext, id: string, input: UpdateWebhookInput, req: Request) {
     const current = await this.load(auth, id);
     if (current.revokedAt) throw DomainError.conflict('A deleted webhook cannot be updated');
-    if (input.url !== undefined) assertSafeWebhookUrl(input.url, this.env.NODE_ENV);
+    if (input.url !== undefined)
+      assertSafeWebhookUrl(input.url, this.env.NODE_ENV, this.env.WEBHOOK_ALLOWED_HOSTS);
     const reactivating = input.isActive === true && !current.isActive;
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.webhookSubscription.update({
@@ -254,24 +257,40 @@ export class WebhooksService {
     return paginate(items.map(toWebhookDeliveryDto), total, query.page, query.pageSize);
   }
 
-  /** Manual retry of a failed / exhausted delivery, regardless of its scheduled attempt time. */
+  /**
+   * Manual retry of a failed / exhausted delivery, regardless of its scheduled attempt time. A
+   * delivery being sent right now (retry job, another manual retry) is refused with 409 CONFLICT
+   * instead of being sent a second time concurrently.
+   */
   async retryDelivery(auth: AuthContext, id: string, deliveryId: string, req: Request) {
     const subscription = await this.load(auth, id);
     const delivery = await this.prisma.webhookDelivery.findFirst({
       where: { id: deliveryId, subscriptionId: subscription.id },
     });
     if (!delivery) throw DomainError.notFound('Webhook delivery');
-    if (delivery.status !== 'FAILED' && delivery.status !== 'EXHAUSTED') {
-      throw DomainError.invalidTransition(
-        `Only FAILED or EXHAUSTED deliveries can be retried (current: ${delivery.status})`,
-        {
-          entity: 'WebhookDelivery',
-          from: delivery.status,
-          to: 'PENDING',
-        },
-      );
+    const assertRetryable = (status: string) => {
+      if (status !== 'FAILED' && status !== 'EXHAUSTED') {
+        throw DomainError.invalidTransition(
+          `Only FAILED or EXHAUSTED deliveries can be retried (current: ${status})`,
+          {
+            entity: 'WebhookDelivery',
+            from: status,
+            to: 'PENDING',
+          },
+        );
+      }
+    };
+    assertRetryable(delivery.status);
+    // The dispatcher claims the row atomically: it sends nothing when another attempt holds it.
+    const { delivery: result, attempted } = await this.dispatcher.attempt(delivery.id, 'manual');
+    if (!attempted) {
+      assertRetryable(result.status);
+      throw DomainError.conflict('This delivery is being sent by another attempt; retry once it completes', {
+        deliveryId: result.id,
+        status: result.status,
+        claimedUntil: result.claimedUntil,
+      });
     }
-    const result = await this.dispatcher.deliver(delivery.id, 'manual');
     await this.audit.log({
       actorUserId: auth.userId,
       organizationId: subscription.organizationId,
