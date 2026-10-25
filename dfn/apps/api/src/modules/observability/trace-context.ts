@@ -3,10 +3,10 @@ import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 /**
- * W3C Trace Context (https://www.w3.org/TR/trace-context/) without a tracing backend: every
- * request gets a trace id (continued from a valid incoming `traceparent`, or new) and a span id of
- * its own; both are echoed in the `traceparent` response header, written on every log line of the
+ * W3C Trace Context (https://www.w3.org/TR/trace-context/): every request gets a trace id
+ * (continued from a valid incoming `traceparent`, or new) and a span id of its own; both are echoed in the `traceparent` response header, written on every log line of the
  * request (pino customProps, app.module.ts) and continued by outgoing webhook requests (child span).
+ * The finished spans are exported only when OTEL_EXPORTER_OTLP_* is set (span-recorder.ts).
  * Plain module (no Nest dependency) so that transports such as webhook-http.ts can import it.
  */
 export interface TraceContext {
@@ -128,11 +128,17 @@ export function currentTraceContext(): TraceContext | undefined {
 }
 
 /**
- * `traceparent` for an outgoing request: a new child span of the current trace, or the root span
- * of a new trace outside any request (e.g. webhook retries run by the scheduler).
+ * Context of an outgoing request: a new child span of the current trace, or the root span of a new
+ * trace outside any request (e.g. webhook retries run by the scheduler).
  */
-export function outgoingTraceparent(parent: TraceContext | undefined = currentTraceContext()): string {
+export function outgoingTraceContext(parent: TraceContext | undefined = currentTraceContext()): TraceContext {
   return parent
-    ? formatTraceparent(parent.traceId, newSpanId(), parent.flags)
-    : formatTraceparent(newTraceId(), newSpanId(), NEW_TRACE_FLAGS);
+    ? { traceId: parent.traceId, spanId: newSpanId(), parentSpanId: parent.spanId, flags: parent.flags }
+    : { traceId: newTraceId(), spanId: newSpanId(), flags: NEW_TRACE_FLAGS };
+}
+
+/** `traceparent` header of `outgoingTraceContext(parent)`. */
+export function outgoingTraceparent(parent: TraceContext | undefined = currentTraceContext()): string {
+  const ctx = outgoingTraceContext(parent);
+  return formatTraceparent(ctx.traceId, ctx.spanId, ctx.flags);
 }

@@ -4,18 +4,20 @@ import { DomainGaugesService } from './domain-gauges.service';
 import { MetricsEndpointMiddleware } from './metrics-endpoint.middleware';
 import { MetricsService } from './metrics.service';
 import { RequestInstrumentationMiddleware } from './request-instrumentation.middleware';
+import { TraceExporterService } from './trace-exporter.service';
 
 /**
  * Phase 7 — observability: Prometheus metrics (GET /metrics), HTTP instrumentation keyed by route
  * template, domain gauges read from the database at scrape time, and W3C trace-context propagation
  * (trace-context.ts; the pino fields are wired in the LoggerModule block of app.module.ts and the
- * outgoing webhook header in api-platform/webhook-http.ts). Global so that any module can record
+ * outgoing webhook header in api-platform/webhook-http.ts), with the finished spans exported over
+ * OTLP when OTEL_EXPORTER_OTLP_* is set (trace-exporter.service.ts). Global so that any module can record
  * metrics through MetricsService without importing it explicitly. Both middlewares are applied
  * here, in this order: the instrumentation also counts and traces the scrapes themselves.
  */
 @Global()
 @Module({
-  providers: [MetricsService, DomainGaugesService],
+  providers: [MetricsService, DomainGaugesService, TraceExporterService],
   exports: [MetricsService, DomainGaugesService],
 })
 export class ObservabilityModule implements NestModule {

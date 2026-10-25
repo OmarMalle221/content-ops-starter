@@ -2,6 +2,38 @@ import { hostname } from 'node:os';
 import { z } from 'zod';
 import { isValidStructuringThresholdSpec } from '@dfn/compliance';
 
+/** An http(s) URL, or unset / empty (Compose passes `${VAR:-}` as an empty string). */
+function optionalHttpUrl(name: string) {
+  return z
+    .string()
+    .optional()
+    .refine((v) => !v || (/^https?:\/\//.test(v) && URL.canParse(v)), {
+      message: `${name} must be an http(s) URL`,
+    })
+    .transform((v) => v || undefined);
+}
+
+/**
+ * OTEL_EXPORTER_OTLP_HEADERS ("k=v,k2=v2", W3C baggage-like, values percent-decoded) as a header
+ * map, or null when malformed. The values are secrets: never echoed in errors.
+ */
+export function parseOtlpHeaders(spec: string): Record<string, string> | null {
+  const headers: Record<string, string> = {};
+  for (const part of spec.split(',')) {
+    if (!part.trim()) continue;
+    const eq = part.indexOf('=');
+    if (eq <= 0) return null;
+    const key = part.slice(0, eq).trim();
+    if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(key)) return null;
+    try {
+      headers[key.toLowerCase()] = decodeURIComponent(part.slice(eq + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return headers;
+}
+
 const envSchema = z
   .object({
     DFN_MODE: z.literal('sandbox', {
@@ -165,6 +197,24 @@ const envSchema = z
       .default('true')
       .transform((v) => v !== 'false'),
     METRICS_TOKEN: z.string().min(24).optional(),
+    /**
+     * Span export, OTLP over HTTP with the JSON encoding (observability/trace-exporter.service.ts):
+     * HTTP server spans and outgoing webhook client spans, with the ids already logged and
+     * propagated. Off unless one endpoint is set (empty = unset). Standard OpenTelemetry names: the
+     * traces endpoint is used as is, the base endpoint gets "/v1/traces" appended.
+     */
+    OTEL_EXPORTER_OTLP_ENDPOINT: optionalHttpUrl('OTEL_EXPORTER_OTLP_ENDPOINT'),
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: optionalHttpUrl('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT'),
+    /** "key=value,key2=value2", values percent-decoded (e.g. the authorization of a hosted backend). */
+    OTEL_EXPORTER_OTLP_HEADERS: z
+      .string()
+      .optional()
+      .refine((v) => !v || parseOtlpHeaders(v) !== null, {
+        message: 'OTEL_EXPORTER_OTLP_HEADERS must be key=value pairs separated by commas',
+      }),
+    /** Deadline of one export request (milliseconds). */
+    OTEL_EXPORTER_OTLP_TIMEOUT: z.coerce.number().int().min(100).max(60_000).default(10_000),
+    OTEL_SERVICE_NAME: z.string().min(1).default('dfn-api'),
     /**
      * Antivirus for uploads, scanned before storage and fail closed (no verdict → 503
      * SCAN_UNAVAILABLE): "none" (stored unscanned, SKIPPED), "sandbox" (SIMULATION that only

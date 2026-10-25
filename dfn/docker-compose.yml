@@ -9,6 +9,7 @@
 #   docker compose --profile s3 up -d --build     + SeaweedFS S3 (set STORAGE_DRIVER=s3, S3_* in .env)
 #   docker compose --profile seed run --rm seed   demo data (fictitious)
 #   docker compose --profile observability up -d  + Prometheus http://127.0.0.1:9090 · Alertmanager :9093 · Grafana :3001
+#                                                 · Jaeger :16686 (traces: OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318)
 #                                                 (set METRICS_TOKEN and GRAFANA_ADMIN_PASSWORD in .env;
 #                                                 docs/operations/OBSERVABILITY.md)
 #
@@ -434,6 +435,24 @@ services:
     ports: ['127.0.0.1:${ALERTMANAGER_HOST_PORT:-9093}:9093']
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:9093/-/healthy']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *logging
+    restart: unless-stopped
+
+  # Trace backend: Jaeger all-in-one, in-memory storage (traces are lost at restart: sandbox
+  # only). OTLP/HTTP is received on the compose network only (http://jaeger:4318, not published);
+  # the API exports there when OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 is set in .env.
+  # UI and query API on loopback (JAEGER_HOST_PORT). Image overridable (JAEGER_IMAGE).
+  jaeger:
+    image: ${JAEGER_IMAGE:-jaegertracing/jaeger:2.21.0}
+    profiles: [observability]
+    <<: *hardening
+    tmpfs: ['/tmp:size=16m']
+    ports: ['127.0.0.1:${JAEGER_HOST_PORT:-16686}:16686']
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:13133/status']
       interval: 10s
       timeout: 5s
       retries: 12

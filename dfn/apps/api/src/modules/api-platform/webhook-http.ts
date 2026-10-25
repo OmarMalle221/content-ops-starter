@@ -2,7 +2,8 @@ import { lookup as dnsLookup, type LookupAddress, type LookupOptions } from 'nod
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { LookupFunction } from 'node:net';
-import { TRACEPARENT_HEADER, outgoingTraceparent } from '../observability/trace-context';
+import { nowUnixNano, recordSpan, type SpanAttributeValue } from '../observability/span-recorder';
+import { TRACEPARENT_HEADER, formatTraceparent, outgoingTraceContext } from '../observability/trace-context';
 import { isPrivateIpv4, isPrivateIpv6 } from './ssrf';
 
 /** Raised when the connection would reach a private address (checked at connect time). */
@@ -41,7 +42,9 @@ export const guardedLookup: LookupFunction = (hostname, options, callback) => {
  * body — is bounded by `timeoutMs`; on expiry the request is destroyed with an `AbortError`.
  * `guardPrivate` (every environment but tests) checks the resolved addresses at connect time.
  * Unless the caller set one, a `traceparent` header continues the current trace (a child span of
- * the request that produced the event) or starts a new one (retries run by the scheduler).
+ * the request that produced the event) or starts a new one (retries run by the scheduler); that
+ * client span is recorded when span export is on, with `spanAttributes` (no URL path or query: the
+ * partner host only, as the path may carry a token).
  */
 export function postWebhook(
   url: string,
@@ -49,15 +52,45 @@ export function postWebhook(
   body: string,
   timeoutMs: number,
   guardPrivate: boolean,
+  spanAttributes: Record<string, SpanAttributeValue> = {},
 ): Promise<number> {
   const target = new URL(url);
   const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
+  const span = outgoingTraceContext();
+  // A caller-supplied traceparent replaces ours: the span would describe ids nobody sees.
+  const ownSpan = !Object.keys(headers).some((h) => h.toLowerCase() === TRACEPARENT_HEADER);
+  const startedAt = nowUnixNano();
   return new Promise<number>((resolve, reject) => {
     let settled = false;
     const finish = (err: Error | null, status?: number) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
+      if (ownSpan) {
+        recordSpan(
+          {
+            traceId: span.traceId,
+            spanId: span.spanId,
+            parentSpanId: span.parentSpanId,
+            name: 'POST webhook',
+            kind: 'CLIENT',
+            startTimeUnixNano: startedAt,
+            endTimeUnixNano: nowUnixNano(),
+            attributes: {
+              ...spanAttributes,
+              'http.request.method': 'POST',
+              'server.address': target.hostname,
+              ...(status !== undefined ? { 'http.response.status_code': status } : {}),
+            },
+            error: err
+              ? err.name
+              : status === undefined || status < 200 || status >= 300
+                ? `HTTP ${status}`
+                : undefined,
+          },
+          span.flags,
+        );
+      }
       if (err) reject(err);
       else resolve(status ?? 0);
     };
@@ -66,7 +99,7 @@ export function postWebhook(
       {
         method: 'POST',
         headers: {
-          [TRACEPARENT_HEADER]: outgoingTraceparent(),
+          [TRACEPARENT_HEADER]: formatTraceparent(span.traceId, span.spanId, span.flags),
           ...headers,
           'Content-Length': String(Buffer.byteLength(body)),
         },

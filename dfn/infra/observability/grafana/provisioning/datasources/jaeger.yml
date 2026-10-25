@@ -1,0 +1,12 @@
+# Traces of the API (profile "observability"): the Jaeger of the same compose stack, filled only
+# when OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 is set in .env (docs/operations/OBSERVABILITY.md
+# §4). Read-only in the UI.
+apiVersion: 1
+
+datasources:
+  - name: Jaeger (DFN sandbox)
+    uid: dfn-jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false

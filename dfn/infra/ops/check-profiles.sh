@@ -4,6 +4,7 @@
 #
 # Usage: infra/ops/check-profiles.sh [--api URL] [--prometheus URL] [--grafana URL]
 #                                    [--alertmanager URL] [--origin ORIGIN] [--send-test-alert]
+#                                    [--traces] [--jaeger URL]
 #
 #   --api URL           API base URL (default http://127.0.0.1:4000)
 #   --prometheus URL    Prometheus of the "observability" profile (default http://127.0.0.1:9090)
@@ -13,6 +14,9 @@
 #   --send-test-alert   also send the warning DfnNotificationTest (labelled test="true", "TEST" in
 #                       its summary) to the team receiver and require a successful webhook delivery:
 #                       it reaches ALERT_WEBHOOK_URL, so warn its readers first
+#   --traces            also require the upload's trace in Jaeger (the API must export spans:
+#                       OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 in .env)
+#   --jaeger URL        Jaeger query API of the "observability" profile (default http://127.0.0.1:16686)
 #
 # Environment: GRAFANA_ADMIN_USER (default dfn-admin) and GRAFANA_ADMIN_PASSWORD (required);
 # EXPECTED_ALERT_RULES (default 25).
@@ -24,7 +28,9 @@
 #         3) Grafana's provisioned datasource answers and the provisioned dashboard exists, and every
 #            query of that dashboard runs without error through Grafana;
 #         4) Alertmanager is ready, Prometheus sends it the alerts (DfnAlertingWatchdog received) and,
-#            with --send-test-alert, a test alert is routed to the team receiver and delivered.
+#            with --send-test-alert, a test alert is routed to the team receiver and delivered;
+#         5) with --traces, the server span of the upload (trace id of its traceparent response
+#            header) reached Jaeger, under its route template.
 set -euo pipefail
 umask 077
 DFN_SCRIPT=check-profiles
@@ -38,6 +44,8 @@ GRAFANA="http://127.0.0.1:3001"
 ORIGIN="http://localhost:3000"
 ALERTMANAGER="http://127.0.0.1:9093"
 SEND_TEST_ALERT=0
+TRACES=0
+JAEGER="http://127.0.0.1:16686"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --api) API="$2"; shift 2 ;;
@@ -46,7 +54,9 @@ while [[ $# -gt 0 ]]; do
     --origin) ORIGIN="$2"; shift 2 ;;
     --alertmanager) ALERTMANAGER="$2"; shift 2 ;;
     --send-test-alert) SEND_TEST_ALERT=1; shift ;;
-    -h | --help) sed -n '2,28p' "$0"; exit 0 ;;
+    --traces) TRACES=1; shift ;;
+    --jaeger) JAEGER="$2"; shift 2 ;;
+    -h | --help) sed -n '2,33p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -69,7 +79,7 @@ status=$(curl -s -o "$WORK/register.json" -w '%{http_code}' -c "$JAR" -b "$JAR" 
   -H "Origin: $ORIGIN" -X POST "$API/v1/auth/register" --data "$body")
 [[ "$status" == 201 ]] || die "POST /v1/auth/register answered $status: $(head -c 300 "$WORK/register.json")"
 printf '%%PDF-1.4\n%% check-profiles %s\n%%%%EOF\n' "$(openssl rand -hex 16)" >"$WORK/doc.pdf"
-status=$(curl -s -o "$WORK/upload.json" -w '%{http_code}' -c "$JAR" -b "$JAR" -H "Origin: $ORIGIN" \
+status=$(curl -s -o "$WORK/upload.json" -D "$WORK/upload.headers" -w '%{http_code}' -c "$JAR" -b "$JAR" -H "Origin: $ORIGIN" \
   -F "file=@$WORK/doc.pdf;type=application/pdf" -F kind=OTHER -F title=check-profiles "$API/v1/documents")
 [[ "$status" == 201 ]] || die "POST /v1/documents answered $status: $(head -c 300 "$WORK/upload.json")"
 doc_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$WORK/upload.json")
@@ -207,5 +217,30 @@ print(",".join(sorted({g["receiver"]["name"] for g in groups for a in g["alerts"
   ((failed == failed0)) || die "webhook delivery failed ($((failed - failed0)) failed requests): check ALERT_WEBHOOK_URL"
   ((sent - failed > sent0 - failed0)) || die "no webhook request succeeded within 90 s of the test alert"
   log "ok   test alert DfnNotificationTest routed to team and delivered by webhook"
+fi
+
+# ── 5. Traces ────────────────────────────────────────────────────────────────
+if [[ "$TRACES" == 1 ]]; then
+  trace_id=$(tr -d '\r' <"$WORK/upload.headers" | sed -n 's/^traceparent: 00-\([0-9a-f]\{32\}\)-.*/\1/Ip' | head -1)
+  [[ -n "$trace_id" ]] || die "the upload response has no traceparent header"
+  # Exported in batches every 5 s: allow a few rounds.
+  found=""
+  for _ in $(seq 1 12); do
+    if curl -sf "$JAEGER/api/traces/$trace_id" >"$WORK/trace.json" 2>/dev/null; then
+      found=$(python3 -c '
+import json, sys
+spans = [s for t in json.load(open(sys.argv[1])).get("data", []) for s in t["spans"]]
+tags = {t["key"]: t["value"] for s in spans if s["operationName"] == "POST /v1/documents" for t in s["tags"]}
+print("yes" if tags.get("http.route") == "/v1/documents" and str(tags.get("http.response.status_code")) == "201" else "")' "$WORK/trace.json")
+    fi
+    [[ -n "$found" ]] && break
+    sleep 5
+  done
+  [[ -n "$found" ]] || die "trace $trace_id of the upload is not in Jaeger (OTEL_EXPORTER_OTLP_ENDPOINT, dfn_trace_spans_dropped_total)"
+  log "ok   the upload's server span is in Jaeger (trace $trace_id, POST /v1/documents → 201)"
+  health=$(curl -sf -K "$WORK/grafana.curl" "$GRAFANA/api/datasources/uid/dfn-jaeger/health") ||
+    die "Grafana datasource dfn-jaeger is not provisioned or does not answer"
+  grep -q '"status":"OK"' <<<"$health" || die "Grafana datasource dfn-jaeger health: $health"
+  log "ok   Grafana datasource dfn-jaeger answers"
 fi
 log "PROFILES CHECK PASSED"

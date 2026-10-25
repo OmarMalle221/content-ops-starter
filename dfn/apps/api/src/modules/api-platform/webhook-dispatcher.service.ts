@@ -251,6 +251,11 @@ export class WebhookDispatcherService implements OnModuleInit, OnModuleDestroy {
         rawBody,
         this.env.WEBHOOK_TIMEOUT_MS,
         this.env.NODE_ENV !== 'test',
+        {
+          'dfn.webhook.event_type': delivery.eventType,
+          'dfn.webhook.delivery_id': delivery.id,
+          'dfn.webhook.attempt': delivery.attempts + 1,
+        },
       );
       if (statusCode < 200 || statusCode >= 300) error = `HTTP ${statusCode}`;
     } catch (err) {
