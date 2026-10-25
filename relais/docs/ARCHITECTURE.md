@@ -141,28 +141,57 @@ tâches retenus, chacun relié au document source.
 - Compteurs (jamais les valeurs) enregistrés dans `ai_calls.pseudonymized_counts`.
 - Risque résiduel à déclarer dans l'EFVP : un nom inconnu du dossier, sans titre, peut passer.
 
-**Photos et PDF numérisés** _(Q3)_ : on ne peut pseudonymiser qu'un texte. Recommandation : OCR hébergé
-au Canada, puis pseudonymisation du texte. Un document manuscrit ou flou (faible confiance OCR, ou
-`legibility` ≠ `clear` dans la sortie) est marqué **« à vérifier »**.
+**Photos et PDF numérisés** _(Q3, hypothèse appliquée à l'étape 3)_ : on ne peut pseudonymiser qu'un
+texte, donc **aucune image n'est envoyée au fournisseur d'IA**. Tant qu'aucun OCR hébergé au Canada n'est
+branché (interface `OcrClient`, appelée avant la pseudonymisation), ces documents sont gardés et la famille
+en note elle-même le contenu. Un OCR peu sûr (confiance < 0,85), un document manuscrit ou flou
+(`legibility` ≠ `clear`) donnent un brouillon marqué **« à vérifier »**. Les photos sont réduites et
+réencodées sur le téléphone : aucune métadonnée (EXIF, position GPS) ne quitte l'appareil.
 
-**Sortie attendue (schéma Zod, version 1)** : `document_type`, `document_date`, `author` (fonction,
-établissement), `plain_summary` (≤ 600 caractères, langage simple), `medications_as_written[]`
-(nom, dose, fréquence et ligne d'origine, tels qu'écrits), `appointments[]`, `action_items[]`,
-`timeline_events[]`, `legibility`, `needs_review`, `review_reasons[]`. Aucun champ d'interprétation.
+**Sortie attendue (schéma Zod, version 1,
+[`src/shared/extraction/schema.ts`](../src/shared/extraction/schema.ts))** : `document_type`,
+`document_date`, `author`, `title`, `plain_summary` (≤ 600 caractères), `medications_as_written[]` (nom,
+dose, fréquence, ligne d'origine), `appointments[]`, `action_items[]`, `timeline_events[]`, `legibility`,
+`needs_review`, `review_reasons[]` (des codes, jamais du texte libre). Aucun champ d'avis ni
+d'interprétation.
 
-**Appel au modèle**
+**Appel au modèle** ([`supabase/functions/_shared/llm.ts`](../supabase/functions/_shared/llm.ts))
 
-- `client.messages.parse()` avec `output_config.format = zodOutputFormat(schéma)`, modèle lu dans
-  `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`), effort réglé bas et mesuré pour tenir la cible.
-- Refus du modèle (`stop_reason: "refusal"`) : repli serveur `fallbacks: "default"` sur l'API Anthropic
-  (sur Bedrock : intergiciel de repli du SDK) ; sinon le document passe en saisie manuelle.
-- Cible **< 30 s pour un PDF de 3 pages** : texte extrait localement (quelques ko envoyés), un seul
-  appel, délai d'expiration à 25 s ; mesuré par un test d'intégration sur un PDF fictif.
+- `client.beta.messages.parse()` avec `output_config.format = betaZodOutputFormat(schéma)`, modèle lu dans
+  `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`), effort `low` (extraction, latence).
+- Refus du modèle (`stop_reason: "refusal"`) : repli côté serveur `fallbacks: "default"` (en-tête bêta
+  `server-side-fallback-2026-07-01`, API Anthropic seulement) ; sinon le document passe en saisie à la main.
+- Cible **< 30 s pour un PDF de 3 pages** : texte extrait sur le serveur (quelques ko envoyés), un seul
+  appel, délai de 25 s sans nouvel essai automatique (l'aidant peut relancer). Mesurée par
+  `npm run test:ai-live` (clé requise) ; le reste du traitement prend moins d'une seconde.
 
-**Fournisseur** _(Q2)_ : l'API Anthropic directe ne propose que des zones « mondiale » ou « États-Unis »
-(`inference_geo`) ; Claude via Amazon Bedrock pourrait rester au Canada si le modèle y est offert (à
-vérifier). Le code isole le fournisseur derrière une interface `LlmClient` ; seul le texte
-pseudonymisé sort de Supabase.
+**Garde-fous après le modèle** ([`src/shared/extraction/guards.ts`](../src/shared/extraction/guards.ts)),
+vérifiés sur le texte pseudonymisé que le modèle a lu :
+
+- formulation de conseil ou d'interprétation (« vous devriez », « augmenter la dose », « normal »,
+  « inquiétant »…) **absente du document** → résumé retiré, élément marqué ;
+- chiffre absent du document → résumé retiré ou élément marqué ;
+- médicament, dose, fréquence ou ligne d'origine introuvables **tels qu'écrits** → « à vérifier », non
+  gardé par défaut ;
+- date qui ne correspond à rien d'écrit → retirée ; titre douteux → titre neutre selon le type ;
+- ré-identification locale : noms, adresses, téléphones et courriels rétablis ; NAM, NAS, date de
+  naissance, code postal et numéros de dossier **restent masqués** dans le brouillon.
+
+**Fournisseur** _(Q2, hypothèse appliquée à l'étape 3)_ : API Anthropic. Elle ne propose que des zones
+« mondiale » ou « États-Unis » (`inference_geo`) ; Claude via Amazon Bedrock pourrait rester au Canada si le
+modèle y est offert (à vérifier). Le fournisseur est isolé derrière `LlmClient` ; seul le texte
+pseudonymisé sort de Supabase. Lecture automatique conditionnée à un **consentement distinct**
+(`ai_document_processing`) de la personne aidée ou de son représentant, vérifié par la base.
+
+**Fonctions serveur** : `extract-document`, `get-document-url`, `delete-document`, `delete-care-file`. Leur
+logique ([`supabase/functions/_shared/handlers.ts`](../supabase/functions/_shared/handlers.ts)) ne dépend
+pas de Deno : la même tourne dans les fonctions Edge, dans le faux Supabase des tests de bout en bout (avec
+une IA simulée) et dans Vitest. Les droits sont vérifiés par des fonctions SQL appelées **avec le jeton de
+l'utilisateur** ; la clé serveur ne sert qu'à lire ou effacer les fichiers et à enregistrer le brouillon.
+
+**Effacement des fichiers** : la base ne peut pas effacer un objet Storage. La suppression d'un document
+ou d'un dossier inscrit d'abord les chemins dans `storage_deletion_queue`, puis la fonction serveur efface
+les fichiers par l'API Storage et vide la file ; ce qui resterait est repris par une tâche planifiée.
 
 ## 6. Accès, rôles et journal
 

@@ -6,6 +6,8 @@ import lighthouse from 'lighthouse';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DISCHARGE_SUMMARY_PAGES } from '../support/documents';
+import { buildTextPdf } from '../support/pdf';
 import { resetBackend, signIn, waitForTitle } from './helpers';
 
 const APP = 'http://127.0.0.1:4173';
@@ -52,6 +54,7 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         await audit('/bienvenue');
 
         await page.getByLabel(/J’accepte : Comment Relais protège vos renseignements/).check();
+        await page.getByLabel('J’accepte : Renseignements de santé').check();
         await page.getByRole('button', { name: 'Enregistrer mes choix' }).click();
         await page.getByLabel('Votre prénom').fill('Lucie');
         await page.getByRole('button', { name: 'Continuer' }).click();
@@ -71,6 +74,24 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         await waitForTitle(page, 'Profil');
         for (const section of ['', '/profil', '/contacts', '/membres', '/journal', '/parametres']) await audit(`${fileUrl}${section}`);
         await audit(`${fileUrl}/formulaire-consentement`);
+
+        // Étape 3 : lecture automatique autorisée, document lu (IA simulée), relecture, chronologie.
+        await page.goto(`${APP}${fileUrl}/consentement`);
+        const ai = page.getByRole('region', { name: 'Lecture automatique des documents (facultatif)' });
+        await ai.getByRole('radio', { name: /a signé le formulaire/ }).check();
+        await ai.getByLabel(/J’atteste que mon proche a lu/).check();
+        await ai.getByRole('button', { name: 'Enregistrer l’autorisation' }).click();
+        await expect(ai.getByText('Autorisation enregistrée.')).toBeVisible();
+        await audit(`${fileUrl}/consentement`);
+        await page.goto(`${APP}${fileUrl}/documents`);
+        await page.getByLabel('Choisir un fichier (PDF ou photo)').setInputFiles({
+            name: 'resume.pdf',
+            mimeType: 'application/pdf',
+            buffer: Buffer.from(buildTextPdf(DISCHARGE_SUMMARY_PAGES))
+        });
+        await expect(page.getByRole('heading', { name: 'Vérifier le brouillon' })).toBeVisible();
+        const documentPath = new URL(page.url()).pathname;
+        for (const path of [`${fileUrl}/documents`, documentPath, `${fileUrl}/chronologie`]) await audit(path);
     } finally {
         await context.close();
         rmSync(profile, { recursive: true, force: true });

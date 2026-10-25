@@ -39,6 +39,7 @@ describe('consentement de la personne aidée', () => {
         await waitFor(() =>
             expect(careFilesApi.recordFileConsent).toHaveBeenCalledWith({
                 fileId: FILE_ID,
+                type: 'care_recipient_data',
                 version: '2026-10-27',
                 grantedBy: 'care_recipient_signed_form',
                 legalBasis: 'person_consents'
@@ -94,7 +95,7 @@ describe('consentement de la personne aidée', () => {
         await user.click(screen.getByRole('button', { name: 'Retirer le consentement' }));
         const confirm = screen.getByRole('group', { name: 'Retirer le consentement de la personne aidée ?' });
         await user.click(within(confirm).getByRole('button', { name: 'Confirmer le retrait' }));
-        await waitFor(() => expect(careFilesApi.revokeFileConsent).toHaveBeenCalledWith(active.id));
+        await waitFor(() => expect(careFilesApi.revokeFileConsent).toHaveBeenCalledWith(active.id, 'care_recipient_data'));
     });
 
     it('un non-membre voit « dossier introuvable »', async () => {

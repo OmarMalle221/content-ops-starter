@@ -24,12 +24,26 @@ export default tseslint.config(
         }
     },
     {
-        files: ['src/lib/log.ts'],
+        files: ['src/lib/log.ts', 'supabase/functions/_shared/log.ts'],
         rules: { 'no-console': 'off' }
     },
     {
+        // Fonctions Edge (Deno) : pas de DOM ; le code de l'application ne doit pas les importer.
+        files: ['supabase/functions/**/*.ts'],
+        languageOptions: { globals: { ...globals.node } }
+    },
+    {
+        files: ['src/**/*.{ts,tsx}'],
+        rules: {
+            'no-restricted-imports': [
+                'error',
+                { patterns: [{ group: ['**/supabase/functions/**'], message: 'Code serveur : jamais dans l’application.' }] }
+            ]
+        }
+    },
+    {
         // Scripts, configuration et tests de bout en bout : sortie console autorisée (aucune donnée réelle).
-        files: ['scripts/**/*.mjs', 'tests/e2e/**/*.{mjs,ts}', '*.config.{js,ts}'],
+        files: ['scripts/**/*.mjs', 'tests/e2e/**/*.{mjs,ts}', 'tests/integration/**/*.ts', '*.config.{js,ts}'],
         languageOptions: { globals: { ...globals.node } },
         rules: { 'no-console': 'off' }
     },

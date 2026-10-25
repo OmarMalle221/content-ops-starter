@@ -2,11 +2,11 @@
 -- Relais v0.1 — schéma cible (PostgreSQL 16 / Supabase, région ca-central-1)
 --
 -- CIBLE GLOBALE des 6 étapes. Ce qui est livré vit dans supabase/migrations/ et y fait foi :
--- étape 1 (users, consent_texts, consents, resources, access_log, ai_calls) et étape 2 (care_files,
--- care_file_members, care_file_invitations, care_recipients, care_needs, contacts, avec les fonctions
--- create_care_file, record_file_consent, create_invitation, accept_invitation, export_care_file,
--- delete_care_file). Pour ces tables, la migration l'emporte sur ce fichier, qui décrit surtout la cible
--- des étapes 3 à 6. Les tests automatisés sont dans
+-- étape 1 (users, consent_texts, consents, resources, access_log, ai_calls), étape 2 (care_files,
+-- care_file_members, care_file_invitations, care_recipients, care_needs, contacts) et étape 3 (documents,
+-- document_extractions, medication_mentions, timeline_events, storage_deletion_queue, bucket `documents`,
+-- fonctions register_document … confirm_document). Pour ces tables, la migration l'emporte sur ce fichier,
+-- qui décrit surtout la cible des étapes 4 à 6. Les tests automatisés sont dans
 -- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
 -- Principes
@@ -57,13 +57,15 @@ create type public.contact_kind as enum (
     'clsc', 'social_worker', 'physician', 'pharmacy', 'notary', 'residence', 'home_care', 'other'
 );
 create type public.document_status as enum (
-    'pending_upload', 'uploaded', 'processing', 'draft_ready', 'confirmed', 'discarded', 'failed'
+    'pending_upload', 'uploaded', 'processing', 'draft_ready', 'confirmed', 'failed'
 );
-create type public.extraction_status as enum ('draft', 'confirmed', 'discarded');
+-- Un brouillon rejeté ou remplacé est effacé, pas conservé (minimisation).
+create type public.extraction_status as enum ('draft', 'confirmed');
+create type public.extraction_method as enum ('ai', 'manual');
 create type public.timeline_event_type as enum (
-    'hospitalization', 'discharge', 'appointment', 'living_setting_change', 'service_change', 'other'
+    'hospitalization', 'discharge', 'appointment', 'test', 'living_setting_change', 'service_change', 'other'
 );
-create type public.timeline_source as enum ('document', 'appointment', 'manual');
+create type public.timeline_source as enum ('document', 'appointment', 'manual');  -- « appointment » ajouté à l'étape 5
 create type public.program_status as enum ('to_explore', 'in_progress', 'obtained', 'refused');
 create type public.verification_status as enum ('to_verify', 'verified');
 create type public.task_status as enum ('todo', 'in_progress', 'done', 'cancelled');
@@ -213,60 +215,79 @@ create index contacts_file on public.contacts (care_file_id);
 -- Documents, extractions, chronologie
 -- -----------------------------------------------------------------------------------------------------
 create table public.documents (
-    id                uuid primary key default gen_random_uuid(),
-    care_file_id      uuid not null references public.care_files (id) on delete cascade,
-    storage_path      text not null unique,  -- « {care_file_id}/{id} » dans le bucket privé `documents`
-    mime_type         text not null check (mime_type in ('application/pdf', 'image/jpeg', 'image/png')),
-    size_bytes        integer not null check (size_bytes between 1 and 20 * 1024 * 1024),
-    page_count        smallint check (page_count between 1 and 50),
-    status            public.document_status not null default 'pending_upload',
-    -- Champs confirmés par l'aidant (copiés depuis l'extraction confirmée).
-    title             text check (char_length(title) <= 160),
-    doc_type          text check (char_length(doc_type) <= 60),
-    doc_date          date,
-    author            text check (char_length(author) <= 160),
-    needs_review      boolean not null default false,  -- manuscrit, flou ou partiellement lisible
-    uploaded_by       uuid references public.users (id) on delete set null,
-    uploaded_at       timestamptz not null default now(),
+    id                    uuid primary key default gen_random_uuid(),
+    care_file_id          uuid not null references public.care_files (id) on delete cascade,
+    storage_path          text generated always as (care_file_id::text || '/' || id::text) stored unique,
+    mime_type             text not null check (mime_type in ('application/pdf', 'image/jpeg', 'image/png')),
+    size_bytes            integer not null check (size_bytes between 1 and 20971520),
+    page_count            smallint check (page_count between 1 and 50),
+    status                public.document_status not null default 'pending_upload',
+    -- Code de la dernière lecture automatique impossible (jamais de texte libre).
+    extraction_error      text check (extraction_error in (
+        'ai_consent_missing', 'no_text_layer', 'photo_without_ocr', 'too_long', 'unreadable_pdf',
+        'refusal', 'invalid_output', 'ai_unavailable')),
+    -- Champs confirmés par l'aidant.
+    title                 text check (char_length(title) <= 160),
+    doc_type              text check (doc_type in (
+        'discharge_summary', 'prescription', 'appointment_notice', 'test_result', 'clinic_letter',
+        'assessment', 'administrative', 'other')),
+    doc_date              date,
+    author                text check (char_length(author) <= 160),
+    needs_review          boolean not null default false,  -- manuscrit, flou ou partiellement lisible
+    uploaded_by           uuid references public.users (id) on delete set null,
+    uploaded_at           timestamptz not null default now(),
+    updated_at            timestamptz not null default now(),
     unique (id, care_file_id),
-    check (storage_path = care_file_id::text || '/' || id::text)
+    check ((status = 'failed') = (extraction_error is not null))
 );
-create index documents_file on public.documents (care_file_id);
+create index documents_file on public.documents (care_file_id, uploaded_at desc);
+create index documents_uploaded_by on public.documents (uploaded_by);
 
 create table public.document_extractions (
     id             uuid primary key default gen_random_uuid(),
     document_id    uuid not null,
     care_file_id   uuid not null references public.care_files (id) on delete cascade,
     status         public.extraction_status not null default 'draft',
-    draft          jsonb not null,           -- sortie IA validée par le schéma Zod (version ci-dessous)
-    schema_version text not null,
-    legibility     text not null check (legibility in ('clear', 'partial', 'handwritten', 'blurry')),
+    method         public.extraction_method not null,
+    schema_version text not null check (schema_version ~ '^[0-9]+$'),
+    draft          jsonb not null check (jsonb_typeof(draft) = 'object'),  -- sortie validée (Zod + garde-fous)
+    legibility     text check (legibility in ('clear', 'partial', 'handwritten', 'blurry')),
     needs_review   boolean not null default false,
     review_reasons text[] not null default '{}',
-    guard_flags    text[] not null default '{}',  -- ex. « advice_language » détecté par le garde-fou
-    confirmed_data jsonb,                      -- ce que l'aidant a gardé ou corrigé
+    guard_flags    text[] not null default '{}',
+    confirmed_data jsonb check (confirmed_data is null or jsonb_typeof(confirmed_data) = 'object'),
     confirmed_by   uuid references public.users (id) on delete set null,
     confirmed_at   timestamptz,
+    created_by     uuid references public.users (id) on delete set null,
     created_at     timestamptz not null default now(),
     foreign key (document_id, care_file_id) references public.documents (id, care_file_id) on delete cascade,
-    check ((status = 'confirmed') = (confirmed_at is not null))
+    check ((status = 'confirmed') = (confirmed_at is not null)),
+    check (status <> 'confirmed' or confirmed_data is not null),
+    check ((method = 'ai') = (legibility is not null))
 );
-create index document_extractions_document on public.document_extractions (document_id);
+-- Au plus un brouillon ou une confirmation par document.
+create unique index document_extractions_one_per_document on public.document_extractions (document_id);
+create index document_extractions_document on public.document_extractions (document_id, care_file_id);
+create index document_extractions_file on public.document_extractions (care_file_id);
+create index document_extractions_confirmed_by on public.document_extractions (confirmed_by);
+create index document_extractions_created_by on public.document_extractions (created_by);
 
 -- « Médicaments tels qu'écrits » : jamais interprétés, toujours reliés à leur document source.
 create table public.medication_mentions (
-    id                 uuid primary key default gen_random_uuid(),
-    care_file_id       uuid not null references public.care_files (id) on delete cascade,
-    source_document_id uuid not null,
-    name_as_written    text not null check (char_length(name_as_written) <= 160),
-    dosage_as_written  text check (char_length(dosage_as_written) <= 160),
+    id                   uuid primary key default gen_random_uuid(),
+    care_file_id         uuid not null references public.care_files (id) on delete cascade,
+    source_document_id   uuid not null,
+    name_as_written      text not null check (char_length(btrim(name_as_written)) between 1 and 160),
+    dosage_as_written    text check (char_length(dosage_as_written) <= 160),
     frequency_as_written text check (char_length(frequency_as_written) <= 160),
-    document_date      date,
-    created_by         uuid references public.users (id) on delete set null,
-    created_at         timestamptz not null default now(),
+    document_date        date,
+    created_by           uuid references public.users (id) on delete set null,
+    created_at           timestamptz not null default now(),
     foreign key (source_document_id, care_file_id) references public.documents (id, care_file_id) on delete cascade
 );
 create index medication_mentions_file on public.medication_mentions (care_file_id);
+create index medication_mentions_document on public.medication_mentions (source_document_id, care_file_id);
+create index medication_mentions_created_by on public.medication_mentions (created_by);
 
 create table public.appointments (
     id                 uuid primary key default gen_random_uuid(),
@@ -981,8 +1002,7 @@ grant update (revoked_at) on public.care_file_invitations to authenticated;
 
 grant select on public.consents to authenticated;
 
-grant select, insert on public.documents to authenticated;
-grant select on public.document_extractions to authenticated;
+grant select on public.documents, public.document_extractions to authenticated;  -- écritures par fonctions (étape 3)
 
 grant select, insert, update, delete on
     public.care_recipients, public.care_needs, public.contacts, public.medication_mentions,
@@ -1083,16 +1103,9 @@ create policy consents_select on public.consents for select to authenticated
         or (care_file_id is not null and private.can_read(care_file_id, 'profile'))
     );
 
--- documents : lecture des métadonnées ; création d'une entrée « pending_upload » par l'auteur.
--- Statuts, champs confirmés et suppression : fonctions serveur seulement.
+-- documents : lecture des métadonnées ; toutes les écritures passent par les fonctions de l'étape 3.
 create policy documents_select on public.documents for select to authenticated
     using (private.can_read(care_file_id, 'health'));
-create policy documents_insert on public.documents for insert to authenticated
-    with check (
-        private.can_write(care_file_id, 'health')
-        and uploaded_by = (select auth.uid())
-        and status = 'pending_upload'
-    );
 
 create policy extractions_select on public.document_extractions for select to authenticated
     using (private.can_read(care_file_id, 'health'));

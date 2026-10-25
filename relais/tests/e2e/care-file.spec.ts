@@ -1,24 +1,10 @@
 // Étape 2 — dossier familial et membres, sur la vraie base (RLS réelle via le faux Supabase).
 import { devices, expect, type Browser, type Page } from '@playwright/test';
-import { backendState, expectAccessible, onboard, resetBackend, signIn, test, waitForTitle } from './helpers';
+import { backendState, createFileWithConsent, expectAccessible, onboard, resetBackend, signIn, test, waitForTitle } from './helpers';
 
 test.beforeEach(async () => {
     await resetBackend();
 });
-
-/** Crée le dossier « Maman » et enregistre le formulaire de consentement signé. Renvoie l'adresse du dossier. */
-async function createFileWithConsent(page: Page): Promise<string> {
-    await page.getByRole('link', { name: 'Créer le dossier d’un proche' }).click();
-    await waitForTitle(page, 'Créer le dossier d’un proche');
-    await page.getByLabel('Nom du dossier').fill('Maman');
-    await page.getByRole('button', { name: 'Créer le dossier' }).click();
-    await waitForTitle(page, 'Consentement de la personne aidée');
-    await page.getByRole('radio', { name: /a signé le formulaire/ }).check();
-    await page.getByLabel(/J’atteste que mon proche a lu/).check();
-    await page.getByRole('button', { name: 'Enregistrer' }).click();
-    await waitForTitle(page, 'Profil');
-    return new URL(page.url()).pathname.replace(/\/profil$/, '');
-}
 
 async function invite(page: Page, fileUrl: string, email: string, kind: RegExp, level?: string): Promise<string> {
     await page.goto(`${fileUrl}/membres`);
@@ -228,7 +214,7 @@ test('paramètres : export du dossier, refus de supprimer le compte, suppression
     const file = await download;
     const chunks = await (await file.createReadStream()).toArray();
     const content = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    expect(content).toMatchObject({ format: 'relais-dossier/1', care_recipient: { first_name: 'Louise' } });
+    expect(content).toMatchObject({ format: 'relais-dossier/2', care_recipient: { first_name: 'Louise' } });
 
     await page.getByLabel('Je comprends que la suppression est définitive.').check();
     await page.getByRole('button', { name: 'Supprimer le dossier' }).click();

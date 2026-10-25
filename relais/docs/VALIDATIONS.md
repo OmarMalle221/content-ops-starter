@@ -48,6 +48,14 @@ service de santé ni un service de crise.
 16. **Invitations.** Le lien d'invitation est envoyé par l'aidant lui-même (texto, courriel) ; il ne
     fonctionne que pour l'adresse invitée, pendant 7 jours. Le consentement de la personne aidée couvre-t-il
     ce partage ?
+17. **Lecture automatique des documents.** Consentement distinct et facultatif de la personne aidée (ou
+    de son représentant), enregistré dans Relais ou sur le formulaire papier (case « J'accepte / Je
+    refuse ») ; texte pseudonymisé transmis hors Québec. Le texte de consentement
+    (`ai_document_processing`) dit-il assez clairement où va le texte et ce qui reste masqué ? Les
+    brouillons rejetés sont effacés ; ce qui est confirmé reste au dossier après un retrait : est-ce correct ?
+18. **Médicaments « tels qu'écrits ».** Relais recopie les médicaments des documents vérifiés, sans
+    interprétation, avec la mention que ce n'est pas une liste à jour. Formulation et responsabilité si une
+    famille s'y fie comme à une liste officielle.
 
 ## B. Travailleuse sociale — sécurité, ton et parcours
 
@@ -73,3 +81,6 @@ service de santé ni un service de crise.
    place de la personne aidée (dignité, autodétermination, accès en lecture).
 10. **Préparer un rendez-vous.** Contenu de la page imprimable et exemples de questions à poser, sans
     conseil médical.
+11. **Relecture d'un document.** Formulation de l'écran de relecture (« gardez, corrigez ou décochez »),
+    des points « à vérifier » et du rappel « aucun conseil médical — Info-Santé » ; les éléments douteux
+    sont décochés par défaut. Est-ce compris par des aidants fatigués, sur un téléphone ?

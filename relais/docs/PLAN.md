@@ -44,7 +44,8 @@ voit que ce que ses permissions autorisent_.
 
 - Bucket privé, téléversement PDF / photo (compression, retrait EXIF), URL signées journalisées.
 - Fonction `extract-document` : texte (ou OCR selon Q3), pseudonymisation, appel Claude via
-  `LlmClient`, validation Zod, garde-fous, `ai_calls`.
+  `LlmClient`, validation Zod, garde-fous, `ai_calls`. Consentement distinct de lecture automatique.
+  Sans OCR configuré, photos et PDF numérisés sont notés à la main (aucune image envoyée).
 - Écran de relecture : garder, corriger, rejeter chaque élément ; marque « à vérifier » ;
   `confirm_extraction` ; chronologie avec lien vers la source.
 

@@ -62,7 +62,9 @@ create schema if not exists storage;
 create table if not exists storage.buckets (
     id     text primary key,
     name   text not null,
-    public boolean not null default false
+    public boolean not null default false,
+    file_size_limit    bigint,
+    allowed_mime_types text[]
 );
 
 create table if not exists storage.objects (
@@ -72,6 +74,7 @@ create table if not exists storage.objects (
     owner      uuid,
     created_at timestamptz default now()
 );
+create unique index if not exists objects_bucket_name on storage.objects (bucket_id, name);
 alter table storage.objects enable row level security;
 alter table storage.buckets enable row level security;
 

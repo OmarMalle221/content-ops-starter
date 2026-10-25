@@ -11,10 +11,20 @@
 //   Adresse commençant par « intervenante » → rôle relais_worker ; par « admin » → rôle admin.
 //   POST /__test/reset vide les données ; GET /__test/state renvoie l'état (assertions des tests).
 //
+// - Storage : fichiers dans .tmp/fake-storage ; le dépôt insère d'abord dans storage.objects sous le rôle
+//   de l'appelant (la politique RLS du bucket s'applique), comme l'API Storage. URL signées à durée limitée.
+// - Fonctions Edge : le VRAI code serveur (supabase/functions/_shared/handlers.ts) avec une IA SIMULÉE
+//   (tests/support/simulated-llm.ts) ; aucun appel réseau. GET /__test/storage?path=… lit un fichier déposé.
+//
 // Lancement : bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { HANDLERS, RpcError } from '../../supabase/functions/_shared/handlers.ts';
+import { SimulatedLlm } from '../support/simulated-llm.ts';
 
 const PORT = Number(process.env.FAKE_SUPABASE_PORT ?? 54399);
 const LOGIN_CODE = '123456';
@@ -26,6 +36,11 @@ if (!process.env.DATABASE_URL) {
 }
 // Connexion en superutilisateur : le rôle de l'appelant est fixé par SET LOCAL ROLE dans chaque transaction.
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
+
+const STORAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../.tmp/fake-storage');
+const signedUrls = new Map(); // jeton → { bucket, path, expiresAt }
+const contentTypes = new Map(); // « bucket/chemin » → type MIME déposé
+const llm = new SimulatedLlm();
 
 const sessions = new Map(); // jeton d'accès → { userId, email, aal }
 const refreshTokens = new Map(); // jeton de rafraîchissement → { userId, email, aal }
@@ -48,10 +63,14 @@ function send(res, status, body) {
     res.end(body === undefined ? '' : JSON.stringify(body));
 }
 
-async function readBody(req) {
+async function readRaw(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    const raw = Buffer.concat(chunks).toString('utf8');
+    return Buffer.concat(chunks);
+}
+
+async function readBody(req) {
+    const raw = (await readRaw(req)).toString('utf8');
     return raw ? JSON.parse(raw) : {};
 }
 
@@ -218,14 +237,18 @@ async function handleAuth(req, res, path) {
 }
 
 // ------------------------------------------------------------------------------------ mini PostgREST
-/** Exécute `work` dans une transaction, sous le rôle et les claims JWT de l'appelant. */
-async function asCaller(who, work) {
+/** Exécute `work` dans une transaction, sous le rôle et les claims JWT de l'appelant (ou du service). */
+async function asCaller(who, work, service = false) {
     const client = await pool.connect();
     try {
         await client.query('begin');
-        const claims = who ? { sub: who.userId, email: who.email, role: 'authenticated', aal: who.aal } : { role: 'anon' };
+        const claims = service
+            ? { role: 'service_role' }
+            : who
+              ? { sub: who.userId, email: who.email, role: 'authenticated', aal: who.aal }
+              : { role: 'anon' };
         await client.query(`select set_config('request.jwt.claims', $1, true)`, [JSON.stringify(claims)]);
-        await client.query(`set local role ${who ? 'authenticated' : 'anon'}`);
+        await client.query(`set local role ${service ? 'service_role' : who ? 'authenticated' : 'anon'}`);
         const result = await work(client);
         await client.query('commit');
         return result;
@@ -298,8 +321,8 @@ function respondRows(req, res, status, rows, select) {
     return send(res, status, out);
 }
 
-async function handleRpc(req, res, name, who) {
-    const body = await readBody(req);
+/** Appel d'une fonction SQL publique, arguments nommés typés d'après pg_proc ; undefined si void. */
+async function rpcCall(who, name, body, service = false) {
     const { rows } = await pool.query(
         `select p.proargnames as names,
                 array(select format_type(t, null) from unnest(p.proargtypes) t) as types,
@@ -314,17 +337,130 @@ async function handleRpc(req, res, name, who) {
         .map((argName, i) => {
             if (!(argName in body)) return null;
             const value = body[argName];
-            params.push(value === null ? null : typeof value === 'object' ? JSON.stringify(value) : String(value));
+            // Tableau SQL (text[]…) : tableau JS converti par pg ; json/jsonb : texte JSON.
+            const sqlArray = fn.types[i].endsWith('[]') && Array.isArray(value);
+            params.push(value === null ? null : sqlArray ? value : typeof value === 'object' ? JSON.stringify(value) : String(value));
             return `${ident(argName)} => $${params.length}::${fn.types[i]}`;
         })
         .filter(Boolean);
     const call = `public.${ident(name)}(${args.join(', ')})`;
     if (fn.returns === 'void') {
-        await asCaller(who, (client) => client.query(`select ${call}`, params));
-        return send(res, 204);
+        await asCaller(who, (client) => client.query(`select ${call}`, params), service);
+        return undefined;
     }
-    const result = await asCaller(who, (client) => client.query(`select to_jsonb(${call}) as result`, params));
-    return send(res, 200, result.rows[0].result);
+    const result = await asCaller(who, (client) => client.query(`select to_jsonb(${call}) as result`, params), service);
+    return result.rows[0].result;
+}
+
+async function handleRpc(req, res, name, who) {
+    const result = await rpcCall(who, name, await readBody(req));
+    return result === undefined ? send(res, 204) : send(res, 200, result);
+}
+
+// ------------------------------------------------------------------------------------------- Storage
+const objectFile = (bucket, path) => join(STORAGE_DIR, bucket, ...path.split('/'));
+
+async function handleStorage(req, res, url) {
+    const signed = url.pathname.match(/^\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/);
+    if (req.method === 'GET' && signed) {
+        const entry = signedUrls.get(url.searchParams.get('token') ?? '');
+        const [, bucket, path] = signed;
+        if (!entry || entry.bucket !== bucket || entry.path !== path || entry.expiresAt < Date.now()) {
+            return send(res, 400, { statusCode: '400', error: 'InvalidJWT', message: 'invalid or expired signature' });
+        }
+        const bytes = await readFile(objectFile(bucket, path));
+        res.writeHead(200, { 'content-type': contentTypes.get(`${bucket}/${path}`) ?? 'application/octet-stream' });
+        return res.end(bytes);
+    }
+
+    const upload = url.pathname.match(/^\/storage\/v1\/object\/([^/]+)\/(.+)$/);
+    if (req.method === 'POST' && upload) {
+        const who = caller(req);
+        if (!who) return send(res, 401, { statusCode: '401', error: 'Unauthorized', message: 'missing token' });
+        const [, bucket, path] = upload;
+        const bytes = await readRaw(req);
+        const contentType = (req.headers['content-type'] ?? '').split(';')[0];
+        const { rows } = await pool.query('select file_size_limit, allowed_mime_types from storage.buckets where id = $1', [bucket]);
+        const limits = rows[0];
+        if (!limits) return send(res, 404, { statusCode: '404', error: 'Bucket not found', message: 'bucket not found' });
+        if (limits.file_size_limit && bytes.length > Number(limits.file_size_limit)) {
+            return send(res, 413, { statusCode: '413', error: 'Payload too large', message: 'file too large' });
+        }
+        if (limits.allowed_mime_types && !limits.allowed_mime_types.includes(contentType)) {
+            return send(res, 415, { statusCode: '415', error: 'invalid_mime_type', message: 'mime type not allowed' });
+        }
+        // Comme l'API Storage : l'objet est enregistré sous l'identité de l'appelant (politique RLS du bucket).
+        await asCaller(who, (client) =>
+            client.query('insert into storage.objects (bucket_id, name, owner) values ($1, $2, $3)', [bucket, path, who.userId])
+        );
+        await mkdir(dirname(objectFile(bucket, path)), { recursive: true });
+        await writeFile(objectFile(bucket, path), bytes);
+        contentTypes.set(`${bucket}/${path}`, contentType);
+        return send(res, 200, { Key: `${bucket}/${path}`, Id: randomUUID() });
+    }
+    return send(res, 404, { statusCode: '404', error: 'not_found', message: 'not found' });
+}
+
+// -------------------------------------------------------------------------------- fonctions Edge
+async function handleFunction(req, res, name) {
+    const handler = HANDLERS[name];
+    if (!handler) return send(res, 404, { error: 'not_found' });
+    const who = caller(req);
+    if (!who) return send(res, 401, { error: 'unauthorized' });
+    const body = await readBody(req).catch(() => null);
+    const rpc = (fn, args, service) =>
+        rpcCall(who, fn, args, service).catch((error) => {
+            throw error instanceof HttpError ? new RpcError(String(error.body.code)) : error;
+        });
+    const ctx = {
+        userId: who.userId,
+        userRpc: (fn, args) => rpc(fn, args, false),
+        serviceRpc: (fn, args) => rpc(fn, args, true),
+        storage: {
+            download: async (path) => new Uint8Array(await readFile(objectFile('documents', path))),
+            remove: async (paths) => {
+                for (const path of paths) await rm(objectFile('documents', path), { force: true });
+                await pool.query('delete from storage.objects where bucket_id = $1 and name = any($2)', ['documents', paths]);
+            },
+            signedUrl: async (path, seconds) => {
+                const token = randomBytes(16).toString('hex');
+                signedUrls.set(token, { bucket: 'documents', path, expiresAt: Date.now() + seconds * 1000 });
+                return `http://127.0.0.1:${PORT}/storage/v1/object/sign/documents/${path}?token=${token}`;
+            }
+        },
+        queuedPaths: async (prefix) =>
+            (
+                await pool.query(
+                    `select object_path from public.storage_deletion_queue where bucket_id = 'documents' and object_path like $1`,
+                    [`${prefix}%`]
+                )
+            ).rows.map((row) => row.object_path),
+        clearQueuedPaths: async (paths) => {
+            await pool.query(`delete from public.storage_deletion_queue where bucket_id = 'documents' and object_path = any($1)`, [paths]);
+        },
+        recordAiCall: async (row) => {
+            await pool.query(
+                `insert into public.ai_calls (user_id, care_file_id, purpose, provider, model, status, input_tokens, output_tokens,
+                    latency_ms, pseudonymized_counts) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                [
+                    row.user_id,
+                    row.care_file_id,
+                    row.purpose,
+                    row.provider,
+                    row.model,
+                    row.status,
+                    row.input_tokens,
+                    row.output_tokens,
+                    row.latency_ms,
+                    JSON.stringify(row.pseudonymized_counts)
+                ]
+            );
+        },
+        llm,
+        ocr: null
+    };
+    const response = await handler(ctx, body);
+    return send(res, response.status, response.body);
 }
 
 async function handleRest(req, res, url) {
@@ -379,10 +515,23 @@ async function handleRest(req, res, url) {
 // ------------------------------------------------------------------------------------- outils de test
 async function resetData() {
     await pool.query('truncate auth.users cascade');
-    await pool.query('truncate public.access_log, public.ai_calls restart identity');
+    await pool.query('truncate public.access_log, public.ai_calls, public.storage_deletion_queue restart identity');
+    await pool.query('truncate storage.objects');
+    await rm(STORAGE_DIR, { recursive: true, force: true });
+    signedUrls.clear();
+    contentTypes.clear();
+    llm.inputs.splice(0);
     sessions.clear();
     refreshTokens.clear();
     factors.clear();
+}
+
+async function storedFiles() {
+    const files = await readdir(join(STORAGE_DIR, 'documents'), { recursive: true, withFileTypes: true }).catch(() => []);
+    return files
+        .filter((f) => f.isFile())
+        .map((f) => join(f.parentPath ?? f.path, f.name).slice(join(STORAGE_DIR, 'documents').length + 1))
+        .sort();
 }
 
 async function state() {
@@ -400,6 +549,17 @@ async function state() {
         ),
         careRecipients: await q('select * from public.care_recipients'),
         contacts: await q('select * from public.contacts order by created_at'),
+        documents: await q('select * from public.documents order by uploaded_at'),
+        extractions: await q(
+            'select id, document_id, status, method, needs_review, review_reasons, guard_flags, confirmed_data from public.document_extractions order by created_at'
+        ),
+        timelineEvents: await q('select * from public.timeline_events order by occurred_on'),
+        medications: await q('select * from public.medication_mentions order by created_at'),
+        storageObjects: (await q(`select name from storage.objects where bucket_id = 'documents' order by name`)).map((r) => r.name),
+        storageFiles: await storedFiles(),
+        deletionQueue: (await q('select object_path from public.storage_deletion_queue order by id')).map((r) => r.object_path),
+        aiCalls: await q('select * from public.ai_calls order by created_at'),
+        llmInputs: [...llm.inputs],
         accessLog: await q('select * from public.access_log order by id')
     };
 }
@@ -420,6 +580,14 @@ const server = http.createServer(async (req, res) => {
             return send(res, 204);
         }
         if (url.pathname === '/__test/state') return send(res, 200, await state());
+        if (url.pathname === '/__test/storage') {
+            const bytes = await readFile(objectFile('documents', url.searchParams.get('path') ?? '')).catch(() => null);
+            if (!bytes) return send(res, 404, { message: 'not found' });
+            res.writeHead(200, { 'content-type': 'application/octet-stream' });
+            return res.end(bytes);
+        }
+        if (url.pathname.startsWith('/storage/v1/')) return await handleStorage(req, res, url);
+        if (url.pathname.startsWith('/functions/v1/')) return await handleFunction(req, res, url.pathname.replace('/functions/v1/', ''));
         if (url.pathname.startsWith('/auth/v1/')) return await handleAuth(req, res, url.pathname.replace('/auth/v1', ''));
         if (url.pathname.startsWith('/rest/v1/')) return await handleRest(req, res, url);
         return send(res, 404, { message: 'not found' });

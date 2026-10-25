@@ -35,3 +35,26 @@ max_enrolled_factors = 10
 [auth.mfa.totp]
 enroll_enabled = true
 verify_enabled = true
+
+# Bucket privé des documents (créé aussi par la migration de l'étape 3).
+[storage.buckets.documents]
+public = false
+file_size_limit = "20MiB"
+allowed_mime_types = ["application/pdf", "image/jpeg", "image/png"]
+
+# Fonctions Edge (Deno). Jeton de l'utilisateur exigé ; versions des paquets dans import_map.json.
+[functions.extract-document]
+verify_jwt = true
+import_map = "./functions/import_map.json"
+
+[functions.get-document-url]
+verify_jwt = true
+import_map = "./functions/import_map.json"
+
+[functions.delete-document]
+verify_jwt = true
+import_map = "./functions/import_map.json"
+
+[functions.delete-care-file]
+verify_jwt = true
+import_map = "./functions/import_map.json"

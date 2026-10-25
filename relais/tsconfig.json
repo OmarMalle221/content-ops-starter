@@ -19,6 +19,6 @@
         "jsx": "react-jsx",
         "allowJs": false
     },
-    "include": ["src", "tests", "vite.config.ts", "playwright.config.ts", "security-headers.ts"],
+    "include": ["src", "tests", "supabase/functions", "vite.config.ts", "playwright.config.ts", "security-headers.ts"],
     "exclude": ["node_modules", "dist"]
 }

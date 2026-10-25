@@ -145,5 +145,40 @@
                 "text": "La personne elle-même, si elle est en mesure de le faire. Sinon, son représentant légal : mandataire dont le mandat de protection est homologué, tuteur ou autre représentant reconnu."
             }
         ]
+    },
+    "ai_document_processing": {
+        "scope": "care_file",
+        "version": "2026-10-28",
+        "published_on": "2026-10-28",
+        "legal_review": "pending",
+        "required": false,
+        "title": "Lecture automatique des documents",
+        "summary": "La personne aidée, ou son représentant légal, accepte que Relais lise automatiquement ses documents pour préparer un brouillon que la famille vérifie avant de l'ajouter au dossier.",
+        "sections": [
+            {
+                "heading": "Ce qui se passe",
+                "text": "Quand un document est ajouté, Relais en tire le texte. Il remplace d'abord les noms, les adresses, le numéro d'assurance maladie et les autres numéros par des codes. Ce texte sans identifiants est ensuite lu par un service d'intelligence artificielle, qui prépare un brouillon : type de document, date, médicaments tels qu'ils sont écrits, rendez-vous et événements."
+            },
+            {
+                "heading": "Ce que l'intelligence artificielle ne fait pas",
+                "text": "Elle ne pose aucun diagnostic, n'interprète aucun résultat et ne suggère aucun changement de traitement. Le brouillon n'entre au dossier qu'après la vérification d'un membre de la famille, qui peut tout corriger ou tout rejeter."
+            },
+            {
+                "heading": "Où",
+                "text": "Le document lui-même reste sur des serveurs situés au Canada. Le texte sans identifiants est transmis au fournisseur d'intelligence artificielle de Relais et peut être traité à l'extérieur du Québec, par exemple aux États-Unis. Les conditions du fournisseur (conservation, entraînement, lieu de traitement) sont vérifiées avant le pilote et décrites dans la politique de confidentialité."
+            },
+            {
+                "heading": "Photos et documents numérisés",
+                "text": "Pour l'instant, les photos et les documents numérisés ne sont pas lus automatiquement : la famille note elle-même ce qu'ils contiennent."
+            },
+            {
+                "heading": "Sans ce consentement",
+                "text": "La famille peut quand même ajouter des documents et noter elle-même ce qu'ils contiennent. Rien n'est transmis au fournisseur d'intelligence artificielle."
+            },
+            {
+                "heading": "Retrait",
+                "text": "Ce consentement peut être retiré à tout moment. Ce qui a déjà été vérifié et ajouté au dossier y reste ; aucun nouveau document ne sera lu automatiquement."
+            }
+        ]
     }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router';
 import { buttonClass, Loading, Notice } from '../../components/ui';
+import { documents as td } from '../../i18n/documents.fr';
 import { files as tf } from '../../i18n/files.fr';
 import { logFileOpened, type CareFile } from '../../lib/careFiles';
 import { useCareFile, useFileAccess } from './useFile';
@@ -57,6 +58,12 @@ export function FileLayout() {
         { to: '', label: tf.tabs.overview, end: true },
         { to: 'profil', label: tf.tabs.profile },
         { to: 'contacts', label: tf.tabs.contacts },
+        ...(access.canRead('health')
+            ? [
+                  { to: 'documents', label: td.tab },
+                  { to: 'chronologie', label: td.timelineTab }
+              ]
+            : []),
         { to: 'consentement', label: tf.tabs.consent },
         { to: 'membres', label: tf.tabs.members },
         ...(isOwner

@@ -149,7 +149,7 @@ select tst.ok('RPC non exécutables par anon',
 \echo '== données de référence'
 \o /dev/null
 
-select tst.eq('versions de consentement publiées', (select count(*) from public.consent_texts), 5);
+select tst.eq('versions de consentement publiées', (select count(*) from public.consent_texts), 6);
 select tst.ok('ressources d''urgence présentes',
     exists (select 1 from public.resources where slug = 'urgence-911' and category = 'emergency' and phone = '911')
     and exists (select 1 from public.resources where slug = 'ligne-9-8-8' and category = 'crisis_line'));
@@ -184,7 +184,7 @@ select tst.eq('profils créés par le déclencheur', (select count(*) from publi
 begin;
 set local role anon;
 select tst.eq('anon lit les ressources actives', tst.cnt('select 1 from public.resources'), 4);
-select tst.eq('anon lit les versions de consentement', tst.cnt('select 1 from public.consent_texts'), 5);
+select tst.eq('anon lit les versions de consentement', tst.cnt('select 1 from public.consent_texts'), 6);
 select tst.denied('anon ne lit pas users', 'select 1 from public.users');
 select tst.denied('anon ne lit pas consents', 'select 1 from public.consents');
 select tst.denied('anon ne lit pas access_log', 'select 1 from public.access_log');
@@ -598,7 +598,7 @@ select tst.ok('journal : arrivées, changement de niveau, retrait', (
     from public.access_log where care_file_id = :'file_id'));
 select tst.fails('suppression du compte refusée tant qu''elle est propriétaire', 'select public.delete_my_account()', '55006');
 select public.export_care_file(:'file_id') as file_export \gset
-select tst.ok('export : format et contenu', (:'file_export'::jsonb ->> 'format') = 'relais-dossier/1'
+select tst.ok('export : format et contenu', (:'file_export'::jsonb ->> 'format') = 'relais-dossier/2'
     and (:'file_export'::jsonb #>> '{care_recipient,first_name}') = 'Louise'
     and jsonb_array_length(:'file_export'::jsonb -> 'contacts') = 2
     and jsonb_array_length(:'file_export'::jsonb -> 'members') = 5);
@@ -637,6 +637,292 @@ select tst.ok('trace : acteur et nombres seulement', (
     from public.access_log where care_file_id = :'file_id'));
 select tst.eq('les consentements personnels restent', (
     select count(*) from public.consents where user_id = 'c0000000-0000-4000-8000-00000000000c' and care_file_id is null), 2);
+
+\o
+\echo '== étape 3 : structure des documents'
+\o /dev/null
+
+select tst.eq('documents et extractions : écritures par RPC seulement', (
+    select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname in ('documents', 'document_extractions')
+      and (has_table_privilege('authenticated', c.oid, 'INSERT') or has_table_privilege('authenticated', c.oid, 'UPDATE')
+           or has_table_privilege('authenticated', c.oid, 'DELETE'))), 0);
+select tst.ok('médicaments : aucun ajout direct', not has_table_privilege('authenticated', 'public.medication_mentions', 'INSERT'));
+select tst.ok('file d''effacement Storage : invisible aux utilisateurs',
+    not has_table_privilege('authenticated', 'public.storage_deletion_queue', 'SELECT'));
+select tst.ok('chronologie : source non modifiable',
+    not has_column_privilege('authenticated', 'public.timeline_events', 'source_document_id', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.timeline_events', 'source_type', 'UPDATE'));
+select tst.ok('fonctions serveur réservées au rôle service',
+    not has_function_privilege('authenticated', 'public.save_document_extraction(uuid,uuid,jsonb,text,text,boolean,text[],text[],integer)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.fail_document_extraction(uuid,text,integer)', 'EXECUTE'));
+select tst.ok('bucket privé avec limites', (
+    select not public and file_size_limit = 20971520 and allowed_mime_types @> array['application/pdf']
+    from storage.buckets where id = 'documents'));
+
+\o
+\echo '== étape 3 : jeu d''essai (dossier « Papa »)'
+\o /dev/null
+
+\set file2 'f2000000-0000-4000-8000-000000000002'
+-- C : aidante principale ; D : accès complet ; E : coordination ; G : lecture seule ; H : personne aidée ;
+-- F : intervenante (lecture seule) ; O : personne extérieure.
+insert into public.care_files (id, owner_id, title) values (:'file2', 'c0000000-0000-4000-8000-00000000000c', 'Papa');
+insert into public.care_file_members (care_file_id, user_id, role, access_level) values
+    (:'file2', 'd0000000-0000-4000-8000-00000000000d', 'family_member', 'full'),
+    (:'file2', 'e0000000-0000-4000-8000-00000000000e', 'family_member', 'coordination'),
+    (:'file2', '70000000-0000-4000-8000-000000000007', 'family_member', 'read_only'),
+    (:'file2', '80000000-0000-4000-8000-000000000008', 'care_recipient', 'read_only'),
+    (:'file2', 'f0000000-0000-4000-8000-00000000000f', 'relais_worker', 'read_only');
+insert into public.consents (user_id, care_file_id, consent_type, text_version, granted_by, legal_basis)
+    values ('c0000000-0000-4000-8000-00000000000c', :'file2', 'care_recipient_data', '2026-10-27',
+            'care_recipient_signed_form', 'person_consents');
+insert into public.care_recipients (care_file_id, first_name, last_name, living_setting)
+    values (:'file2', 'Roger', 'Gagnon', 'rpa');
+insert into public.contacts (care_file_id, kind, name, address) values
+    (:'file2', 'physician', 'Dre Isabelle Fortin', '1200, rue Sherbrooke Est, Montréal'),
+    (:'file2', 'pharmacy', 'Pharmacie du coin', null);
+
+\o
+\echo '== étape 3 : téléversement et lecture automatique'
+\o /dev/null
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('type de fichier refusé', format($$select public.register_document(%L, 'text/html', 100)$$, :'file2'), '23514');
+select tst.fails('fichier trop gros refusé', format($$select public.register_document(%L, 'application/pdf', 30000000)$$, :'file2'), '23514');
+select public.register_document(:'file2', 'application/pdf', 120000) as doc1 \gset
+select tst.ok('chemin imposé par la base', (select storage_path = :'file2' || '/' || :'doc1' from public.documents where id = :'doc1'));
+select tst.fails('confirmation impossible avant le téléversement', format($$select public.complete_document_upload(%L)$$, :'doc1'), 'RLA02');
+select tst.denied('dépôt refusé hors du chemin prévu',
+    format($$insert into storage.objects (bucket_id, name, owner) values ('documents', %L, auth.uid())$$, :'file2' || '/' || gen_random_uuid()));
+select tst.denied('dépôt refusé dans un autre bucket',
+    format($$insert into storage.objects (bucket_id, name, owner) values ('avatars', %L, auth.uid())$$, :'file2' || '/' || :'doc1'));
+insert into storage.objects (bucket_id, name, owner) values ('documents', :'file2' || '/' || :'doc1', auth.uid());
+select public.complete_document_upload(:'doc1');
+select tst.ok('document téléversé', (select status = 'uploaded' from public.documents where id = :'doc1'));
+select tst.denied('aucun second dépôt une fois le document reçu',
+    format($$insert into storage.objects (bucket_id, name, owner) values ('documents', %L, auth.uid())$$, :'file2' || '/' || :'doc1' || 'x'));
+select tst.eq('aucune lecture directe du fichier', tst.cnt('select 1 from storage.objects'), 0);
+select tst.eq('aucun effacement direct du fichier', tst.affected('delete from storage.objects'), 0);
+select tst.fails('lecture automatique refusée sans consentement', format($$select public.start_document_extraction(%L)$$, :'doc1'), 'RLA01');
+select public.record_file_consent(:'file2', 'ai_document_processing', '2026-10-28', 'care_recipient_signed_form', 'person_consents');
+select public.start_document_extraction(:'doc1') as started \gset
+select tst.ok('dictionnaire : personne aidée, médecin et adresse ; pas les organismes',
+    (:'started'::jsonb -> 'persons') ?& array['Roger', 'Gagnon', 'Dre Isabelle Fortin', 'Claire']
+    and not ((:'started'::jsonb -> 'persons') ? 'Pharmacie du coin')
+    and (:'started'::jsonb -> 'addresses') ? '1200, rue Sherbrooke Est, Montréal'
+    and (:'started'::jsonb ->> 'storage_path') = :'file2' || '/' || :'doc1');
+select tst.ok('document en lecture', (select status = 'processing' from public.documents where id = :'doc1'));
+select tst.fails('pas de double lecture simultanée', format($$select public.start_document_extraction(%L)$$, :'doc1'), 'RLA02');
+select tst.fails('écriture du brouillon réservée au serveur',
+    format($$select public.save_document_extraction(%L, auth.uid(), '{}', '1', 'clear', false, '{}', '{}', 1)$$, :'doc1'), '42501');
+select tst.denied('pas d''ajout direct de document', format($$insert into public.documents (care_file_id, mime_type, size_bytes) values (%L, 'application/pdf', 1)$$, :'file2'));
+select tst.denied('pas de modification directe de document', $$update public.documents set title = 'X'$$);
+select tst.denied('pas de médicament ajouté directement',
+    format($$insert into public.medication_mentions (care_file_id, source_document_id, name_as_written) values (%L, %L, 'X')$$, :'file2', :'doc1'));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select public.save_document_extraction(:'doc1', 'c0000000-0000-4000-8000-00000000000c',
+    '{"schema_version":"1","plain_summary":"Résumé de départ."}', '1', 'clear', false, '{}', '{}', 3) as extraction1 \gset
+select tst.ok('brouillon prêt', (select status = 'draft_ready' and page_count = 3 from public.documents where id = :'doc1'));
+select tst.ok('document supprimé pendant la lecture : rien n''est gardé',
+    public.save_document_extraction(gen_random_uuid(), null, '{}', '1', 'clear', false, '{}', '{}', 1) is null);
+commit;
+
+\o
+\echo '== étape 3 : accès par niveau'
+\o /dev/null
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"e0000000-0000-4000-8000-00000000000e","role":"authenticated","email":"emma@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('coordination : aucun document visible', tst.cnt('select 1 from public.documents'), 0);
+select tst.eq('coordination : aucune extraction visible', tst.cnt('select 1 from public.document_extractions'), 0);
+select tst.fails('coordination : pas d''ajout de document', format($$select public.register_document(%L, 'application/pdf', 10)$$, :'file2'), '42501');
+select tst.fails('coordination : pas de téléchargement', format($$select public.authorize_document_download(%L)$$, :'doc1'), '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"70000000-0000-4000-8000-000000000007","role":"authenticated","email":"gilles@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('lecture seule : voit le document', tst.cnt('select 1 from public.documents'), 1);
+select tst.eq('lecture seule : voit le brouillon', tst.cnt('select 1 from public.document_extractions'), 1);
+select tst.ok('lecture seule : peut télécharger', public.authorize_document_download(:'doc1') = :'file2' || '/' || :'doc1');
+select tst.fails('lecture seule : ne confirme pas', format($$select public.confirm_document(%L, %L, '{}')$$, :'doc1', :'extraction1'), '42501');
+select tst.fails('lecture seule : ne supprime pas', format($$select public.delete_document(%L)$$, :'doc1'), '42501');
+select tst.fails('lecture seule : n''ajoute pas', format($$select public.register_document(%L, 'application/pdf', 10)$$, :'file2'), '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000f","role":"authenticated","email":"intervenante.w@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('intervenante sans MFA : aucun document', tst.cnt('select 1 from public.documents'), 0);
+select set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000f","role":"authenticated","email":"intervenante.w@example.test","aal":"aal2"}', true);
+select tst.eq('intervenante avec MFA, dossier confié : voit le document', tst.cnt('select 1 from public.documents'), 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"60000000-0000-4000-8000-000000000006","role":"authenticated","email":"olivier@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('personne extérieure : aucun document', tst.cnt('select 1 from public.documents'), 0);
+select tst.fails('personne extérieure : pas de téléchargement', format($$select public.authorize_document_download(%L)$$, :'doc1'), '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"80000000-0000-4000-8000-000000000008","role":"authenticated","email":"helene@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('personne aidée : voit son document', tst.cnt('select 1 from public.documents'), 1);
+select tst.fails('personne aidée : ne confirme pas', format($$select public.confirm_document(%L, %L, '{}')$$, :'doc1', :'extraction1'), '42501');
+commit;
+
+\o
+\echo '== étape 3 : confirmation, saisie à la main, rejet, échec'
+\o /dev/null
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"d0000000-0000-4000-8000-00000000000d","role":"authenticated","email":"denis@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('confirmation : contenu invalide refusé',
+    format($$select public.confirm_document(%L, %L, '{"medications": {}}')$$, :'doc1', :'extraction1'), '22023');
+select tst.fails('confirmation : médicament sans nom refusé',
+    format($$select public.confirm_document(%L, %L, '{"medications": [{"name": " "}]}')$$, :'doc1', :'extraction1'), '23514');
+select public.confirm_document(:'doc1', :'extraction1', $json${
+    "document": {"title": "Résumé de départ", "doc_type": "discharge_summary", "doc_date": "2026-10-03",
+                 "author": "Dre Isabelle Fortin, gériatre", "needs_review": false},
+    "summary": "Résumé de départ de l'hôpital.",
+    "medications": [{"name": "Metformine", "dosage": "500 mg", "frequency": "2 fois par jour"},
+                    {"name": "Ramipril", "dosage": "5 mg", "frequency": null}],
+    "timeline_events": [{"event_type": "discharge", "occurred_on": "2026-10-03", "title": "Retour à la résidence", "description": null}],
+    "action_items": [{"text": "Prise de sang dans 2 semaines"}]
+}$json$::jsonb);
+select tst.ok('document confirmé avec ses champs', (
+    select status = 'confirmed' and title = 'Résumé de départ' and doc_type = 'discharge_summary'
+       and doc_date = '2026-10-03' and author = 'Dre Isabelle Fortin, gériatre'
+    from public.documents where id = :'doc1'));
+select tst.ok('extraction confirmée par D', (
+    select status = 'confirmed' and confirmed_by = auth.uid() and confirmed_data ? 'action_items'
+    from public.document_extractions where id = :'extraction1'));
+select tst.eq('médicaments tels qu''écrits, reliés au document', tst.cnt(format($$
+    select 1 from public.medication_mentions where source_document_id = %L and document_date = '2026-10-03' and created_by = auth.uid()$$, :'doc1')), 2);
+select tst.eq('événement relié à sa source', tst.cnt(format($$
+    select 1 from public.timeline_events where source_type = 'document' and source_document_id = %L$$, :'doc1')), 1);
+select tst.fails('pas de seconde confirmation', format($$select public.confirm_document(%L, %L, '{}')$$, :'doc1', :'extraction1'), 'RLA02');
+insert into public.timeline_events (care_file_id, event_type, occurred_on, title)
+    values (:'file2', 'living_setting_change', '2026-09-01', 'Arrivée en résidence');
+select tst.denied('un ajout direct est toujours « à la main »',
+    format($$insert into public.timeline_events (care_file_id, event_type, occurred_on, title, source_type, source_document_id)
+             values (%L, 'other', '2026-09-02', 'X', 'document', %L)$$, :'file2', :'doc1'));
+select tst.eq('D corrige un titre', tst.affected($$update public.timeline_events set title = 'Arrivée à la résidence' where source_type = 'manual'$$), 1);
+select tst.denied('la source d''un événement ne change pas', format($$update public.timeline_events set source_document_id = %L$$, :'doc1'));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+-- Photo saisie à la main (sans lecture automatique).
+select public.register_document(:'file2', 'image/jpeg', 50000) as doc2 \gset
+insert into storage.objects (bucket_id, name, owner) values ('documents', :'file2' || '/' || :'doc2', auth.uid());
+select public.complete_document_upload(:'doc2');
+select public.confirm_document(:'doc2', null, $json${
+    "document": {"title": "Ordonnance", "doc_type": "prescription", "doc_date": "2026-10-10", "author": null, "needs_review": true},
+    "summary": null, "medications": [{"name": "Atorvastatine", "dosage": "20 mg", "frequency": "le soir"}],
+    "timeline_events": [{"event_type": "appointment", "occurred_on": "2026-11-12", "title": "Rendez-vous en gériatrie", "description": "Hôpital, 10 h"}],
+    "action_items": []
+}$json$::jsonb);
+select tst.ok('saisie à la main enregistrée', (
+    select e.method = 'manual' and e.status = 'confirmed' and d.needs_review
+    from public.document_extractions e join public.documents d on d.id = e.document_id where d.id = :'doc2'));
+-- Brouillon rejeté, puis échec de lecture.
+select public.register_document(:'file2', 'application/pdf', 9000) as doc3 \gset
+insert into storage.objects (bucket_id, name, owner) values ('documents', :'file2' || '/' || :'doc3', auth.uid());
+select public.complete_document_upload(:'doc3');
+select public.start_document_extraction(:'doc3');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select public.save_document_extraction(:'doc3', 'c0000000-0000-4000-8000-00000000000c', '{}', '1', 'handwritten', true,
+    '{handwriting}', '{advice_language}', 1) as extraction3 \gset
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select public.discard_extraction(:'extraction3');
+select tst.ok('brouillon rejeté : effacé, document à relire', (
+    select d.status = 'uploaded' from public.documents d where d.id = :'doc3')
+    and not exists (select 1 from public.document_extractions where document_id = :'doc3'));
+select public.start_document_extraction(:'doc3');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select tst.fails('code d''échec inconnu refusé', format($$select public.fail_document_extraction(%L, 'boom')$$, :'doc3'), '23514');
+select public.fail_document_extraction(:'doc3', 'no_text_layer', 2);
+select tst.ok('échec noté par un code', (select status = 'failed' and extraction_error = 'no_text_layer' from public.documents where id = :'doc3'));
+commit;
+
+-- La personne aidée retire la lecture automatique : plus aucune nouvelle lecture.
+begin;
+select set_config('request.jwt.claims', '{"sub":"80000000-0000-4000-8000-000000000008","role":"authenticated","email":"helene@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select public.revoke_consent((select id from public.consents
+    where care_file_id = :'file2' and consent_type = 'ai_document_processing' and revoked_at is null));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('lecture automatique refusée après le retrait', format($$select public.start_document_extraction(%L)$$, :'doc3'), 'RLA01');
+select tst.ok('journal : dépôts, consultation, confirmations', (
+    select count(*) filter (where action = 'document_uploaded') = 3
+       and count(*) filter (where action = 'document_viewed') = 1
+       and count(*) filter (where action = 'extraction_confirmed') = 2
+    from public.access_log where care_file_id = :'file2'));
+select tst.ok('journal : aucun contenu', not exists (
+    select 1 from public.access_log where care_file_id = :'file2' and metadata::text ~* 'metformine|gériatre|roger'));
+commit;
+
+\o
+\echo '== étape 3 : suppression d''un document, export et suppression du dossier'
+\o /dev/null
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.ok('suppression du document : chemin à effacer', public.delete_document(:'doc2') = :'file2' || '/' || :'doc2');
+select tst.eq('ses médicaments et événements partent avec lui', (
+    (select count(*) from public.medication_mentions where source_document_id = :'doc2')
+    + (select count(*) from public.timeline_events where source_document_id = :'doc2')
+    + (select count(*) from public.document_extractions where document_id = :'doc2')), 0);
+select public.export_care_file(:'file2') as export2 \gset
+select tst.ok('export : documents, médicaments et chronologie', (:'export2'::jsonb ->> 'format') = 'relais-dossier/2'
+    and jsonb_array_length(:'export2'::jsonb -> 'documents') = 2
+    and jsonb_array_length(:'export2'::jsonb -> 'medications_as_written') = 2
+    and jsonb_array_length(:'export2'::jsonb -> 'timeline_events') = 2
+    and (:'export2'::jsonb #>> '{documents,0,confirmed,summary}') = 'Résumé de départ de l''hôpital.');
+select public.delete_care_file(:'file2') as deleted2 \gset
+select tst.ok('nombres de la suppression', (:'deleted2'::jsonb ->> 'documents')::int = 2
+    and (:'deleted2'::jsonb ->> 'medications')::int = 2);
+commit;
+
+select tst.eq('dossier « Papa » entièrement effacé', (
+    (select count(*) from public.documents where care_file_id = :'file2')
+    + (select count(*) from public.document_extractions where care_file_id = :'file2')
+    + (select count(*) from public.medication_mentions where care_file_id = :'file2')
+    + (select count(*) from public.timeline_events where care_file_id = :'file2')
+    + (select count(*) from public.consents where care_file_id = :'file2')), 0);
+select tst.eq('tous les fichiers du dossier sont à effacer de Storage', (
+    select count(*) from public.storage_deletion_queue where object_path like :'file2' || '/%'), 3);
+select tst.ok('le journal ne garde que la trace', (
+    select count(*) = 1 and bool_and(action = 'care_file_deleted') from public.access_log where care_file_id = :'file2'));
 
 \o
 \echo 'RLS OK'

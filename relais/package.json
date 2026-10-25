@@ -18,6 +18,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:db": "bash scripts/test-db.sh",
+        "test:ai-live": "vitest run --project integration",
         "test:e2e": "playwright test",
         "generate:reference": "node scripts/generate-reference-sql.mjs",
         "check:reference": "node scripts/generate-reference-sql.mjs --check"
@@ -32,6 +33,7 @@
         "zod": "4.6.5"
     },
     "devDependencies": {
+        "@anthropic-ai/sdk": "1.3.0",
         "@axe-core/playwright": "4.13.0",
         "@eslint/js": "9.39.5",
         "@playwright/test": "1.63.0",
@@ -56,6 +58,7 @@
         "tailwindcss": "4.3.3",
         "typescript": "5.9.3",
         "typescript-eslint": "8.71.0",
+        "unpdf": "1.9.1",
         "vite": "8.3.4",
         "vite-plugin-pwa": "2.0.0",
         "vitest": "5.0.3",

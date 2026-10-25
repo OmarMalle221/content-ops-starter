@@ -12,12 +12,15 @@ export function FreeTextField({
     hint,
     value,
     onValueChange,
+    compact = false,
     ...textarea
 }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> & {
     label: string;
     hint?: string;
     value: string;
     onValueChange: (value: string) => void;
+    /** Zone basse (une ou deux lignes) : titres, précisions. */
+    compact?: boolean;
 }) {
     const id = useId();
     const { report } = useDistress();
@@ -44,7 +47,7 @@ export function FreeTextField({
             <textarea
                 id={id}
                 aria-describedby={hint ? `${id}-hint` : undefined}
-                className="min-h-32 rounded-lg border-2 border-muted bg-surface p-3 text-lg"
+                className={`${compact ? 'min-h-14' : 'min-h-32'} rounded-lg border-2 border-muted bg-surface p-3 text-lg`}
                 value={value}
                 onChange={(event) => handleChange(event.target.value)}
                 {...textarea}

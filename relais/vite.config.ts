@@ -53,6 +53,10 @@ export default defineConfig(({ mode }) => ({
             },
             {
                 extends: true,
+                test: { name: 'integration', include: ['tests/integration/**/*.test.ts'], environment: 'node' }
+            },
+            {
+                extends: true,
                 test: {
                     name: 'component',
                     include: ['tests/component/**/*.test.tsx'],

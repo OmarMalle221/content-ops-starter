@@ -4,10 +4,12 @@ import { Link, useNavigate } from 'react-router';
 import { Button, buttonClass, Card, Checkbox, Loading, Notice, PageTitle, RadioGroup, SelectField, TextField } from '../../components/ui';
 import { fr } from '../../i18n/fr';
 import { files as tf, GRANTOR_LABELS, LEGAL_BASIS_LABELS } from '../../i18n/files.fr';
-import { recordFileConsent, revokeFileConsent, type LegalBasis } from '../../lib/careFiles';
+import { recordFileConsent, revokeFileConsent, type FileConsentType, type LegalBasis } from '../../lib/careFiles';
 import { consentText } from '../../lib/consents';
 import { formatDate } from '../../lib/format';
 import { ConsentTextDetails } from '../consents/ConsentTextDetails';
+import { documents as td } from '../../i18n/documents.fr';
+import { activeAiConsent } from '../documents/useDocuments';
 import { useFileContext } from './FileLayout';
 import { fileKeys, useCareRecipient, useFileConsents, useMembers } from './useFile';
 
@@ -101,18 +103,105 @@ export function FileConsentPage() {
                     <RevokeBox consentId={active.id} fileId={file.id} onStatus={setStatus} />
                 </div>
             )}
+
+            {(isOwner || isRecipient) && (
+                <AiConsentSection fileId={file.id} isOwner={isOwner} isRecipient={isRecipient} recipientConsentActive={Boolean(active)} />
+            )}
         </div>
     );
 }
 
+/** Consentement distinct et facultatif : lecture automatique des documents (règle no 4). */
+function AiConsentSection({
+    fileId,
+    isOwner,
+    isRecipient,
+    recipientConsentActive
+}: {
+    fileId: string;
+    isOwner: boolean;
+    isRecipient: boolean;
+    recipientConsentActive: boolean;
+}) {
+    const consents = useFileConsents(fileId);
+    const members = useMembers(fileId);
+    const text = consentText('ai_document_processing');
+    const [status, setStatus] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+    const active = activeAiConsent(consents.data);
+    const latest = consents.data?.find((c) => c.consent_type === 'ai_document_processing');
+    const withdrawnByRecipient = Boolean(
+        latest?.revoked_at && members.data?.some((m) => m.user_id === latest.revoked_by && m.role === 'care_recipient')
+    );
+
+    return (
+        <section aria-labelledby="ai-consent-title" className="flex flex-col gap-3 border-t-2 border-line pt-5">
+            <h2 id="ai-consent-title" className="text-2xl font-bold">
+                {td.aiConsentTitle}
+            </h2>
+            <p>{td.aiConsentIntro}</p>
+            {status && <Notice tone={status.tone}>{status.text}</Notice>}
+            <Card className="flex flex-col gap-2">
+                <h3 className="text-xl font-bold">{active ? td.aiConsentActive : td.aiConsentNone}</h3>
+                {active && (
+                    <>
+                        <p>{GRANTOR_LABELS[active.granted_by]}</p>
+                        {active.representative_name && <p>{tf.representative(active.representative_name)}</p>}
+                        <p className="text-muted">{tf.consentRecordedOn(formatDate(active.granted_at))}</p>
+                    </>
+                )}
+                {!active && latest?.revoked_at && <p>{td.aiConsentRevoked(formatDate(latest.revoked_at))}</p>}
+            </Card>
+            <p className="font-bold">{text.title}</p>
+            <p>{text.summary}</p>
+            <ConsentTextDetails text={text} open={false} />
+            {!recipientConsentActive ? (
+                <Notice tone="info">{td.aiConsentNeedsRecipient}</Notice>
+            ) : (
+                <>
+                    {isRecipient && (
+                        <RecipientActions
+                            fileId={fileId}
+                            type="ai_document_processing"
+                            version={text.version}
+                            activeId={active?.id}
+                            activeInApp={active?.granted_by === 'care_recipient_in_app'}
+                            onStatus={setStatus}
+                        />
+                    )}
+                    {isOwner && !active && (
+                        <OwnerForm
+                            fileId={fileId}
+                            type="ai_document_processing"
+                            version={text.version}
+                            allowSignedForm={!withdrawnByRecipient}
+                            hasProfile
+                            onDone={setStatusText(setStatus)}
+                        />
+                    )}
+                    {isOwner && active && (
+                        <RevokeBox consentId={active.id} fileId={fileId} type="ai_document_processing" onStatus={setStatus} />
+                    )}
+                </>
+            )}
+        </section>
+    );
+}
+
+const setStatusText =
+    (set: (status: { tone: 'success' | 'error'; text: string }) => void) =>
+    (message: string): void =>
+        set({ tone: 'success', text: message });
+
 function OwnerForm({
     fileId,
+    type = 'care_recipient_data',
     version,
     allowSignedForm,
     hasProfile,
     onDone
 }: {
     fileId: string;
+    type?: FileConsentType;
     version: string;
     allowSignedForm: boolean;
     hasProfile: boolean;
@@ -137,13 +226,13 @@ function OwnerForm({
         try {
             await recordFileConsent(
                 option === 'self'
-                    ? { fileId, version, grantedBy: 'care_recipient_signed_form', legalBasis: 'person_consents' }
-                    : { fileId, version, grantedBy: 'legal_representative', legalBasis, representativeName: representative.trim() }
+                    ? { fileId, type, version, grantedBy: 'care_recipient_signed_form', legalBasis: 'person_consents' }
+                    : { fileId, type, version, grantedBy: 'legal_representative', legalBasis, representativeName: representative.trim() }
             );
             await queryClient.invalidateQueries({ queryKey: fileKeys.consents(fileId) });
             // Première fois : on enchaîne avec le profil de la personne aidée.
             if (!hasProfile) navigate(`/dossiers/${fileId}/profil`);
-            else onDone(tf.recorded);
+            else onDone(type === 'ai_document_processing' ? td.aiRecorded : tf.recorded);
         } catch {
             setError(fr.app.genericError);
         } finally {
@@ -197,7 +286,7 @@ function OwnerForm({
             <Notice tone="info">{tf.noRepresentative}</Notice>
             {error && <Notice tone="error">{error}</Notice>}
             <Button type="submit" disabled={busy}>
-                {busy ? tf.saving : tf.save}
+                {busy ? tf.saving : type === 'ai_document_processing' ? td.aiRecord : tf.save}
             </Button>
         </form>
     );
@@ -205,12 +294,14 @@ function OwnerForm({
 
 function RecipientActions({
     fileId,
+    type = 'care_recipient_data',
     version,
     activeId,
     activeInApp,
     onStatus
 }: {
     fileId: string;
+    type?: FileConsentType;
     version: string;
     activeId: string | undefined;
     activeInApp: boolean;
@@ -222,7 +313,7 @@ function RecipientActions({
     async function give() {
         setBusy(true);
         try {
-            await recordFileConsent({ fileId, version, grantedBy: 'care_recipient_in_app', legalBasis: 'person_consents' });
+            await recordFileConsent({ fileId, type, version, grantedBy: 'care_recipient_in_app', legalBasis: 'person_consents' });
             await queryClient.invalidateQueries({ queryKey: fileKeys.consents(fileId) });
             onStatus({ tone: 'success', text: tf.recorded });
         } catch {
@@ -236,10 +327,10 @@ function RecipientActions({
         <div className="flex flex-col gap-3">
             {!activeInApp && (
                 <Button onClick={() => void give()} disabled={busy}>
-                    {tf.recipientGive}
+                    {type === 'ai_document_processing' ? td.aiRecipientGive : tf.recipientGive}
                 </Button>
             )}
-            {activeId && <RevokeBox consentId={activeId} fileId={fileId} onStatus={onStatus} />}
+            {activeId && <RevokeBox consentId={activeId} fileId={fileId} type={type} onStatus={onStatus} />}
         </div>
     );
 }
@@ -247,22 +338,26 @@ function RecipientActions({
 function RevokeBox({
     consentId,
     fileId,
+    type = 'care_recipient_data',
     onStatus
 }: {
     consentId: string;
     fileId: string;
+    type?: FileConsentType;
     onStatus: (status: { tone: 'success' | 'error'; text: string }) => void;
 }) {
     const queryClient = useQueryClient();
     const [confirming, setConfirming] = useState(false);
     const [busy, setBusy] = useState(false);
+    const ai = type === 'ai_document_processing';
+    const labelId = ai ? 'revoke-ai-consent' : 'revoke-file-consent';
 
     async function revoke() {
         setBusy(true);
         try {
-            await revokeFileConsent(consentId);
+            await revokeFileConsent(consentId, type);
             await queryClient.invalidateQueries({ queryKey: fileKeys.consents(fileId) });
-            onStatus({ tone: 'success', text: tf.revoked });
+            onStatus({ tone: 'success', text: ai ? td.aiRevoked : tf.revoked });
         } catch {
             onStatus({ tone: 'error', text: fr.app.genericError });
         } finally {
@@ -274,16 +369,16 @@ function RevokeBox({
     if (!confirming) {
         return (
             <Button variant="secondary" onClick={() => setConfirming(true)}>
-                {tf.revoke}
+                {ai ? td.aiRevoke : tf.revoke}
             </Button>
         );
     }
     return (
-        <div role="group" aria-labelledby="revoke-file-consent" className="flex flex-col gap-3 rounded-lg bg-urgent-soft p-4">
-            <p id="revoke-file-consent" className="font-bold">
-                {tf.confirmRevoke}
+        <div role="group" aria-labelledby={labelId} className="flex flex-col gap-3 rounded-lg bg-urgent-soft p-4">
+            <p id={labelId} className="font-bold">
+                {ai ? td.aiConfirmRevoke : tf.confirmRevoke}
             </p>
-            <p>{tf.revokeEffect}</p>
+            <p>{ai ? td.aiRevokeEffect : tf.revokeEffect}</p>
             <div className="flex flex-wrap gap-2">
                 <Button variant="danger" disabled={busy} onClick={() => void revoke()}>
                     {tf.confirm}

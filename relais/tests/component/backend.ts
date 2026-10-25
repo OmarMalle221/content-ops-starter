@@ -4,6 +4,7 @@ import type { Session } from '@supabase/supabase-js';
 import { vi } from 'vitest';
 import type { Profile, Resource } from '../../src/lib/api';
 import type { FileConsent, Membership } from '../../src/lib/careFiles';
+import type { CareDocument, Extraction, MedicationMention, TimelineEvent } from '../../src/lib/documents';
 import type { ConsentRecord, UserConsentType } from '../../src/lib/consents';
 import snapshot from '../../src/content/emergency-resources.json';
 
@@ -26,7 +27,13 @@ export const FILE_ID = 'f1000000-0000-4000-8000-000000000001';
 interface FileState {
     members: Membership[];
     consents: FileConsent[];
+    documents: CareDocument[];
+    extraction: Extraction | null;
+    timeline: TimelineEvent[];
+    medications: MedicationMention[];
 }
+
+const emptyFile = (): FileState => ({ members: [], consents: [], documents: [], extraction: null, timeline: [], medications: [] });
 
 interface BackendState {
     session: Session | null;
@@ -43,7 +50,7 @@ export const backend: BackendState = {
     consents: [],
     resources: [],
     failResources: false,
-    file: { members: [], consents: [] }
+    file: emptyFile()
 };
 
 export function resetBackend(): void {
@@ -52,9 +59,10 @@ export function resetBackend(): void {
     backend.consents = [];
     backend.resources = snapshot as Resource[];
     backend.failResources = false;
-    backend.file = { members: [], consents: [] };
+    backend.file = emptyFile();
     for (const fn of Object.values(api)) fn.mockClear();
     for (const fn of Object.values(careFilesApi)) fn.mockClear();
+    for (const fn of Object.values(documentsApi)) fn.mockClear();
 }
 
 let nextId = 1;
@@ -150,4 +158,44 @@ export const careFilesApi = {
     listInvitations: vi.fn(async () => []),
     listAccessLog: vi.fn(async () => []),
     logFileOpened: vi.fn(async () => undefined)
+};
+
+export const DOCUMENT_ID = 'd1000000-0000-4000-8000-000000000001';
+
+export function careDocument(overrides: Partial<CareDocument> = {}): CareDocument {
+    return {
+        id: DOCUMENT_ID,
+        care_file_id: FILE_ID,
+        mime_type: 'application/pdf',
+        size_bytes: 120000,
+        page_count: 3,
+        status: 'uploaded',
+        extraction_error: null,
+        title: null,
+        doc_type: null,
+        doc_date: null,
+        author: null,
+        needs_review: false,
+        uploaded_by: USER_ID,
+        uploaded_at: '2026-10-28T14:00:00Z',
+        ...overrides
+    };
+}
+
+export const documentsApi = {
+    listDocuments: vi.fn(async () => [...backend.file.documents]),
+    getDocument: vi.fn(async (id: string) => backend.file.documents.find((d) => d.id === id) ?? null),
+    getCurrentExtraction: vi.fn(async () => backend.file.extraction),
+    listMedications: vi.fn(async () => [...backend.file.medications]),
+    listTimeline: vi.fn(async () => [...backend.file.timeline]),
+    uploadDocument: vi.fn(async () => DOCUMENT_ID),
+    extractDocument: vi.fn(async () => ({ status: 'draft_ready' as const })),
+    documentUrl: vi.fn(async () => 'https://storage.example/signed'),
+    deleteDocument: vi.fn(async () => undefined),
+    confirmDocument: vi.fn(async () => undefined),
+    discardExtraction: vi.fn(async () => undefined),
+    logExtractionViewed: vi.fn(async () => undefined),
+    createTimelineEvent: vi.fn(async () => undefined),
+    deleteTimelineEvent: vi.fn(async () => undefined),
+    deleteMedication: vi.fn(async () => undefined)
 };

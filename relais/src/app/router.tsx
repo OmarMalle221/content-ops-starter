@@ -6,6 +6,9 @@ import { HelpPage } from '../features/help/HelpPage';
 import { HomePage } from '../features/home/HomePage';
 import { LandingPage } from '../features/landing/LandingPage';
 import { MfaPage } from '../features/mfa/MfaPage';
+import { DocumentPage } from '../features/documents/DocumentPage';
+import { FileDocumentsPage } from '../features/documents/FileDocumentsPage';
+import { TimelinePage } from '../features/documents/TimelinePage';
 import { ConsentFormPage } from '../features/files/ConsentFormPage';
 import { FileConsentPage } from '../features/files/FileConsentPage';
 import { FileContactsPage } from '../features/files/FileContactsPage';
@@ -56,6 +59,9 @@ export const routes = [
                                             { index: true, element: <FileOverviewPage /> },
                                             { path: 'profil', element: <FileProfilePage /> },
                                             { path: 'contacts', element: <FileContactsPage /> },
+                                            { path: 'documents', element: <FileDocumentsPage /> },
+                                            { path: 'documents/:documentId', element: <DocumentPage /> },
+                                            { path: 'chronologie', element: <TimelinePage /> },
                                             { path: 'consentement', element: <FileConsentPage /> },
                                             { path: 'membres', element: <FileMembersPage /> },
                                             { path: 'journal', element: <FileLogPage /> },

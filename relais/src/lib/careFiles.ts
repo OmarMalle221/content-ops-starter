@@ -147,9 +147,10 @@ export async function exportCareFile(id: string): Promise<unknown> {
     return data;
 }
 
+/** Par la fonction serveur, qui efface aussi les fichiers du dossier dans Storage. */
 export async function deleteCareFile(id: string): Promise<void> {
-    const { error } = await supabase().rpc('delete_care_file', { p_care_file_id: id });
-    if (error) fail('delete_care_file', error);
+    const { error } = await supabase().functions.invoke('delete-care-file', { body: { care_file_id: id } });
+    if (error) fail('delete_care_file', { name: 'FunctionError' });
 }
 
 export async function logFileOpened(id: string): Promise<void> {
@@ -255,8 +256,12 @@ export async function listFileConsents(fileId: string): Promise<FileConsent[]> {
     return z.array(FileConsentSchema).parse(data);
 }
 
+export type FileConsentType = 'care_recipient_data' | 'ai_document_processing';
+
 export async function recordFileConsent(input: {
     fileId: string;
+    /** Consentement de la personne aidée (défaut) ou lecture automatique des documents. */
+    type?: FileConsentType;
     version: string;
     grantedBy: 'care_recipient_in_app' | 'care_recipient_signed_form' | 'legal_representative';
     legalBasis: LegalBasis;
@@ -264,20 +269,20 @@ export async function recordFileConsent(input: {
 }): Promise<void> {
     const { error } = await supabase().rpc('record_file_consent', {
         p_care_file_id: input.fileId,
-        p_type: 'care_recipient_data',
+        p_type: input.type ?? 'care_recipient_data',
         p_version: input.version,
         p_granted_by: input.grantedBy,
         p_legal_basis: input.legalBasis,
         p_representative_name: input.representativeName ?? null
     });
     if (error) fail('record_file_consent', error);
-    logEvent('consent_granted', { code: 'care_recipient_data' });
+    logEvent('consent_granted', { code: input.type ?? 'care_recipient_data' });
 }
 
-export async function revokeFileConsent(consentId: string): Promise<void> {
+export async function revokeFileConsent(consentId: string, type: FileConsentType = 'care_recipient_data'): Promise<void> {
     const { error } = await supabase().rpc('revoke_consent', { p_consent_id: consentId });
     if (error) fail('revoke_file_consent', error);
-    logEvent('consent_revoked', { code: 'care_recipient_data' });
+    logEvent('consent_revoked', { code: type });
 }
 
 // ----------------------------------------------------------------------- profil, besoins, contacts
