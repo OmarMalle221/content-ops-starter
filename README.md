@@ -2,6 +2,8 @@
 
 > **TrustCargo Pay** — this repository also hosts the TrustCargo Pay MVP (secure international vehicle transactions, simulation mode only) as a standalone Next.js app in [`trustcargo-pay/`](trustcargo-pay/README.md). The starter below is unchanged.
 
+> **Histoires Vraies (chaîne YouTube IA)** — pipeline Python qui produit des vidéos YouTube en français sur des personnes inspirantes à partir de sources réelles (Wikipédia, Wikidata, Wikimedia Commons), avec vérification automatique de chaque fait avant le montage : [`youtube-histoires/`](youtube-histoires/README.md).
+
 > **Diaspora Financial Network (DFN / Diaspora Trust)** — the repository also hosts the DFN sandbox platform (Next.js web + NestJS API + PostgreSQL/Prisma, double-entry ledger, Diaspora Protect conditional-payment workflows) as an independent pnpm monorepo in [`dfn/`](dfn/README.md). Sandbox only: simulated data, no real funds.
 
 ![Content Ops Starter](https://assets.stackbit.com/docs/content-ops-starter-thumb.png)

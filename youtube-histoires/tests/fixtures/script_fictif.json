@@ -1,0 +1,40 @@
+{
+  "titre": "Awa Exemple : 30 000 arbres pour tester un pipeline",
+  "titres_alternatifs": ["Titre B", "Titre C", "Titre D"],
+  "accroche_miniature": "30 000 arbres",
+  "resume": "Histoire fictive servant aux tests automatiques.",
+  "tags": ["test", "arbres", "agronomie", "histoire vraie"],
+  "format": "long",
+  "scenes": [
+    {
+      "chapitre": "Introduction",
+      "narration": "Trente mille arbres. C'est ce qu'une association a planté en dix ans. Voici l'histoire de sa fondatrice.",
+      "affirmations": [{"texte": "L'association plante 30 000 arbres en dix ans", "passages": ["S1-P2"]}],
+      "visuel": {"type": "image", "image": "I1", "texte": "", "legende": "Un paysage de test"}
+    },
+    {
+      "chapitre": "Les origines",
+      "narration": "Awa Exemple naît en 1952 à Village-Test. Elle deviendra agronome.",
+      "affirmations": [
+        {"texte": "Née en 1952 à Village-Test", "passages": ["S1-P1", "S2-P1"]},
+        {"texte": "Agronome", "passages": ["S1-P1"]}
+      ],
+      "visuel": {"type": "image", "image": "I2", "texte": "", "legende": ""}
+    },
+    {
+      "chapitre": "Le combat",
+      "narration": "En 1977, elle fonde l'association Graines d'Essai. Elle le résume ainsi : « Un arbre planté aujourd'hui est une promesse faite à demain. »",
+      "affirmations": [
+        {"texte": "Fondation de Graines d'Essai en 1977", "passages": ["S1-P2"]},
+        {"texte": "Citation sur l'arbre planté", "passages": ["S1-P3"]}
+      ],
+      "visuel": {"type": "carte_date", "image": "", "texte": "1977", "legende": "Fondation de Graines d'Essai"}
+    },
+    {
+      "chapitre": "L'héritage",
+      "narration": "En 2004, son travail est récompensé par un prix. Et vous, quel arbre planterez-vous ? Abonnez-vous pour d'autres histoires vraies.",
+      "affirmations": [{"texte": "Prix reçu en 2004", "passages": ["S1-P4"]}],
+      "visuel": {"type": "carte_citation", "image": "", "texte": "Un arbre planté aujourd'hui est une promesse faite à demain.", "legende": "Awa Exemple"}
+    }
+  ]
+}

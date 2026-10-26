@@ -1,0 +1,65 @@
+{
+  "sujet": "Awa Exemple",
+  "wikidata": "Q0",
+  "genere_le": "2026-10-26",
+  "sources": [
+    {
+      "id": "S1",
+      "consulte_le": "2026-10-26",
+      "type": "wikipedia",
+      "langue": "fr",
+      "titre": "Wikipédia (fr) — Awa Exemple (révision 1 du 2026-10-01) [DONNÉES FICTIVES DE TEST]",
+      "url": "https://fr.wikipedia.org/w/index.php?oldid=1",
+      "licence": "CC BY-SA 4.0"
+    },
+    {
+      "id": "S2",
+      "consulte_le": "2026-10-26",
+      "type": "wikidata",
+      "titre": "Wikidata — Awa Exemple (Q0) [DONNÉES FICTIVES DE TEST]",
+      "url": "https://www.wikidata.org/wiki/Q0",
+      "licence": "CC0"
+    }
+  ],
+  "passages": [
+    {"id": "S1-P1", "source": "S1", "section": "Introduction", "texte": "Awa Exemple est une agronome fictive née en 1952 à Village-Test, utilisée uniquement pour tester le pipeline."},
+    {"id": "S1-P2", "source": "S1", "section": "Biographie", "texte": "En 1977, elle fonde l'association Graines d'Essai, qui plante 30 000 arbres en dix ans."},
+    {"id": "S1-P3", "source": "S1", "section": "Biographie", "texte": "Elle déclare : « Un arbre planté aujourd'hui est une promesse faite à demain. »"},
+    {"id": "S1-P4", "source": "S1", "section": "Héritage", "texte": "En 2004, elle reçoit le prix fictif de l'Environnement pour son travail."},
+    {"id": "S2-P1", "source": "S2", "section": "Wikidata", "texte": "Date de naissance : 3 mars 1952"}
+  ],
+  "images": [
+    {
+      "id": "I1",
+      "chemin": "images/I1.jpg",
+      "fichier": "File:Test paysage.jpg",
+      "titre": "Test paysage",
+      "description": "Image de test (dégradé)",
+      "date": "2020",
+      "auteur": "Auteur Test",
+      "licence": "CC BY-SA 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "restrictions": "",
+      "url": "https://upload.wikimedia.org/test1.jpg",
+      "url_page": "https://commons.wikimedia.org/wiki/File:Test_paysage.jpg",
+      "largeur": 1600,
+      "hauteur": 900
+    },
+    {
+      "id": "I2",
+      "chemin": "images/I2.jpg",
+      "fichier": "File:Test portrait.jpg",
+      "titre": "Test portrait",
+      "description": "Image de test verticale",
+      "date": "",
+      "auteur": "Autre Auteur",
+      "licence": "CC0",
+      "licence_url": "",
+      "restrictions": "",
+      "url": "https://upload.wikimedia.org/test2.jpg",
+      "url_page": "https://commons.wikimedia.org/wiki/File:Test_portrait.jpg",
+      "largeur": 800,
+      "hauteur": 1200
+    }
+  ]
+}
