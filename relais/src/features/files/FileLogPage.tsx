@@ -6,6 +6,9 @@ import { useAccessLog, useMembers } from './useFile';
 
 const timeFormat = new Intl.DateTimeFormat('fr-CA', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/Toronto' });
 
+/** Actions faites par Relais lui-même (tâche planifiée), sans auteur. */
+const SYSTEM_ACTIONS = new Set(['upload_expired']);
+
 /** Journal des accès du dossier, visible par la personne aidante principale. */
 export function FileLogPage() {
     return (
@@ -23,7 +26,10 @@ function FileLogPageContent() {
     if (log.isPending || members.isPending) return <Loading />;
 
     const names = new Map((members.data ?? []).map((m) => [m.user_id, m.display_name]));
-    const who = (actorId: string | null) => (actorId === session?.user.id ? tf.you : (actorId && names.get(actorId)) || tf.formerMember);
+    const who = (actorId: string | null, action: string) => {
+        if (actorId === null && SYSTEM_ACTIONS.has(action)) return tf.relais;
+        return actorId === session?.user.id ? tf.you : (actorId && names.get(actorId)) || tf.formerMember;
+    };
 
     return (
         <div className="flex flex-col gap-5">
@@ -39,7 +45,8 @@ function FileLogPageContent() {
                                 <time dateTime={entry.occurred_at}>{timeFormat.format(new Date(entry.occurred_at))}</time>
                             </p>
                             <p>
-                                <span className="font-bold">{who(entry.actor_id)}</span> {ACTION_LABELS[entry.action] ?? entry.action}
+                                <span className="font-bold">{who(entry.actor_id, entry.action)}</span>{' '}
+                                {ACTION_LABELS[entry.action] ?? entry.action}
                             </p>
                         </li>
                     ))}

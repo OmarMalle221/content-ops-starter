@@ -130,6 +130,23 @@ export interface BackendState {
     llmInputs: string[];
 }
 
+/** Appelle une fonction planifiée du faux Supabase, comme le ferait pg_cron. */
+export async function runScheduled(name: 'send-reminders' | 'purge-storage', secret = 'test-cron-secret'): Promise<Response> {
+    return fetch(`${FAKE_SUPABASE}/functions/v1/${name}`, { method: 'POST', headers: { 'x-relais-cron-secret': secret }, body: '{}' });
+}
+
+/** Panne simulée de l'effacement Storage (les autres opérations fonctionnent). */
+export async function setStorageOutage(on: boolean): Promise<void> {
+    const res = await fetch(`${FAKE_SUPABASE}/__test/storage-outage`, { method: 'POST', body: JSON.stringify({ on }) });
+    expect(res.ok).toBe(true);
+}
+
+/** Fait vieillir les documents et les fichiers déposés de quelques heures (purge planifiée). */
+export async function ageDocuments(hours: number): Promise<void> {
+    const res = await fetch(`${FAKE_SUPABASE}/__test/age-documents`, { method: 'POST', body: JSON.stringify({ hours }) });
+    expect(res.ok).toBe(true);
+}
+
 /** Octets d'un fichier déposé dans le faux Storage. */
 export async function storedFile(path: string): Promise<Buffer> {
     const res = await fetch(`${FAKE_SUPABASE}/__test/storage?path=${encodeURIComponent(path)}`);

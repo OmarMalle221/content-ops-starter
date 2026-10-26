@@ -46,15 +46,17 @@ Rôles : **R** = responsable du projet Relais, **J** = juriste, **TS** = travail
 - [ ] Vérification en deux étapes active ; comptes `admin` et `relais_worker` attribués par SQL
       (`update public.users set app_role = …`) (T).
 - [ ] Fonctions Edge déployées : `extract-document`, `get-document-url`, `delete-document`,
-      `delete-care-file`, `explain-program`, `draft-letter`, `notify-support`, `send-reminders` ; vérifier
+      `delete-care-file`, `explain-program`, `draft-letter`, `notify-support`, `send-reminders`, `purge-storage` ; vérifier
       que les imports de `src/shared` sont bien empaquetés (T).
 - [ ] Secrets des fonctions : `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`,
       `RELAIS_APP_URL`, `RELAIS_EMAIL_FROM`, `RELAIS_CRON_SECRET`, `AWS_SES_ACCESS_KEY_ID`,
       `AWS_SES_SECRET_ACCESS_KEY`, `AWS_SES_REGION` (T).
 - [ ] Amazon SES en `ca-central-1` : domaine vérifié, sortie du bac à sable (T).
-- [ ] Rappels planifiés : secrets Vault `relais_functions_url` et `relais_cron_secret`, puis
-      `supabase/cron/send_reminders.sql` (T).
-- [ ] Tâche planifiée de purge Storage (`storage_deletion_queue`) et des dépôts abandonnés (à écrire) (T).
+- [ ] Tâches planifiées : secrets Vault `relais_functions_url` et `relais_cron_secret`, puis
+      `supabase/cron/send_reminders.sql` (rappels, chaque matin) et `supabase/cron/purge_storage.sql`
+      (purge de Storage, chaque heure) (T).
+- [ ] Une heure plus tard : les deux tâches réussies dans `cron.job_run_details`, et la file
+      `storage_deletion_queue` vide (T).
 - [ ] Région effective des fonctions vérifiée (en-tête de réponse) (T).
 - [ ] `delete_my_account` vérifiée sur Supabase hébergé (suppression dans `auth.users`) (T).
 - [ ] Sauvegardes et restauration (PITR) activées et testées une fois (T).

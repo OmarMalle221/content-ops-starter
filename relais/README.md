@@ -7,8 +7,8 @@ aucun diagnostic et ne donne aucun conseil médical.
 **Statut : les 6 étapes de la v0.1 sont livrées** (socle, consentements, écran d'urgence ; dossier familial
 et membres ; documents, lecture automatique pseudonymisée et chronologie ; navigateur de droits ; tâches,
 agenda, rappels et page « Préparer un rendez-vous » ; bilan de l'aidant, demandes d'intervenante et mesures
-du pilote). Avant le pilote : [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md). Suivi dans
-[`PROGRESS.md`](PROGRESS.md).
+du pilote), ainsi que la purge planifiée de Storage. Avant le pilote :
+[`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md). Suivi dans [`PROGRESS.md`](PROGRESS.md).
 
 ## Démarrer
 
@@ -27,8 +27,9 @@ Démonstration locale sans compte Supabase (PostgreSQL 16 requis) :
 connexion `123456`, code TOTP `654321` (adresses commençant par `intervenante` ou `admin` pour les rôles
 internes). Les données passent par la vraie base migrée, sous RLS ; les fonctions serveur (lecture des
 documents, explications, lettres, URL signées, suppressions) tournent avec une IA simulée, sans appel
-réseau ; les rappels par courriel se déclenchent par `POST /functions/v1/send-reminders` avec l'en-tête
-`x-relais-cron-secret: test-cron-secret` et restent en mémoire (jamais envoyés). Avec
+réseau ; les fonctions planifiées se déclenchent par `POST /functions/v1/send-reminders` (rappels, gardés
+en mémoire, jamais envoyés) ou `POST /functions/v1/purge-storage` avec l'en-tête
+`x-relais-cron-secret: test-cron-secret`. Avec
 `RELAIS_DEMO_SEED=1` devant la première commande, deux familles fictives sont chargées
 (`claire.demo@example.test`, `marc.demo@example.test`, `denis.demo@example.test`), avec une intervenante
 (`intervenante.demo@example.test`) et une admin (`admin.demo@example.test`).

@@ -75,6 +75,7 @@ export const ACTION_LABELS: Record<string, string> = {
     document_uploaded: 'a ajouté un document',
     document_viewed: 'a consulté un document',
     document_deleted: 'a supprimé un document',
+    upload_expired: 'a effacé un document dont l’envoi était resté incomplet plus de 24 heures',
     extraction_viewed: 'a consulté un résumé de document',
     extraction_confirmed: 'a confirmé un résumé de document',
     prep_sheet_printed: 'a imprimé une fiche de rendez-vous'
@@ -253,6 +254,7 @@ export const files = {
     logIntro: 'Qui a ouvert le dossier, qui l’a modifié, et quand. Le journal ne contient aucun renseignement du dossier.',
     logEmpty: 'Aucune entrée pour le moment.',
     formerMember: 'Personne qui n’a plus accès',
+    relais: 'Relais',
 
     settingsTitle: 'Paramètres du dossier',
     renameTitle: 'Nom du dossier',

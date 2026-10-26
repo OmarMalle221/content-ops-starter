@@ -9,14 +9,17 @@
 //
 //   Code de connexion : 123456     Code TOTP : 654321
 //   Adresse commençant par « intervenante » → rôle relais_worker ; par « admin » → rôle admin.
-//   POST /__test/reset vide les données ; GET /__test/state renvoie l'état (assertions des tests).
+//   POST /__test/reset vide les données ; GET /__test/state renvoie l'état (assertions des tests) ;
+//   POST /__test/storage-outage {"on": true|false} simule une panne de l'effacement Storage ;
+//   POST /__test/age-documents {"hours": 25} fait vieillir les dépôts (purge planifiée).
 //
 // - Storage : fichiers dans .tmp/fake-storage ; le dépôt insère d'abord dans storage.objects sous le rôle
 //   de l'appelant (la politique RLS du bucket s'applique), comme l'API Storage. URL signées à durée limitée.
 // - Fonctions Edge : le VRAI code serveur (supabase/functions/_shared/handlers.ts) avec une IA SIMULÉE
 //   (tests/support/simulated-llm.ts) ; aucun appel réseau. GET /__test/storage?path=… lit un fichier déposé.
-//   Rappels : POST /functions/v1/send-reminders avec l'en-tête x-relais-cron-secret: test-cron-secret ;
-//   les courriels sont gardés en mémoire (état « emails »), jamais envoyés.
+//   Fonctions planifiées : POST /functions/v1/send-reminders ou /functions/v1/purge-storage avec l'en-tête
+//   x-relais-cron-secret: test-cron-secret ; les courriels sont gardés en mémoire (état « emails »), jamais
+//   envoyés.
 //
 // Lancement : bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -26,7 +29,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { HANDLERS, RpcError } from '../../supabase/functions/_shared/handlers.ts';
-import { cronSecretMatches, handleSendReminders } from '../../supabase/functions/_shared/reminders.ts';
+import { handleSendReminders } from '../../supabase/functions/_shared/reminders.ts';
+import { cronSecretMatches } from '../../supabase/functions/_shared/scheduled.ts';
+import { handlePurgeStorage } from '../../supabase/functions/_shared/storage-purge.ts';
 import { SimulatedLlm } from '../support/simulated-llm.ts';
 
 const PORT = Number(process.env.FAKE_SUPABASE_PORT ?? 54399);
@@ -414,14 +419,27 @@ async function handleStorage(req, res, url) {
 // Fonction planifiée : appelée par pg_cron avec un secret partagé (ici, par les tests).
 const CRON_SECRET = 'test-cron-secret';
 
-async function handleScheduled(req, res) {
+const SCHEDULED = { 'send-reminders': handleSendReminders, 'purge-storage': handlePurgeStorage };
+
+// Comme l'API Storage : le fichier et sa ligne de storage.objects disparaissent ensemble. POST
+// /__test/storage-outage {"on": true} simule une panne (l'effacement échoue) jusqu'au prochain appel.
+let storageOutage = false;
+
+async function removeDocumentFiles(paths) {
+    if (storageOutage) throw new Error('storage remove failed');
+    for (const path of paths) await rm(objectFile('documents', path), { force: true });
+    await pool.query('delete from storage.objects where bucket_id = $1 and name = any($2)', ['documents', paths]);
+}
+
+async function handleScheduled(req, res, handler) {
     if (!cronSecretMatches(CRON_SECRET, req.headers['x-relais-cron-secret'] ?? null)) return send(res, 401, { error: 'unauthorized' });
     await readRaw(req);
-    const response = await handleSendReminders({
+    const response = await handler({
         serviceRpc: (fn, args) =>
             rpcCall(null, fn, args, true).catch((error) => {
                 throw error instanceof HttpError ? new RpcError(String(error.body.code)) : error;
             }),
+        removeFiles: removeDocumentFiles,
         email: { send: async (message) => void emails.push(message) },
         appUrl: 'http://127.0.0.1:4173',
         now: () => new Date()
@@ -430,7 +448,7 @@ async function handleScheduled(req, res) {
 }
 
 async function handleFunction(req, res, name) {
-    if (name === 'send-reminders') return handleScheduled(req, res);
+    if (SCHEDULED[name]) return handleScheduled(req, res, SCHEDULED[name]);
     const handler = HANDLERS[name];
     if (!handler) return send(res, 404, { error: 'not_found' });
     const who = caller(req);
@@ -446,10 +464,7 @@ async function handleFunction(req, res, name) {
         serviceRpc: (fn, args) => rpc(fn, args, true),
         storage: {
             download: async (path) => new Uint8Array(await readFile(objectFile('documents', path))),
-            remove: async (paths) => {
-                for (const path of paths) await rm(objectFile('documents', path), { force: true });
-                await pool.query('delete from storage.objects where bucket_id = $1 and name = any($2)', ['documents', paths]);
-            },
+            remove: removeDocumentFiles,
             signedUrl: async (path, seconds) => {
                 const token = randomBytes(16).toString('hex');
                 signedUrls.set(token, { bucket: 'documents', path, expiresAt: Date.now() + seconds * 1000 });
@@ -546,6 +561,7 @@ async function handleRest(req, res, url) {
 const REFERENCE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../supabase/reference');
 
 async function resetData() {
+    storageOutage = false;
     await pool.query('truncate auth.users cascade');
     await pool.query('truncate public.access_log, public.ai_calls, public.storage_deletion_queue restart identity');
     // Fiches et ressources modifiées par un test d'administration : retour aux données de référence.
@@ -639,6 +655,17 @@ const server = http.createServer(async (req, res) => {
             return send(res, 204);
         }
         if (url.pathname === '/__test/state') return send(res, 200, await state());
+        if (url.pathname === '/__test/age-documents' && req.method === 'POST') {
+            // Fait vieillir les dépôts (documents et fichiers) de N heures, pour la purge planifiée.
+            const hours = Number((await readBody(req)).hours);
+            await pool.query('update public.documents set uploaded_at = uploaded_at - make_interval(hours => $1)', [hours]);
+            await pool.query('update storage.objects set created_at = created_at - make_interval(hours => $1)', [hours]);
+            return send(res, 204);
+        }
+        if (url.pathname === '/__test/storage-outage' && req.method === 'POST') {
+            storageOutage = Boolean((await readBody(req)).on);
+            return send(res, 204);
+        }
         if (url.pathname === '/__test/storage') {
             const bytes = await readFile(objectFile('documents', url.searchParams.get('path') ?? '')).catch(() => null);
             if (!bytes) return send(res, 404, { message: 'not found' });

@@ -10,7 +10,8 @@
 -- « aucun montant », versionnage des fiches, save_benefit_assessment), étape 5 (tasks, appointments,
 -- appointment_questions, journal_entries en zone « santé », reminder_deliveries, reminders_due) et étape 6
 -- (caregiver_checkins avec son consentement distinct, support_requests, support_request_notes,
--- pilot_feedback, pilot_metrics). Les 6 étapes sont livrées : les migrations font foi ; ce fichier reste
+-- pilot_feedback, pilot_metrics), puis la purge planifiée de Storage (storage_purge_prepare, _claim, _done ;
+-- action « upload_expired »). Les 6 étapes sont livrées : les migrations font foi ; ce fichier reste
 -- une vue d'ensemble lisible du schéma. Les tests automatisés sont dans
 -- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
@@ -85,7 +86,8 @@ create type public.ai_purpose as enum ('document_extraction', 'program_explanati
 create type public.access_action as enum (
     'file_opened', 'document_uploaded', 'document_viewed', 'document_deleted', 'extraction_viewed',
     'extraction_confirmed', 'prep_sheet_printed', 'member_invited', 'member_joined', 'member_removed',
-    'member_access_changed', 'consent_granted', 'consent_revoked', 'export_requested', 'care_file_deleted'
+    'member_access_changed', 'consent_granted', 'consent_revoked', 'export_requested', 'care_file_deleted',
+    'account_deleted', 'upload_expired'  -- upload_expired : dépôt abandonné effacé par la purge (sans auteur)
 );
 
 -- -----------------------------------------------------------------------------------------------------

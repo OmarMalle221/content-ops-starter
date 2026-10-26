@@ -61,7 +61,8 @@ export const documents = {
     originalReady: 'Ouvrir le document (lien valable 60 secondes)',
     originalError: 'Le document n’a pas pu être ouvert. Réessayez.',
 
-    pendingUpload: 'L’envoi de ce document n’est pas terminé. Supprimez-le et ajoutez-le de nouveau.',
+    pendingUpload:
+        'L’envoi de ce document n’est pas terminé. Supprimez-le et ajoutez-le de nouveau. Sinon, Relais l’effacera de lui-même dans les 24 heures.',
     toRead: 'Ce document n’a pas encore été lu.',
     readAuto: 'Lire automatiquement',
     readAgain: 'Réessayer la lecture automatique',

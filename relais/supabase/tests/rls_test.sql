@@ -1570,4 +1570,96 @@ commit;
 select tst.eq('évaluation retirée : réponses effacées', (select count(*) from public.pilot_feedback), 2);
 
 \o
+\echo '== purge planifiée de Storage'
+\o /dev/null
+
+\set file7 'f7000000-0000-4000-8000-000000000007'
+\set doc_old '7d000000-0000-4000-8000-000000000001'
+\set doc_new '7d000000-0000-4000-8000-000000000002'
+\set doc_kept '7d000000-0000-4000-8000-000000000003'
+insert into public.care_files (id, owner_id, title) values (:'file7', 'c0000000-0000-4000-8000-00000000000c', 'Tante');
+insert into public.care_file_members (care_file_id, user_id, role, access_level) values
+    (:'file7', 'd0000000-0000-4000-8000-00000000000d', 'family_member', 'full');
+-- Dépôt abandonné depuis 25 h (fichier partiel déposé), dépôt en cours depuis 2 h, document reçu il y a 30 jours ;
+-- un fichier orphelin ancien et un récent.
+insert into public.documents (id, care_file_id, mime_type, size_bytes, uploaded_by, uploaded_at, status) values
+    (:'doc_old', :'file7', 'application/pdf', 10, 'd0000000-0000-4000-8000-00000000000d', now() - interval '25 hours', 'pending_upload'),
+    (:'doc_new', :'file7', 'application/pdf', 10, 'd0000000-0000-4000-8000-00000000000d', now() - interval '2 hours', 'pending_upload'),
+    (:'doc_kept', :'file7', 'application/pdf', 10, 'd0000000-0000-4000-8000-00000000000d', now() - interval '30 days', 'uploaded');
+insert into storage.objects (bucket_id, name, created_at) values
+    ('documents', :'file7' || '/' || :'doc_old', now() - interval '25 hours'),
+    ('documents', :'file7' || '/' || :'doc_kept', now() - interval '30 days'),
+    ('documents', :'file7' || '/orphelin-ancien', now() - interval '3 days'),
+    ('documents', :'file7' || '/orphelin-recent', now() - interval '1 hour');
+select count(*) as queue_before from public.storage_deletion_queue \gset
+
+select tst.ok('purge : rôle service seulement', not has_function_privilege('authenticated', 'public.storage_purge_prepare()', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.storage_purge_prepare()', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.storage_purge_claim(integer)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.storage_purge_done(bigint[])', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.storage_purge_prepare()', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.storage_purge_claim(integer)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.storage_purge_done(bigint[])', 'EXECUTE'));
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('membre : pas de préparation de purge', 'select public.storage_purge_prepare()', '42501');
+select tst.fails('membre : pas de réservation de fichiers', 'select * from public.storage_purge_claim(10)', '42501');
+select tst.fails('membre : pas de retrait de la file', 'select public.storage_purge_done(array[1]::bigint[])', '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select public.storage_purge_prepare() as prep \gset
+commit;
+select tst.ok('un dépôt abandonné et un orphelin ancien', :'prep'::jsonb = '{"expired_uploads": 1, "orphans": 1}'::jsonb);
+select tst.ok('dépôt abandonné supprimé ; dépôt en cours et document reçu gardés',
+    (select array_agg(id order by id) from public.documents where care_file_id = :'file7') = array[:'doc_new', :'doc_kept']::uuid[]);
+select tst.eq('à effacer : le fichier partiel et l''orphelin ancien, rien d''autre', (
+    select count(*) from public.storage_deletion_queue
+    where object_path in (:'file7' || '/' || :'doc_old', :'file7' || '/orphelin-ancien')), 2);
+select tst.eq('aucune autre inscription', (select count(*) from public.storage_deletion_queue), :'queue_before'::bigint + 2);
+select tst.ok('journal du dossier : effacé par Relais (sans auteur)', (
+    select count(*) = 1 and bool_and(actor_id is null and target_type = 'documents' and target_id = :'doc_old')
+    from public.access_log where care_file_id = :'file7' and action = 'upload_expired'));
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('l''aidante principale voit l''effacement dans son journal',
+    tst.cnt($$select 1 from public.access_log where action = 'upload_expired'$$), 1);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select count(*) as first_batch from public.storage_purge_claim(2) \gset
+select count(*) as second_batch from public.storage_purge_claim(1) \gset
+commit;
+select tst.eq('réservation par lot', :first_batch, 2);
+select tst.eq('les moins essayés d''abord', (
+    select count(*) from public.storage_deletion_queue where attempts = 1), 3);
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select count(*) as claimed_all, array_agg(id) as claimed_ids, array_agg(object_path) as claimed_paths
+from public.storage_purge_claim(1000) \gset
+commit;
+select tst.eq('tout est repris', :claimed_all, :'queue_before'::bigint + 2);
+-- L'API Storage efface les objets (ici, à la main) ; la fin du lot retire les inscriptions.
+delete from storage.objects where bucket_id = 'documents' and name = any(:'claimed_paths'::text[]);
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select public.storage_purge_done(:'claimed_ids'::bigint[]) as done_count \gset
+select public.storage_purge_prepare() as prep2 \gset
+commit;
+select tst.eq('inscriptions retirées', :done_count, :claimed_all);
+select tst.ok('deuxième passage : rien de neuf', :'prep2'::jsonb = '{"expired_uploads": 0, "orphans": 0}'::jsonb
+    and not exists (select 1 from public.storage_deletion_queue));
+select tst.ok('fichiers vivants et orphelin récent intacts', (
+    select array_agg(name order by name) from storage.objects where name like :'file7' || '/%')
+    = array[:'file7' || '/' || :'doc_kept', :'file7' || '/orphelin-recent']);
+
+\o
 \echo 'RLS OK'

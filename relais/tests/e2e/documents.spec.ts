@@ -4,7 +4,19 @@ import { expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { DISCHARGE_SUMMARY_PAGES, FICTIONAL_IDENTIFIERS, PRESCRIPTION_PAGES } from '../support/documents';
 import { buildTextPdf } from '../support/pdf';
-import { backendState, createFileWithConsent, expectAccessible, onboard, resetBackend, storedFile, test, waitForTitle } from './helpers';
+import {
+    ageDocuments,
+    backendState,
+    createFileWithConsent,
+    expectAccessible,
+    onboard,
+    resetBackend,
+    runScheduled,
+    setStorageOutage,
+    storedFile,
+    test,
+    waitForTitle
+} from './helpers';
 
 test.beforeEach(async () => {
     await resetBackend();
@@ -137,7 +149,9 @@ test('résumé de départ de 3 pages : brouillon en moins de 30 s, relecture, ch
     expect(state.accessLog.map((l) => l.action)).toContain('document_deleted');
 });
 
-test('photo : métadonnées retirées, saisie à la main ; garde-fous ; suppression du dossier et de ses fichiers', async ({ page }) => {
+test('photo : métadonnées retirées, saisie à la main ; garde-fous ; suppression du dossier, fichiers repris par la purge', async ({
+    page
+}) => {
     const fileUrl = await setUpFile(page);
     await openDocuments(page);
     await expect(page.getByText(/Lecture automatique non activée/)).toBeVisible();
@@ -190,7 +204,8 @@ test('photo : métadonnées retirées, saisie à la main ; garde-fous ; suppress
     expect(state.aiCalls[0]?.status).toBe('guard_flagged');
     expect(state.storageFiles).toHaveLength(2);
 
-    // Suppression du dossier : tout part, fichiers compris ; le journal ne garde que la trace.
+    // Suppression du dossier pendant une panne de Storage : le dossier part, ses fichiers restent inscrits.
+    await setStorageOutage(true);
     await page.goto(`${fileUrl}/parametres`);
     await waitForTitle(page, 'Paramètres du dossier');
     await page.getByLabel('Je comprends que la suppression est définitive.').check();
@@ -199,6 +214,16 @@ test('photo : métadonnées retirées, saisie à la main ; garde-fous ; suppress
     state = await backendState();
     expect(state.careFiles).toEqual([]);
     expect(state.documents).toEqual([]);
+    expect(state.storageFiles).toHaveLength(2);
+    expect(state.deletionQueue).toHaveLength(2);
+
+    // La purge planifiée : secret exigé ; en panne, rien n'est perdu ; ensuite, les fichiers sont effacés.
+    expect((await runScheduled('purge-storage', 'mauvais-secret')).status).toBe(401);
+    expect(await (await runScheduled('purge-storage')).json()).toEqual({ expired_uploads: 0, orphans: 0, removed: 0, failed: 2 });
+    expect((await backendState()).deletionQueue).toHaveLength(2);
+    await setStorageOutage(false);
+    expect(await (await runScheduled('purge-storage')).json()).toEqual({ expired_uploads: 0, orphans: 0, removed: 2, failed: 0 });
+    state = await backendState();
     expect(state.storageFiles).toEqual([]);
     expect(state.storageObjects).toEqual([]);
     expect(state.deletionQueue).toEqual([]);
@@ -206,4 +231,36 @@ test('photo : métadonnées retirées, saisie à la main ; garde-fous ; suppress
     const trace = state.accessLog.filter((l) => l.care_file_id === fileId);
     expect(trace.map((l) => l.action)).toEqual(['care_file_deleted']);
     expect(trace[0]!.metadata).toMatchObject({ documents: 2, medications: 2 });
+});
+
+test('envoi interrompu : « Envoi incomplet », effacé par la purge après 24 h, noté au journal', async ({ page }) => {
+    const fileUrl = await setUpFile(page);
+    await openDocuments(page);
+    // Le réseau coupe pendant le dépôt du fichier : le document reste « Envoi incomplet ».
+    await page.route('**/storage/v1/object/documents/**', (route) => route.abort('connectionreset'));
+    await page.getByLabel('Choisir un fichier (PDF ou photo)').setInputFiles({
+        name: 'ordonnance.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(buildTextPdf(PRESCRIPTION_PAGES))
+    });
+    await expect(page.getByText('L’envoi n’a pas abouti. Vérifiez votre connexion et réessayez.')).toBeVisible();
+    await expect(page.getByText('Envoi incomplet')).toBeVisible();
+    await page.unroute('**/storage/v1/object/documents/**');
+    let state = await backendState();
+    expect(state.documents.map((doc) => doc.status)).toEqual(['pending_upload']);
+
+    // Moins de 24 h : la purge n'y touche pas.
+    expect(await (await runScheduled('purge-storage')).json()).toEqual({ expired_uploads: 0, orphans: 0, removed: 0, failed: 0 });
+    expect((await backendState()).documents).toHaveLength(1);
+
+    // Plus de 24 h : effacé par Relais, et l'aidante principale le voit dans son journal.
+    await ageDocuments(25);
+    expect(await (await runScheduled('purge-storage')).json()).toEqual({ expired_uploads: 1, orphans: 0, removed: 1, failed: 0 });
+    state = await backendState();
+    expect(state.documents).toEqual([]);
+    expect(state.deletionQueue).toEqual([]);
+    await page.goto(`${fileUrl}/journal`);
+    await waitForTitle(page, 'Journal des accès');
+    await expect(page.getByText('Relais a effacé un document dont l’envoi était resté incomplet plus de 24 heures')).toBeVisible();
+    await expectAccessible(page);
 });

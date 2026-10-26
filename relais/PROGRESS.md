@@ -261,11 +261,38 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
   une valeur vide, trouvé par les tests RLS) ; le message « Merci » de l'évaluation disparaissait après
   l'enregistrement (trouvé par les tests de bout en bout).
 
+### Après la v0.1 — purge planifiée de Storage (livrée)
+
+Dernier élément de code de la liste avant pilote (droit à la suppression, Loi 25) : sans lui, un fichier
+pouvait rester dans Storage si l'effacement immédiat échouait.
+
+- **Base de données** (`20261101000001_upload_expired_action.sql`, `20261101000002_storage_purge.sql`) :
+  `storage_purge_prepare` (dépôts « Envoi incomplet » de plus de 24 h supprimés et notés au journal du
+  dossier sous l'action `upload_expired`, sans auteur ; fichiers de plus de 24 h sans document inscrits),
+  `storage_purge_claim` (lots, les moins essayés d'abord, sans doublon entre deux exécutions) et
+  `storage_purge_done`. Toutes réservées au rôle service ; elles ne renvoient que des chemins et des
+  nombres.
+- **Fonction planifiée** `purge-storage` (`pg_cron`, chaque heure : `supabase/cron/purge_storage.sql`,
+  mêmes secrets que les rappels) : lots de 100, 10 au plus par exécution ; un lot en échec reste inscrit
+  et sera repris ; journal sans chemin. Code commun des fonctions planifiées dans `_shared/scheduled.ts`.
+- **PWA** : le journal des accès affiche « **Relais** a effacé un document dont l'envoi était resté
+  incomplet plus de 24 heures » ; la page d'un document en « Envoi incomplet » l'annonce.
+- **Tests, tous verts en local** :
+  - Base : 412 vérifications RLS (16 de plus : réservé au service, dépôt abandonné effacé mais dépôt en
+    cours et document reçu gardés, orphelin ancien inscrit mais pas le récent, journal sans auteur visible
+    de l'aidante principale, lots, retrait de la file, deuxième passage sans effet) ; contrôle par mutation
+    (5 mutations : statut, âge, orphelins, ordre des lots, journal : toutes détectées).
+  - Unitaires et composants : 371 tests, dont la fonction `purge-storage` (5 : lots, file vide, panne de
+    Storage, plafond par exécution, réponse inattendue refusée).
+  - Bout en bout : 26 parcours. Suppression d'un dossier pendant une panne de Storage (fichiers gardés en
+    file, secret exigé, panne sans perte, puis effacement) ; envoi interrompu par une coupure réseau
+    (« Envoi incomplet », intact avant 24 h, effacé après, ligne « Relais » au journal, accessible).
+
 ## En cours
 
-- Rien : **les 6 étapes de la v0.1 sont livrées.** Le pilote attend la liste de
-  [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (EFVP, validations, vérification des fiches, projet
-  Supabase et SES, intervenantes).
+- Rien : **les 6 étapes de la v0.1 sont livrées**, ainsi que la purge planifiée de Storage. Le pilote
+  attend la liste de [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (EFVP, validations, vérification des
+  fiches, projet Supabase et SES, intervenantes).
 
 ## Décisions
 
@@ -333,6 +360,7 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
 | D60 | Évaluation du pilote limitée aux 2 questions du consentement, sans commentaire libre ; admin : agrégats masqués sous 3 répondants                                                            | Respect strict du texte de consentement ; 10 familles : risque de ré-identification                                 |
 | D61 | Pages chargées à la demande et budget de 240 ko vérifié en CI ; bibliothèques gardées telles quelles                                                                                         | ~195 ko viennent de React, du routeur, de Zod et de Supabase : les remplacer en fin de projet serait risqué         |
 | D62 | Aucun délai de rappel promis (Q4) : « dès que possible »                                                                                                                                     | Heures et effectifs des intervenantes inconnus                                                                      |
+| D63 | Purge de Storage chaque heure : file d'effacement reprise, dépôt incomplet effacé après 24 h (noté au journal au nom de « Relais »), fichier sans document effacé après 24 h                 | Droit à la suppression tenu même si l'effacement immédiat échoue ; minimisation des fichiers partiels               |
 
 ### Hypothèses appliquées en attendant les réponses aux questions bloquantes
 
@@ -376,8 +404,8 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
   ouvert au compte.
 - Conditions de traitement de l'API (conservation, entraînement, lieu) : à vérifier et à décrire dans la
   politique de confidentialité (règle 6, A3, A17).
-- Tâche planifiée (`pg_cron` → fonction) qui reprend `storage_deletion_queue` et efface les dépôts
-  abandonnés (`pending_upload` de plus de 24 h).
+- Purge planifiée de Storage : exécuter `supabase/cron/purge_storage.sql` (mêmes secrets Vault que les
+  rappels), puis vérifier dans `cron.job_run_details` qu'elle réussit chaque heure.
 - Compte admin de l'équipe Relais : rôle `admin` à attribuer par SQL (`public.users.app_role`), MFA
   obligatoire à la première connexion.
 - Rappels : compte Amazon SES en `ca-central-1` (domaine vérifié, sortie du bac à sable), secrets

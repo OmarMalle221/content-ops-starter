@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { EmailClient, EmailMessage } from '../../supabase/functions/_shared/email';
 import { setServerLogSink } from '../../supabase/functions/_shared/log';
-import { cronSecretMatches, handleSendReminders, torontoDay, type ScheduledContext } from '../../supabase/functions/_shared/reminders';
+import { handleSendReminders, torontoDay } from '../../supabase/functions/_shared/reminders';
+import { cronSecretMatches, type ScheduledContext } from '../../supabase/functions/_shared/scheduled';
 
 const ROWS = [
     { user_id: 'c0000000-0000-4000-8000-00000000000c', email: 'claire@example.test', task_count: 2, appointment_count: 1 },
@@ -22,6 +23,9 @@ function context(options: { failFor?: string; email?: boolean } = {}) {
         serviceRpc: async <T>(fn: string, args: Record<string, unknown>) => {
             calls.push({ fn, args });
             return (fn === 'reminders_due' ? ROWS : null) as T;
+        },
+        removeFiles: async () => {
+            throw new Error('not used');
         },
         email: options.email === false ? null : email,
         appUrl: 'https://relais.example',

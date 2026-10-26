@@ -4,19 +4,8 @@
 // tourne deux fois. Le journal ne garde que des compteurs.
 import { z } from 'zod';
 import { reminderEmail } from '../../../src/shared/reminders/email.ts';
-import type { EmailClient } from './email.ts';
-import type { HandlerResponse } from './handlers.ts';
 import { serverLog } from './log.ts';
-
-export interface ScheduledContext {
-    /** Appel avec la clé serveur (fonctions réservées au rôle service). */
-    serviceRpc<T>(fn: string, args: Record<string, unknown>): Promise<T>;
-    email: EmailClient | null;
-    appUrl: string;
-    now(): Date;
-}
-
-export type ScheduledHandler = (ctx: ScheduledContext) => Promise<HandlerResponse>;
+import type { ScheduledHandler } from './scheduled.ts';
 
 const dueRows = z.array(
     z.object({
@@ -57,13 +46,3 @@ export const handleSendReminders: ScheduledHandler = async (ctx) => {
     serverLog('reminders_sent', { count: sent });
     return { status: 200, body: { day, due: rows.length, sent, failed } };
 };
-
-/** Secret partagé avec la tâche planifiée, comparé en temps constant. */
-export function cronSecretMatches(expected: string | undefined, received: string | null): boolean {
-    if (!expected || !received) return false;
-    const a = new TextEncoder().encode(expected);
-    const b = new TextEncoder().encode(received);
-    let diff = a.length ^ b.length;
-    for (let i = 0; i < Math.max(a.length, b.length); i += 1) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-    return diff === 0;
-}

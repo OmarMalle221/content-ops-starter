@@ -55,7 +55,7 @@ flowchart LR
 | Fichiers                  | Supabase Storage, bucket privé `documents`                                              | Même région ; aucune lecture directe (voir § 6)              |
 | Serveur                   | Supabase Edge Functions (Deno), épinglées `ca-central-1`                                | Pas de serveur à gérer ; code IA isolé                       |
 | IA                        | SDK officiel `@anthropic-ai/sdk`, modèle `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`) | Sorties JSON validées (`messages.parse` + `zodOutputFormat`) |
-| Planification             | `pg_cron` → fonction `send-reminders`                                                   | Rappels quotidiens                                           |
+| Planification             | `pg_cron` → fonctions `send-reminders` et `purge-storage`                               | Rappels quotidiens ; purge de Storage chaque heure           |
 | Courriel                  | Fournisseur SMTP au Canada (ex. Amazon SES `ca-central-1`)                              | Courriels sans contenu de santé                              |
 | Tests                     | Vitest, PostgreSQL 16 + shim Supabase (RLS), Playwright + axe, Lighthouse CI            | Mêmes outils que TrustCargo Pay dans ce dépôt                |
 
@@ -81,7 +81,7 @@ relais/
 │   ├── migrations/            # une migration par étape
 │   ├── functions/             # extract-document, get-document-url, explain-program,
 │   │                          # draft-letter, invite-member, delete-care-file,
-│   │                          # export-data, send-reminders, notify-support
+│   │                          # export-data, send-reminders, notify-support, purge-storage
 │   ├── reference/             # textes de consentement, ressources, 8 programmes « À VÉRIFIER »
 │   ├── seed/                  # 2 familles fictives (démonstration locale seulement)
 │   └── tests/                 # shim + rls_test.sql
@@ -192,7 +192,12 @@ l'utilisateur** ; la clé serveur ne sert qu'à lire ou effacer les fichiers et 
 
 **Effacement des fichiers** : la base ne peut pas effacer un objet Storage. La suppression d'un document
 ou d'un dossier inscrit d'abord les chemins dans `storage_deletion_queue`, puis la fonction serveur efface
-les fichiers par l'API Storage et vide la file ; ce qui resterait est repris par une tâche planifiée.
+les fichiers par l'API Storage et vide la file. Si cet appel échoue, la fonction planifiée `purge-storage`
+(`pg_cron`, chaque heure, `supabase/cron/purge_storage.sql`) reprend la file par lots de 100. Elle efface
+aussi les **dépôts abandonnés** (document resté « Envoi incomplet » plus de 24 h : supprimé et noté au
+journal du dossier, au nom de « Relais ») et les **fichiers orphelins** (objet de plus de 24 h sans
+document). La base décide quoi effacer (`storage_purge_prepare`, `storage_purge_claim`,
+`storage_purge_done`, réservées au rôle service) ; la fonction ne journalise que des nombres.
 
 ## 6. Accès, rôles et journal
 

@@ -84,13 +84,15 @@ lecture automatique des documents. La base refuse les écritures sans les consen
 
 - Suppression du compte et du dossier à la demande, en cascade (fichiers compris), le journal ne gardant
   que la trace de la suppression. Export complet du dossier et des données personnelles.
+- Fichiers effacés de Storage aussitôt, ou au plus tard dans l'heure par une tâche planifiée si l'effacement
+  immédiat échoue ; envoi de document resté incomplet effacé après 24 h (noté au journal du dossier).
 - Retrait du consentement « bilan de la semaine » ou « évaluation du pilote » : réponses effacées.
 - **À DÉCIDER** : durée de conservation après le pilote, effacement des comptes inactifs, sauvegardes.
 
 ## 5. Sécurité
 
 - RLS (sécurité au niveau des lignes) sur toutes les tables : chaque accès est décidé par la base selon le
-  niveau du membre (complet, coordination, lecture seule) et les consentements ; 396 vérifications
+  niveau du membre (complet, coordination, lecture seule) et les consentements ; 412 vérifications
   automatisées, rejouées à chaque modification (CI).
 - Vérification en deux étapes obligatoire pour les intervenantes et les admins, vérifiée aussi par la base.
 - Fichiers : bucket privé, aucune lecture directe ; liens signés de 60 secondes, journalisés.

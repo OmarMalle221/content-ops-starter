@@ -1,15 +1,16 @@
 // Branchement des fonctions Edge (Deno) : clients Supabase, Storage, fournisseur d'IA, courriel, CORS.
 // Variables : SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY (fournies par Supabase),
 // RELAIS_APP_ORIGINS (origines autorisées, séparées par des virgules), ANTHROPIC_API_KEY, ANTHROPIC_MODEL ;
-// pour les rappels : RELAIS_CRON_SECRET, RELAIS_APP_URL, RELAIS_EMAIL_FROM, AWS_SES_ACCESS_KEY_ID,
-// AWS_SES_SECRET_ACCESS_KEY, AWS_SES_REGION (ca-central-1 par défaut).
+// pour les fonctions planifiées (rappels, purge de Storage) : RELAIS_CRON_SECRET, RELAIS_APP_URL ; pour le
+// courriel : RELAIS_EMAIL_FROM, AWS_SES_ACCESS_KEY_ID, AWS_SES_SECRET_ACCESS_KEY, AWS_SES_REGION
+// (ca-central-1 par défaut).
 // Région : les fonctions doivent s'exécuter au Canada (ca-central-1) — à vérifier avant le pilote.
 import { createClient } from '@supabase/supabase-js';
 import { SesEmailClient } from './email.ts';
 import { DOCUMENTS_BUCKET, RpcError, type Handler, type ServerContext } from './handlers.ts';
 import { AnthropicLlmClient } from './llm.ts';
 import { serverLog } from './log.ts';
-import { cronSecretMatches, type ScheduledHandler } from './reminders.ts';
+import { cronSecretMatches, type ScheduledHandler } from './scheduled.ts';
 
 function env(name: string): string {
     const value = Deno.env.get(name);
@@ -139,6 +140,10 @@ export function serveScheduled(handler: ScheduledHandler): void {
                     const { data, error } = await service.rpc(fn, args);
                     if (error) throw new RpcError(error.code ?? 'unknown');
                     return data;
+                },
+                removeFiles: async (paths) => {
+                    const { error } = await service.storage.from(DOCUMENTS_BUCKET).remove(paths);
+                    if (error) throw new Error('storage remove failed');
                 },
                 email: emailClient(),
                 appUrl: env('RELAIS_APP_URL'),

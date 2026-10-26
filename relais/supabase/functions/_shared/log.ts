@@ -7,6 +7,7 @@ export const SERVER_LOG_EVENTS = [
     'extraction_completed',
     'extraction_failed',
     'storage_purge_failed',
+    'storage_purged',
     'function_error',
     'reminders_sent',
     'reminder_failed',

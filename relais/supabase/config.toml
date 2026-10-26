@@ -76,3 +76,7 @@ import_map = "./functions/import_map.json"
 [functions.send-reminders]
 verify_jwt = false
 import_map = "./functions/import_map.json"
+
+[functions.purge-storage]
+verify_jwt = false
+import_map = "./functions/import_map.json"
