@@ -46,8 +46,9 @@ Rôles : **R** = responsable du projet Relais, **J** = juriste, **TS** = travail
 - [ ] Vérification en deux étapes active ; comptes `admin` et `relais_worker` attribués par SQL
       (`update public.users set app_role = …`) (T).
 - [ ] Fonctions Edge déployées : `extract-document`, `get-document-url`, `delete-document`,
-      `delete-care-file`, `explain-program`, `draft-letter`, `notify-support`, `send-reminders`, `purge-storage` ; vérifier
-      que les imports de `src/shared` sont bien empaquetés (T).
+      `delete-care-file`, `explain-program`, `draft-letter`, `notify-support`, `send-reminders`,
+      `purge-storage`. Elles sont vérifiées et essayées sous Deno 2.9 en CI (`npm run test:functions`) ;
+      vérifier au déploiement que la CLI empaquette les imports de `src/shared` (T).
 - [ ] Secrets des fonctions : `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`,
       `RELAIS_APP_URL`, `RELAIS_EMAIL_FROM`, `RELAIS_CRON_SECRET`, `AWS_SES_ACCESS_KEY_ID`,
       `AWS_SES_SECRET_ACCESS_KEY`, `AWS_SES_REGION` (T).

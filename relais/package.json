@@ -20,6 +20,8 @@
         "test:db": "bash scripts/test-db.sh",
         "test:ai-live": "vitest run --project integration",
         "test:e2e": "playwright test",
+        "test:functions": "bash scripts/test-db.sh --serve node tests/deno/run-functions.mjs",
+        "check:functions": "bash scripts/deno.sh check --config supabase/functions/deno.local.json supabase/functions/*/index.ts",
         "generate:reference": "node scripts/generate-reference-sql.mjs",
         "check:reference": "node scripts/generate-reference-sql.mjs --check",
         "check:bundle": "vite build --mode e2e --outDir .tmp/dist-budget --emptyOutDir && node scripts/check-bundle.mjs .tmp/dist-budget"

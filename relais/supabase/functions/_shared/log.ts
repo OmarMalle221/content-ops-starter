@@ -1,7 +1,7 @@
 // Journal des fonctions serveur : même liste blanche de champs que l'application (règle no 5).
 // Aucun contenu de document, aucun nom, aucun message d'erreur : des noms d'événements, des codes,
 // des durées et des compteurs.
-import { sanitizeLogFields, type LogFields } from '../../../src/lib/log.ts';
+import { sanitizeLogFields, type LogFields } from '../../../src/shared/log/fields.ts';
 
 export const SERVER_LOG_EVENTS = [
     'extraction_completed',

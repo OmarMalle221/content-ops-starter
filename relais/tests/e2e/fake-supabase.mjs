@@ -20,6 +20,8 @@
 //   Fonctions planifiées : POST /functions/v1/send-reminders ou /functions/v1/purge-storage avec l'en-tête
 //   x-relais-cron-secret: test-cron-secret ; les courriels sont gardés en mémoire (état « emails »), jamais
 //   envoyés.
+// - Clé serveur « test-service-role-key » : rôle service_role pour PostgREST et Storage (lecture, URL
+//   signée, effacement), comme sur Supabase. Sert aux vraies fonctions Edge lancées sous Deno (tests/deno).
 //
 // Lancement : bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -100,6 +102,10 @@ function caller(req) {
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
     return sessions.get(token) ?? null;
 }
+
+// Clé serveur des fonctions Edge lancées sous Deno (tests/deno) : rôle service_role, comme sur Supabase.
+const SERVICE_ROLE_KEY = 'test-service-role-key';
+const isService = (req) => req.headers.authorization === `Bearer ${SERVICE_ROLE_KEY}`;
 
 async function userJson(userId) {
     const { rows } = await pool.query('select id, email from auth.users where id = $1', [userId]);
@@ -284,6 +290,9 @@ function whereClause(url, params, alias) {
         if (op in COMPARATORS) {
             params.push(value);
             conditions.push(`${column} ${COMPARATORS[op]} $${params.length}`);
+        } else if (op === 'like') {
+            params.push(value.replaceAll('*', '%'));
+            conditions.push(`${column} like $${params.length}`);
         } else if (op === 'is' && ['null', 'true', 'false'].includes(value)) {
             conditions.push(`${column} is ${value}`);
         } else if (op === 'in') {
@@ -366,8 +375,8 @@ async function rpcCall(who, name, body, service = false) {
     return result.rows[0].result;
 }
 
-async function handleRpc(req, res, name, who) {
-    const result = await rpcCall(who, name, await readBody(req));
+async function handleRpc(req, res, name, who, service = false) {
+    const result = await rpcCall(who, name, await readBody(req), service);
     return result === undefined ? send(res, 204) : send(res, 200, result);
 }
 
@@ -385,6 +394,33 @@ async function handleStorage(req, res, url) {
         const bytes = await readFile(objectFile(bucket, path));
         res.writeHead(200, { 'content-type': contentTypes.get(`${bucket}/${path}`) ?? 'application/octet-stream' });
         return res.end(bytes);
+    }
+
+    // Opérations de la clé serveur (fonctions Edge sous Deno) : lecture, URL signée, effacement.
+    if (isService(req)) {
+        const signRequest = url.pathname.match(/^\/storage\/v1\/object\/sign\/documents\/(.+)$/);
+        if (req.method === 'POST' && signRequest) {
+            const { expiresIn } = await readBody(req);
+            const token = randomBytes(16).toString('hex');
+            signedUrls.set(token, { bucket: 'documents', path: signRequest[1], expiresAt: Date.now() + Number(expiresIn) * 1000 });
+            return send(res, 200, { signedURL: `/object/sign/documents/${signRequest[1]}?token=${token}` });
+        }
+        const object = url.pathname.match(/^\/storage\/v1\/object\/documents\/(.+)$/);
+        if (req.method === 'GET' && object) {
+            const bytes = await readFile(objectFile('documents', object[1])).catch(() => null);
+            if (!bytes) return send(res, 404, { statusCode: '404', error: 'not_found', message: 'Object not found' });
+            res.writeHead(200, { 'content-type': contentTypes.get(`documents/${object[1]}`) ?? 'application/octet-stream' });
+            return res.end(bytes);
+        }
+        if (req.method === 'DELETE' && url.pathname === '/storage/v1/object/documents') {
+            const { prefixes } = await readBody(req);
+            await removeDocumentFiles(prefixes);
+            return send(
+                res,
+                200,
+                prefixes.map((name) => ({ name, bucket_id: 'documents' }))
+            );
+        }
     }
 
     const upload = url.pathname.match(/^\/storage\/v1\/object\/([^/]+)\/(.+)$/);
@@ -509,9 +545,10 @@ async function handleFunction(req, res, name) {
 }
 
 async function handleRest(req, res, url) {
-    const who = caller(req);
+    const service = isService(req);
+    const who = service ? null : caller(req);
     const path = url.pathname.replace('/rest/v1/', '');
-    if (path.startsWith('rpc/')) return handleRpc(req, res, path.slice(4), who);
+    if (path.startsWith('rpc/')) return handleRpc(req, res, path.slice(4), who, service);
 
     const table = `public.${ident(path)}`;
     const select = url.searchParams.get('select');
@@ -523,7 +560,7 @@ async function handleRest(req, res, url) {
         const sql = `select coalesce(json_agg(row_to_json(t0)), '[]'::json) as rows from (
             select * from ${table} t0 ${whereClause(url, params, 't0')} ${orderClause(url, 't0')}
             ${limit ? `limit ${Number.parseInt(limit, 10)}` : ''}) t0`;
-        const result = await asCaller(who, (client) => client.query(sql, params));
+        const result = await asCaller(who, (client) => client.query(sql, params), service);
         return respondRows(req, res, 200, result.rows[0].rows, select);
     }
 
@@ -534,7 +571,7 @@ async function handleRest(req, res, url) {
         params.push(JSON.stringify(records));
         const sql = `insert into ${table} (${columns.join(', ')})
             select ${columns.join(', ')} from json_populate_recordset(null::${table}, $1::json) returning *`;
-        const result = await asCaller(who, (client) => client.query(sql, params));
+        const result = await asCaller(who, (client) => client.query(sql, params), service);
         return wantsRows ? respondRows(req, res, 201, result.rows, select) : send(res, 201);
     }
 
@@ -544,13 +581,13 @@ async function handleRest(req, res, url) {
         params.push(JSON.stringify(body));
         const sql = `update ${table} as t0 set ${columns.map((c) => `${c} = r.${c}`).join(', ')}
             from json_populate_record(null::${table}, $1::json) r ${whereClause(url, params, 't0')} returning t0.*`;
-        const result = await asCaller(who, (client) => client.query(sql, params));
+        const result = await asCaller(who, (client) => client.query(sql, params), service);
         return wantsRows ? respondRows(req, res, 200, result.rows, select) : send(res, 204);
     }
 
     if (req.method === 'DELETE') {
         const sql = `delete from ${table} as t0 ${whereClause(url, params, 't0')} returning t0.*`;
-        const result = await asCaller(who, (client) => client.query(sql, params));
+        const result = await asCaller(who, (client) => client.query(sql, params), service);
         return wantsRows ? respondRows(req, res, 200, result.rows, select) : send(res, 204);
     }
 

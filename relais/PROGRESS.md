@@ -288,11 +288,36 @@ pouvait rester dans Storage si l'effacement immédiat échouait.
     file, secret exigé, panne sans perte, puis effacement) ; envoi interrompu par une coupure réseau
     (« Envoi incomplet », intact avant 24 h, effacé après, ligne « Relais » au journal, accessible).
 
+### Après la v0.1 — fonctions Edge vérifiées sous Deno (livrée)
+
+Jusqu'ici, la logique des fonctions serveur était testée sous Node (Vitest, faux Supabase), mais le fichier
+qui les branche sous Deno (`_shared/deno-server.ts` : client Supabase, jeton, Storage, CORS, secret des
+tâches planifiées) n'avait jamais tourné.
+
+- **Vérification de types sous Deno** (`npm run check:functions`, Deno 2.9.6 épinglé via
+  `scripts/deno.sh`, configuration `supabase/functions/deno.local.json`) des 9 fonctions et de tout ce
+  qu'elles importent.
+- **Essai réel** (`npm run test:functions`) : les 9 fonctions lancées sous Deno contre le faux Supabase
+  (qui accepte maintenant la clé serveur pour PostgREST et Storage), 11 vérifications : CORS, jeton
+  absent ou invalide, URL signée qui rend le fichier, consentement de lecture exigé, IA et courriel absents
+  signalés proprement, avis réservé une seule fois, suppressions avec effacement des fichiers, secret des
+  tâches planifiées, purge d'un dépôt abandonné.
+- **Bogue trouvé et corrigé** : le jeton de l'utilisateur était transmis sous la clé `authorization` (en
+  minuscules) ; supabase-js y ajoutait sa propre clé `Authorization` (clé anonyme), d'où un en-tête
+  « Bearer <clé anonyme>, Bearer <jeton> » refusé par Auth. **Toutes les fonctions appelées par
+  l'application auraient répondu 401 sur Supabase.** Correctif : clé `Authorization` exacte et jeton passé
+  à `getUser`.
+- **Portabilité** : le filtre des journaux est passé dans `src/shared/log/fields.ts` (le code serveur
+  dépendait d'un fichier de l'application qui utilise `import.meta.env` de Vite) ; un import sans
+  extension corrigé.
+- **CI** : nouveau job « Edge functions under Deno » (vérification de types, puis essai réel).
+
 ## En cours
 
-- Rien : **les 6 étapes de la v0.1 sont livrées**, ainsi que la purge planifiée de Storage. Le pilote
-  attend la liste de [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (EFVP, validations, vérification des
-  fiches, projet Supabase et SES, intervenantes).
+- Rien : **les 6 étapes de la v0.1 sont livrées**, ainsi que la purge planifiée de Storage et la
+  vérification des fonctions sous Deno. Le pilote attend la liste de
+  [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (EFVP, validations, vérification des fiches, projet
+  Supabase et SES, intervenantes).
 
 ## Décisions
 
@@ -361,6 +386,7 @@ pouvait rester dans Storage si l'effacement immédiat échouait.
 | D61 | Pages chargées à la demande et budget de 240 ko vérifié en CI ; bibliothèques gardées telles quelles                                                                                         | ~195 ko viennent de React, du routeur, de Zod et de Supabase : les remplacer en fin de projet serait risqué         |
 | D62 | Aucun délai de rappel promis (Q4) : « dès que possible »                                                                                                                                     | Heures et effectifs des intervenantes inconnus                                                                      |
 | D63 | Purge de Storage chaque heure : file d'effacement reprise, dépôt incomplet effacé après 24 h (noté au journal au nom de « Relais »), fichier sans document effacé après 24 h                 | Droit à la suppression tenu même si l'effacement immédiat échoue ; minimisation des fichiers partiels               |
+| D64 | Fonctions Edge vérifiées et exécutées sous Deno en CI, contre le faux Supabase (clé serveur comprise)                                                                                        | Le code de branchement Deno n'était couvert par aucun test ; un bogue bloquant y a été trouvé                       |
 
 ### Hypothèses appliquées en attendant les réponses aux questions bloquantes
 
@@ -396,9 +422,9 @@ pouvait rester dans Storage si l'effacement immédiat échouait.
 - Gabarits de courriel « code » (`supabase/templates/code.html`) et réglages Auth de
   `supabase/config.toml` à reproduire dans le tableau de bord ; SMTP au Canada (ex. Amazon SES).
 - Région effective des Edge Functions : vérifier l'en-tête de réponse en préproduction.
-- Déploiement des fonctions (`supabase functions deploy`) : vérifier que les imports de `src/shared`
-  (hors du dossier `functions`) sont bien empaquetés ; sinon, les copier par un script de construction.
-  Secrets : `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`.
+- Déploiement des fonctions (`supabase functions deploy`) : Deno 2.9 résout et exécute les imports de
+  `src/shared` (vérifié en CI) ; reste à confirmer que la CLI Supabase les empaquette (sinon, les copier par
+  un script de construction). Secrets : `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`.
 - Lancer `ANTHROPIC_API_KEY=… npm run test:ai-live` : brouillon réel en moins de 30 s sur le PDF de
   3 pages (non exécuté ici, faute de clé), et vérifier que le repli serveur (`server-side-fallback`) est
   ouvert au compte.

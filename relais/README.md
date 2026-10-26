@@ -7,8 +7,8 @@ aucun diagnostic et ne donne aucun conseil médical.
 **Statut : les 6 étapes de la v0.1 sont livrées** (socle, consentements, écran d'urgence ; dossier familial
 et membres ; documents, lecture automatique pseudonymisée et chronologie ; navigateur de droits ; tâches,
 agenda, rappels et page « Préparer un rendez-vous » ; bilan de l'aidant, demandes d'intervenante et mesures
-du pilote), ainsi que la purge planifiée de Storage. Avant le pilote :
-[`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md). Suivi dans [`PROGRESS.md`](PROGRESS.md).
+du pilote), ainsi que la purge planifiée de Storage et la vérification des fonctions sous Deno. Avant le
+pilote : [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md). Suivi dans [`PROGRESS.md`](PROGRESS.md).
 
 ## Démarrer
 
@@ -18,6 +18,8 @@ npm run dev            # nécessite .env.local (voir .env.example) et un projet 
 npm test               # tests unitaires et de composants (Vitest)
 npm run test:db        # migrations + tests RLS sur PostgreSQL 16 (local ou DATABASE_URL)
 npm run test:e2e       # parcours sur téléphone (Playwright + axe + Lighthouse), faux Supabase local
+npm run test:functions # les 9 fonctions Edge lancées sous Deno contre le faux Supabase
+npm run check:functions # vérification de types des fonctions sous Deno
 npm run test:ai-live   # extraction réelle avec Claude (ANTHROPIC_API_KEY requis), cible < 30 s
 npm run check:bundle   # budget du premier chargement (≤ 240 ko compressés)
 ```

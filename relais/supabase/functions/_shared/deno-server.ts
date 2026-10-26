@@ -47,15 +47,18 @@ export function serveHandler(handler: Handler, options: { llm?: boolean; email?:
 
         try {
             const url = env('SUPABASE_URL');
-            const authorization = request.headers.get('authorization') ?? '';
+            const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+            if (!token) return Response.json({ error: 'unauthorized' }, { status: 401, headers });
+            // Clé « Authorization » exacte : en minuscules, supabase-js garderait aussi sa propre clé
+            // (« Bearer <clé anonyme>, Bearer <jeton> ») et Auth refuserait le jeton.
             const userClient = createClient(url, env('SUPABASE_ANON_KEY'), {
-                global: { headers: { authorization } },
+                global: { headers: { Authorization: `Bearer ${token}` } },
                 auth: { persistSession: false, autoRefreshToken: false }
             });
             const service = createClient(url, env('SUPABASE_SERVICE_ROLE_KEY'), {
                 auth: { persistSession: false, autoRefreshToken: false }
             });
-            const { data: userData, error: userError } = await userClient.auth.getUser();
+            const { data: userData, error: userError } = await userClient.auth.getUser(token);
             if (userError || !userData.user) return Response.json({ error: 'unauthorized' }, { status: 401, headers });
 
             const rpc = async <T>(client: typeof userClient, fn: string, args: Record<string, unknown>): Promise<T> => {

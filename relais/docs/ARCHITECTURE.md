@@ -57,7 +57,7 @@ flowchart LR
 | IA                        | SDK officiel `@anthropic-ai/sdk`, modèle `ANTHROPIC_MODEL` (défaut `claude-sonnet-5-5`) | Sorties JSON validées (`messages.parse` + `zodOutputFormat`) |
 | Planification             | `pg_cron` → fonctions `send-reminders` et `purge-storage`                               | Rappels quotidiens ; purge de Storage chaque heure           |
 | Courriel                  | Fournisseur SMTP au Canada (ex. Amazon SES `ca-central-1`)                              | Courriels sans contenu de santé                              |
-| Tests                     | Vitest, PostgreSQL 16 + shim Supabase (RLS), Playwright + axe, Lighthouse CI            | Mêmes outils que TrustCargo Pay dans ce dépôt                |
+| Tests                     | Vitest, PostgreSQL 16 + shim Supabase (RLS), Playwright + axe, Lighthouse CI, Deno      | Mêmes outils que TrustCargo Pay dans ce dépôt                |
 
 ## 3. Organisation du code (proposée)
 
@@ -187,8 +187,10 @@ pseudonymisé sort de Supabase. Lecture automatique conditionnée à un **consen
 **Fonctions serveur** : `extract-document`, `get-document-url`, `delete-document`, `delete-care-file`. Leur
 logique ([`supabase/functions/_shared/handlers.ts`](../supabase/functions/_shared/handlers.ts)) ne dépend
 pas de Deno : la même tourne dans les fonctions Edge, dans le faux Supabase des tests de bout en bout (avec
-une IA simulée) et dans Vitest. Les droits sont vérifiés par des fonctions SQL appelées **avec le jeton de
-l'utilisateur** ; la clé serveur ne sert qu'à lire ou effacer les fichiers et à enregistrer le brouillon.
+une IA simulée) et dans Vitest. Le branchement Deno (`_shared/deno-server.ts`) est vérifié à part : les
+fonctions sont lancées sous Deno contre le faux Supabase (`npm run test:functions`). Les droits sont
+vérifiés par des fonctions SQL appelées **avec le jeton de l'utilisateur** ; la clé serveur ne sert qu'à
+lire ou effacer les fichiers et à enregistrer le brouillon.
 
 **Effacement des fichiers** : la base ne peut pas effacer un objet Storage. La suppression d'un document
 ou d'un dossier inscrit d'abord les chemins dans `storage_deletion_queue`, puis la fonction serveur efface

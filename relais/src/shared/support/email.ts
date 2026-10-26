@@ -1,6 +1,6 @@
 // Avis aux intervenantes d'une nouvelle demande : AUCUN contenu (ni nom, ni message, ni coordonnées).
 // Seulement l'origine, pour aider à prioriser (l'écran d'urgence d'abord), et le lien vers le tableau.
-import type { ReminderEmail } from '../reminders/email';
+import type { ReminderEmail } from '../reminders/email.ts';
 
 export type SupportOrigin = 'button' | 'distress_screen' | 'checkin';
 

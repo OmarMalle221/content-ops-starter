@@ -43,7 +43,7 @@ export default tseslint.config(
     },
     {
         // Scripts, configuration et tests de bout en bout : sortie console autorisée (aucune donnée réelle).
-        files: ['scripts/**/*.mjs', 'tests/e2e/**/*.{mjs,ts}', 'tests/integration/**/*.ts', '*.config.{js,ts}'],
+        files: ['scripts/**/*.mjs', 'tests/e2e/**/*.{mjs,ts}', 'tests/deno/**/*.mjs', 'tests/integration/**/*.ts', '*.config.{js,ts}'],
         languageOptions: { globals: { ...globals.node } },
         rules: { 'no-console': 'off' }
     },
