@@ -312,10 +312,32 @@ tâches planifiées) n'avait jamais tourné.
   extension corrigé.
 - **CI** : nouveau job « Edge functions under Deno » (vérification de types, puis essai réel).
 
+### Après la v0.1 — chemin IA réel sous Deno, règle 6 vérifiée au niveau HTTP (livrée)
+
+Le client Claude (`AnthropicLlmClient`, SDK officiel) n'avait jamais tourné : sans clé, le test réel
+(`test:ai-live`) n'a pas pu être lancé, et les autres tests utilisent une IA simulée. Les 3 fonctions d'IA
+sont maintenant aussi lancées sous Deno **avec une clé**, branchées par `ANTHROPIC_BASE_URL` sur une
+fausse API Messages (`tests/deno/fake-anthropic.mjs`) qui garde chaque requête reçue. 4 vérifications de
+plus (15 au total) :
+
+- Brouillon produit par le vrai SDK ; requête conforme : modèle par défaut `claude-sonnet-5-5`, repli
+  serveur (`fallbacks: "default"`, en-tête `server-side-fallback-2026-07-01`), effort bas, sortie
+  structurée (`json_schema`), clé transmise ; `ai_calls` rempli (compteurs seulement).
+- **Règle 6 au niveau HTTP** : aucun des 16 identifiants fictifs (noms, NAM, adresse, téléphones, date de
+  naissance, numéros de dossier) dans ce qui sort réellement du serveur ; jetons `[PERSONNE_n]` présents.
+  Contrôle par mutation : envoyer le texte non pseudonymisé fait échouer le test (« Roger » envoyé).
+- Refus du modèle (`stop_reason: "refusal"`) et panne de l'API (529) : signalés, un seul appel (aucun
+  nouvel essai automatique), journalisés sans contenu.
+- Explication et lettre : seule la fiche est envoyée (aucune donnée du dossier), puis réponse en cache
+  sans nouvel appel.
+
+Reste à faire avec une vraie clé : `npm run test:ai-live` (qualité du brouillon, délai réel, conditions de
+l'API).
+
 ## En cours
 
 - Rien : **les 6 étapes de la v0.1 sont livrées**, ainsi que la purge planifiée de Storage et la
-  vérification des fonctions sous Deno. Le pilote attend la liste de
+  vérification des fonctions sous Deno (chemin IA compris). Le pilote attend la liste de
   [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (EFVP, validations, vérification des fiches, projet
   Supabase et SES, intervenantes).
 

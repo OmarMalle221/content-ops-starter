@@ -66,7 +66,8 @@ Rôles : **R** = responsable du projet Relais, **J** = juriste, **TS** = travail
 
 ## 4. Vérifications en préproduction
 
-- [ ] `ANTHROPIC_API_KEY=… npm run test:ai-live` : brouillon réel en moins de 30 s sur le PDF de 3 pages ;
+- [ ] `ANTHROPIC_API_KEY=… npm run test:ai-live` : brouillon réel en moins de 30 s sur le PDF de 3 pages (le
+      client et la pseudonymisation au niveau HTTP sont déjà vérifiés sous Deno contre une fausse API) ;
       repli serveur ouvert au compte (T).
 - [ ] Un rappel réel et un avis aux intervenantes réels reçus à des adresses de l'équipe (T).
 - [ ] Parcours complet sur deux téléphones (Android et iPhone), PWA installée : connexion par code,

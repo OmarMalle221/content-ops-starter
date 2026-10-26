@@ -5,7 +5,9 @@
 // (lecture, URL signée, effacement), CORS et le secret des fonctions planifiées.
 //
 // Sans clé d'IA ni de courriel : les fonctions doivent le dire proprement (« unavailable »,
-// « ai_unavailable », « email_not_configured »).
+// « ai_unavailable », « email_not_configured »). Les 3 fonctions d'IA sont aussi lancées AVEC une clé,
+// branchées sur une fausse API Messages (tests/deno/fake-anthropic.mjs) : le vrai SDK d'Anthropic tourne
+// sous Deno et chaque requête qui sort du serveur est inspectée (règle 6 : aucun nom ni numéro).
 //
 // Lancement : npm run test:functions (= bash scripts/test-db.sh --serve node tests/deno/run-functions.mjs)
 import assert from 'node:assert/strict';
@@ -13,12 +15,14 @@ import { execFileSync, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { DISCHARGE_SUMMARY_PAGES, FICTIONAL_IDENTIFIERS, PRESCRIPTION_PAGES } from '../support/documents.ts';
 import { buildTextPdf } from '../support/pdf.ts';
-import { PRESCRIPTION_PAGES } from '../support/documents.ts';
+import { startFakeAnthropic } from './fake-anthropic.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const FAKE_PORT = 54398;
 const FAKE = `http://127.0.0.1:${FAKE_PORT}`;
+const ANTHROPIC_PORT = 54397;
 const APP_ORIGIN = 'http://127.0.0.1:4173';
 const CRON_SECRET = 'test-cron-secret';
 const FUNCTIONS = [
@@ -32,7 +36,10 @@ const FUNCTIONS = [
     'send-reminders',
     'purge-storage'
 ];
-const port = (name) => 54410 + FUNCTIONS.indexOf(name);
+const AI_FUNCTIONS = ['extract-document', 'explain-program', 'draft-letter'];
+// Une instance par fonction sans clé d'IA, puis les fonctions d'IA avec une clé (fausse API).
+const INSTANCES = [...FUNCTIONS.map((name) => ({ name, ai: false })), ...AI_FUNCTIONS.map((name) => ({ name, ai: true }))];
+const port = (name, ai = false) => 54410 + INSTANCES.findIndex((i) => i.name === name && i.ai === ai);
 
 const children = [];
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -98,8 +105,8 @@ async function rest(user, path, body, method = 'POST') {
     return data;
 }
 
-async function call(name, body, user, headers = {}) {
-    const response = await fetch(`http://127.0.0.1:${port(name)}/`, {
+async function call(name, body, user, { headers = {}, ai = false } = {}) {
+    const response = await fetch(`http://127.0.0.1:${port(name, ai)}/`, {
         method: 'POST',
         headers: {
             'content-type': 'application/json',
@@ -112,7 +119,7 @@ async function call(name, body, user, headers = {}) {
     return { status: response.status, body: await json(response), headers: response.headers };
 }
 
-const scheduled = (name, secret) => call(name, {}, null, { 'x-relais-cron-secret': secret });
+const scheduled = (name, secret) => call(name, {}, null, { headers: { 'x-relais-cron-secret': secret } });
 
 async function state() {
     return json(await fetch(`${FAKE}/__test/state`));
@@ -171,16 +178,19 @@ async function main() {
         RELAIS_APP_URL: APP_ORIGIN,
         RELAIS_CRON_SECRET: CRON_SECRET
     };
-    for (const name of FUNCTIONS) {
+    const anthropic = await startFakeAnthropic(ANTHROPIC_PORT);
+    // ANTHROPIC_MODEL absent : le modèle par défaut du code doit être utilisé.
+    const aiEnv = { ANTHROPIC_API_KEY: 'test-anthropic-key', ANTHROPIC_BASE_URL: `http://127.0.0.1:${ANTHROPIC_PORT}` };
+    for (const { name, ai } of INSTANCES) {
         start(
             deno,
             ['run', '--config', 'supabase/functions/deno.local.json', '--allow-net', '--allow-env', `supabase/functions/${name}/index.ts`],
-            { ...env, DENO_SERVE_ADDRESS: `tcp:127.0.0.1:${port(name)}` },
-            name
+            { ...env, ...(ai ? aiEnv : {}), DENO_SERVE_ADDRESS: `tcp:127.0.0.1:${port(name, ai)}` },
+            ai ? `${name} (IA)` : name
         );
     }
-    for (const name of FUNCTIONS) await waitFor(`http://127.0.0.1:${port(name)}/`, name, { method: 'OPTIONS' });
-    console.log(`${FUNCTIONS.length} fonctions démarrées sous Deno`);
+    for (const { name, ai } of INSTANCES) await waitFor(`http://127.0.0.1:${port(name, ai)}/`, name, { method: 'OPTIONS' });
+    console.log(`${INSTANCES.length} instances de fonctions démarrées sous Deno (dont ${AI_FUNCTIONS.length} avec l'IA)`);
 
     // ------------------------------------------------------------------------------------- scénario
     const claire = await signIn('claire@example.test');
@@ -292,6 +302,108 @@ async function main() {
         assert.deepEqual([after.documents, after.storageFiles, after.storageObjects, after.deletionQueue], [[], [], [], []]);
     });
 
+    // ------------------------------------------------------------- chemin IA réel (vrai SDK, fausse API)
+    const aiFile = await rest(claire, 'rpc/create_care_file', { p_title: 'Grand-papa' });
+    for (const type of ['care_recipient_data', 'ai_document_processing']) {
+        await rest(claire, 'rpc/record_file_consent', {
+            p_care_file_id: aiFile,
+            p_type: type,
+            p_version: await version(type),
+            p_granted_by: 'care_recipient_signed_form',
+            p_legal_basis: 'person_consents'
+        });
+    }
+    await rest(claire, 'care_recipients', { care_file_id: aiFile, first_name: 'Roger', last_name: 'Gagnon', living_setting: 'rpa' });
+    const aiDocument = async (pages) => {
+        const id = await upload(claire, aiFile, buildTextPdf(pages));
+        await rest(claire, 'rpc/complete_document_upload', { p_document_id: id });
+        return id;
+    };
+    const aiCalls = async (purpose) =>
+        (
+            await pool.query(
+                'select purpose, provider, model, status, input_tokens, pseudonymized_counts from public.ai_calls where purpose = $1 order by created_at',
+                [purpose]
+            )
+        ).rows;
+
+    await check('IA : brouillon prêt avec le vrai SDK ; requête conforme (modèle, repli, effort, sortie structurée)', async () => {
+        const response = await call('extract-document', { document_id: await aiDocument(DISCHARGE_SUMMARY_PAGES) }, claire, { ai: true });
+        assert.equal(response.status, 200);
+        assert.equal(response.body.status, 'draft_ready');
+        assert.equal(anthropic.requests.length, 1);
+        const [request] = anthropic.requests;
+        assert.equal(request.path, '/v1/messages');
+        // Clé transmise (le SDK 1.x l'envoie en « Authorization: Bearer », l'API accepte aussi « x-api-key »).
+        assert.ok([request.headers.authorization, request.headers['x-api-key']].some((v) => v?.endsWith('test-anthropic-key')));
+        assert.match(request.headers['anthropic-beta'] ?? '', /server-side-fallback-2026-07-01/);
+        assert.equal(request.body.model, 'claude-sonnet-5-5');
+        assert.equal(request.body.fallbacks, 'default');
+        assert.equal(request.body.max_tokens, 16000);
+        assert.equal(request.body.output_config.effort, 'low');
+        assert.equal(request.body.output_config.format.type, 'json_schema');
+        const [row] = await aiCalls('document_extraction');
+        assert.deepEqual([row.provider, row.model, row.status], ['anthropic', 'claude-sonnet-5-5', 'ok']);
+        assert.ok(row.input_tokens > 0);
+    });
+
+    await check('règle 6 au niveau HTTP : aucun nom, NAM, adresse, téléphone ni date de naissance ne sort du serveur', async () => {
+        const wire = JSON.stringify(anthropic.requests[0]);
+        for (const identifier of FICTIONAL_IDENTIFIERS) assert.ok(!wire.includes(identifier), `« ${identifier} » envoyé à l’IA`);
+        assert.match(wire, /\[PERSONNE_\d+\]/);
+        const [row] = await aiCalls('document_extraction');
+        assert.ok(Object.values(row.pseudonymized_counts).some((n) => n > 0));
+        assert.ok(!JSON.stringify(row).includes('Roger'));
+    });
+
+    await check('IA : refus du modèle et panne de l’API signalés, journalisés sans contenu', async () => {
+        const refused = await call(
+            'extract-document',
+            { document_id: await aiDocument(PRESCRIPTION_PAGES.map((page) => [...page, 'TEST-REFUS'])) },
+            claire,
+            {
+                ai: true
+            }
+        );
+        assert.deepEqual(refused.body, { status: 'failed', code: 'refusal' });
+        const down = await call(
+            'extract-document',
+            { document_id: await aiDocument(PRESCRIPTION_PAGES.map((page) => [...page, 'TEST-PANNE'])) },
+            claire,
+            {
+                ai: true
+            }
+        );
+        assert.deepEqual(down.body, { status: 'failed', code: 'ai_unavailable' });
+        assert.equal(anthropic.requests.length, 3, 'aucun nouvel essai automatique');
+        assert.deepEqual(
+            (await aiCalls('document_extraction')).map((r) => r.status),
+            ['ok', 'refusal', 'error']
+        );
+    });
+
+    await check('IA : explication et lettre tirées de la fiche seulement, puis mises en cache', async () => {
+        const before = anthropic.requests.length;
+        const explained = await call('explain-program', { program_id: programId }, claire, { ai: true });
+        assert.deepEqual([explained.body.status, explained.body.cached], ['ok', false]);
+        const again = await call('explain-program', { program_id: programId }, claire, { ai: true });
+        assert.deepEqual([again.body.status, again.body.cached], ['ok', true]);
+        const letter = await call('draft-letter', { program_id: programId, kind: 'information_request' }, claire, { ai: true });
+        assert.deepEqual([letter.body.status, letter.body.cached], ['ok', false]);
+        assert.match(letter.body.template, /\[NOM DE LA PERSONNE AIDÉE\]/);
+        const sent = anthropic.requests.slice(before);
+        assert.equal(sent.length, 2, 'une requête pour l’explication, une pour la lettre ; rien pour le cache');
+        for (const request of sent) {
+            assert.match(request.body.messages[0].content, /<fiche>/);
+            assert.ok(!/Roger|Gagnon|Claire|Grand-papa/.test(JSON.stringify(request.body)), 'aucune donnée du dossier');
+        }
+        assert.deepEqual(
+            [...(await aiCalls('program_explanation')), ...(await aiCalls('letter_draft'))].map((r) => r.status),
+            ['ok', 'ok']
+        );
+    });
+
+    anthropic.close();
     console.log(`\n${passed} vérifications sur les fonctions Edge sous Deno : OK`);
 }
 

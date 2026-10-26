@@ -18,7 +18,7 @@ npm run dev            # nécessite .env.local (voir .env.example) et un projet 
 npm test               # tests unitaires et de composants (Vitest)
 npm run test:db        # migrations + tests RLS sur PostgreSQL 16 (local ou DATABASE_URL)
 npm run test:e2e       # parcours sur téléphone (Playwright + axe + Lighthouse), faux Supabase local
-npm run test:functions # les 9 fonctions Edge lancées sous Deno contre le faux Supabase
+npm run test:functions # les 9 fonctions Edge sous Deno (faux Supabase, fausse API d'Anthropic)
 npm run check:functions # vérification de types des fonctions sous Deno
 npm run test:ai-live   # extraction réelle avec Claude (ANTHROPIC_API_KEY requis), cible < 30 s
 npm run check:bundle   # budget du premier chargement (≤ 240 ko compressés)

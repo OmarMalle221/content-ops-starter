@@ -188,7 +188,8 @@ pseudonymisé sort de Supabase. Lecture automatique conditionnée à un **consen
 logique ([`supabase/functions/_shared/handlers.ts`](../supabase/functions/_shared/handlers.ts)) ne dépend
 pas de Deno : la même tourne dans les fonctions Edge, dans le faux Supabase des tests de bout en bout (avec
 une IA simulée) et dans Vitest. Le branchement Deno (`_shared/deno-server.ts`) est vérifié à part : les
-fonctions sont lancées sous Deno contre le faux Supabase (`npm run test:functions`). Les droits sont
+fonctions sont lancées sous Deno contre le faux Supabase, et le client Claude contre une fausse API
+Messages qui garde chaque requête reçue (`npm run test:functions`). Les droits sont
 vérifiés par des fonctions SQL appelées **avec le jeton de l'utilisateur** ; la clé serveur ne sert qu'à
 lire ou effacer les fichiers et à enregistrer le brouillon.
 
