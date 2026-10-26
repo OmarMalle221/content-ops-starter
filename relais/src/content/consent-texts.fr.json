@@ -111,6 +111,33 @@
             }
         ]
     },
+    "caregiver_checkin": {
+        "scope": "user",
+        "version": "2026-10-31",
+        "published_on": "2026-10-31",
+        "legal_review": "pending",
+        "required": false,
+        "title": "Mon bilan de la semaine",
+        "summary": "Garder vos réponses au bilan de la semaine, pour voir comment vous allez au fil des semaines.",
+        "sections": [
+            {
+                "heading": "Ce qui est gardé",
+                "text": "Vos 3 réponses de chaque semaine (fatigue, sentiment d’être débordé, isolement), notées de 1 à 5. Rien d’autre."
+            },
+            {
+                "heading": "Qui les voit",
+                "text": "Vous seulement. Ni les membres de votre famille, ni les intervenantes, ni l’équipe Relais. Elles ne servent pas à évaluer le pilote."
+            },
+            {
+                "heading": "Sans ce consentement",
+                "text": "Vous pouvez quand même faire le bilan : le résultat s’affiche, puis vos réponses sont oubliées."
+            },
+            {
+                "heading": "Si vous le retirez",
+                "text": "Les réponses déjà gardées sont effacées tout de suite."
+            }
+        ]
+    },
     "care_recipient_data": {
         "scope": "care_file",
         "version": "2026-10-27",

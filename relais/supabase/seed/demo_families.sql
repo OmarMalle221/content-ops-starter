@@ -7,12 +7,17 @@
 --   Famille A : claire.demo@example.test (aidante principale de Louise, 82 ans, à domicile)
 --               marc.demo@example.test (son frère, lecture seule)
 --   Famille B : denis.demo@example.test (aidant principal de Roger, 79 ans, en RPA, en attente de CHSLD)
+--   Équipe    : intervenante.demo@example.test (intervenante), admin.demo@example.test (admin) ; code TOTP 654321
 -- Appliqué par : RELAIS_DEMO_SEED=1 bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
 
 insert into auth.users (id, email) values
     ('de000000-0000-4000-8000-00000000000a', 'claire.demo@example.test'),
     ('de000000-0000-4000-8000-00000000000b', 'marc.demo@example.test'),
-    ('de000000-0000-4000-8000-00000000000c', 'denis.demo@example.test');
+    ('de000000-0000-4000-8000-00000000000c', 'denis.demo@example.test'),
+    ('de000000-0000-4000-8000-00000000000d', 'intervenante.demo@example.test'),
+    ('de000000-0000-4000-8000-00000000000e', 'admin.demo@example.test');
+update public.users set app_role = 'relais_worker' where id = 'de000000-0000-4000-8000-00000000000d';
+update public.users set app_role = 'admin' where id = 'de000000-0000-4000-8000-00000000000e';
 
 -- ------------------------------------------------------------------- famille A : Louise, 82 ans
 select set_config('request.jwt.claims', '{"sub":"de000000-0000-4000-8000-00000000000a","role":"authenticated","aal":"aal1","email":"claire.demo@example.test"}', true);
@@ -20,6 +25,12 @@ set local role authenticated;
 update public.users set display_name = 'Claire' where id = auth.uid();
 select public.grant_consent('privacy_policy', '2026-10-26');
 select public.grant_consent('health_information', '2026-10-26');
+select public.grant_consent('caregiver_checkin', '2026-10-31');
+select public.grant_consent('pilot_evaluation', '2026-10-26');
+insert into public.caregiver_checkins (week_start, fatigue, overwhelm, isolation) values
+    (date_trunc('week', (now() at time zone 'America/Toronto')::date)::date - 14, 3, 3, 2),
+    (date_trunc('week', (now() at time zone 'America/Toronto')::date)::date - 7, 4, 4, 3);
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (date_trunc('week', (now() at time zone 'America/Toronto')::date)::date, 2.5, 4);
 select public.create_care_file('Maman') as file_a \gset
 select public.record_file_consent(:'file_a', 'care_recipient_data', '2026-10-27', 'care_recipient_signed_form', 'person_consents');
 insert into public.care_recipients (care_file_id, first_name, last_name, birth_year, living_setting)
@@ -62,6 +73,8 @@ select set_config('request.jwt.claims', '{"sub":"de000000-0000-4000-8000-0000000
 set local role authenticated;
 update public.users set display_name = 'Marc' where id = auth.uid();
 select public.grant_consent('privacy_policy', '2026-10-26');
+select public.grant_consent('pilot_evaluation', '2026-10-26');
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (date_trunc('week', (now() at time zone 'America/Toronto')::date)::date, 0.5, 3);
 select public.accept_invitation(:'invite_a');
 
 -- ------------------------------------------------- famille B : Roger, 79 ans, en RPA, attente CHSLD
@@ -70,6 +83,8 @@ set local role authenticated;
 update public.users set display_name = 'Denis' where id = auth.uid();
 select public.grant_consent('privacy_policy', '2026-10-26');
 select public.grant_consent('health_information', '2026-10-26');
+select public.grant_consent('pilot_evaluation', '2026-10-26');
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (date_trunc('week', (now() at time zone 'America/Toronto')::date)::date, 3, 5);
 select public.create_care_file('Papa') as file_b \gset
 select public.record_file_consent(:'file_b', 'care_recipient_data', '2026-10-27', 'care_recipient_signed_form', 'person_consents');
 insert into public.care_recipients
@@ -103,5 +118,18 @@ insert into public.appointments (care_file_id, title, starts_at, location, compa
 values (:'file_b', 'Visite de la travailleuse sociale', (((now() at time zone 'America/Toronto')::date + 2)::timestamp + interval '14:00') at time zone 'America/Toronto', 'Résidence fictive Les Érables', auth.uid());
 insert into public.journal_entries (care_file_id, body)
 values (:'file_b', 'Papa a demandé des nouvelles de sa place en CHSLD.');
+insert into public.support_requests (care_file_id, origin, contact_name, preferred_contact, phone, preferred_times, message)
+values (:'file_b', 'button', 'Denis', 'phone', '555 010-0003', 'En semaine, après 17 h',
+    'J’aimerais comprendre les démarches pour la place en CHSLD.');
+
+-- ------------------------------------------------------------------------------- équipe Relais
+select set_config('request.jwt.claims', '{"sub":"de000000-0000-4000-8000-00000000000d","role":"authenticated","aal":"aal1","email":"intervenante.demo@example.test"}', true);
+set local role authenticated;
+update public.users set display_name = 'Nadia' where id = auth.uid();
+select public.grant_consent('privacy_policy', '2026-10-26');
+select set_config('request.jwt.claims', '{"sub":"de000000-0000-4000-8000-00000000000e","role":"authenticated","aal":"aal1","email":"admin.demo@example.test"}', true);
+set local role authenticated;
+update public.users set display_name = 'Ada' where id = auth.uid();
+select public.grant_consent('privacy_policy', '2026-10-26');
 
 reset role;

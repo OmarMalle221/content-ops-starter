@@ -149,7 +149,7 @@ select tst.ok('RPC non exécutables par anon',
 \echo '== données de référence'
 \o /dev/null
 
-select tst.eq('versions de consentement publiées', (select count(*) from public.consent_texts), 6);
+select tst.eq('versions de consentement publiées', (select count(*) from public.consent_texts), 7);
 select tst.ok('ressources d''urgence présentes',
     exists (select 1 from public.resources where slug = 'urgence-911' and category = 'emergency' and phone = '911')
     and exists (select 1 from public.resources where slug = 'ligne-9-8-8' and category = 'crisis_line'));
@@ -184,7 +184,7 @@ select tst.eq('profils créés par le déclencheur', (select count(*) from publi
 begin;
 set local role anon;
 select tst.eq('anon lit les ressources actives', tst.cnt('select 1 from public.resources'), 7);
-select tst.eq('anon lit les versions de consentement', tst.cnt('select 1 from public.consent_texts'), 6);
+select tst.eq('anon lit les versions de consentement', tst.cnt('select 1 from public.consent_texts'), 7);
 select tst.denied('anon ne lit pas users', 'select 1 from public.users');
 select tst.denied('anon ne lit pas consents', 'select 1 from public.consents');
 select tst.denied('anon ne lit pas access_log', 'select 1 from public.access_log');
@@ -330,7 +330,7 @@ begin;
 select set_config('request.jwt.claims', '{"sub":"a0000000-0000-4000-8000-00000000000a","role":"authenticated","aal":"aal1"}', true);
 set local role authenticated;
 select public.export_my_data() as export \gset
-select tst.ok('export : format', (:'export'::jsonb ->> 'format') = 'relais-export/1');
+select tst.ok('export : format', (:'export'::jsonb ->> 'format') = 'relais-export/2');
 select tst.ok('export : courriel du compte', (:'export'::jsonb #>> '{account,email}') = 'aidante.a@example.test');
 -- politique (2 versions), courriels, santé retiré puis accordé de nouveau = 5 lignes.
 select tst.eq('export : consentements de A seulement', jsonb_array_length(:'export'::jsonb -> 'consents'), 5);
@@ -1304,6 +1304,270 @@ select tst.eq('dossier « Papi » entièrement effacé', (
     + (select count(*) from public.appointments where care_file_id = :'file4')
     + (select count(*) from public.appointment_questions where care_file_id = :'file4')
     + (select count(*) from public.journal_entries where care_file_id = :'file4')), 0);
+
+\o
+\echo '== étape 6 : structure'
+\o /dev/null
+
+select tst.ok('bilan, évaluation et notes internes : rien pour anon',
+    not has_table_privilege('anon', 'public.caregiver_checkins', 'SELECT')
+    and not has_table_privilege('anon', 'public.pilot_feedback', 'SELECT')
+    and not has_table_privilege('anon', 'public.support_request_notes', 'SELECT'));
+select tst.ok('demande : état, intervenante et dates jamais écrits par le demandeur',
+    not has_column_privilege('authenticated', 'public.support_requests', 'status', 'INSERT')
+    and not has_column_privilege('authenticated', 'public.support_requests', 'requester_id', 'INSERT')
+    and not has_column_privilege('authenticated', 'public.support_requests', 'email', 'INSERT')
+    and not has_column_privilege('authenticated', 'public.support_requests', 'notified_at', 'UPDATE')
+    and not has_column_privilege('authenticated', 'public.support_requests', 'message', 'UPDATE'));
+select tst.ok('avis aux intervenantes : réservé au serveur',
+    not has_function_privilege('authenticated', 'public.claim_support_notification(uuid,uuid)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.claim_support_notification(uuid,uuid)', 'EXECUTE'));
+
+\o
+\echo '== étape 6 : bilan de la semaine (privé)'
+\o /dev/null
+
+\set file5 'f5000000-0000-4000-8000-000000000005'
+insert into public.care_files (id, owner_id, title) values (:'file5', 'c0000000-0000-4000-8000-00000000000c', 'Tante');
+insert into public.care_file_members (care_file_id, user_id, role, access_level) values
+    (:'file5', 'd0000000-0000-4000-8000-00000000000d', 'family_member', 'full'),
+    (:'file5', 'f0000000-0000-4000-8000-00000000000f', 'relais_worker', 'read_only');
+insert into public.consents (user_id, care_file_id, consent_type, text_version, granted_by, legal_basis)
+    values ('c0000000-0000-4000-8000-00000000000c', :'file5', 'care_recipient_data', '2026-10-27',
+            'care_recipient_signed_form', 'person_consents');
+select date_trunc('week', (now() at time zone 'America/Toronto'))::date as monday \gset
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.denied('bilan gardé seulement avec son consentement',
+    format($$insert into public.caregiver_checkins (week_start, fatigue, overwhelm, isolation) values (%L, 4, 4, 3)$$, :'monday'));
+select public.grant_consent('caregiver_checkin', '2026-10-31');
+insert into public.caregiver_checkins (user_id, week_start, fatigue, overwhelm, isolation)
+    values ('d0000000-0000-4000-8000-00000000000d', :'monday', 5, 4, 3);
+select tst.ok('bilan au nom de son auteur', (select user_id = auth.uid() from public.caregiver_checkins));
+select tst.fails('semaine commençant un lundi', format($$insert into public.caregiver_checkins (week_start, fatigue, overwhelm, isolation)
+    values (%L, 1, 1, 1)$$, :'monday'::date + 1), '23514');
+select tst.fails('réponses de 1 à 5', format($$update public.caregiver_checkins set fatigue = 6$$), '23514');
+update public.caregiver_checkins set fatigue = 4;
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"d0000000-0000-4000-8000-00000000000d","role":"authenticated","email":"denis@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('bilan invisible à la famille', tst.cnt('select 1 from public.caregiver_checkins'), 0);
+select tst.eq('bilan non modifiable par la famille', tst.affected('update public.caregiver_checkins set fatigue = 1'), 0);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000f","role":"authenticated","email":"intervenante.w@example.test","aal":"aal2"}', true);
+set local role authenticated;
+select tst.eq('bilan invisible aux intervenantes', tst.cnt('select 1 from public.caregiver_checkins'), 0);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","email":"admin.x@example.test","aal":"aal2"}', true);
+set local role authenticated;
+select tst.eq('bilan invisible à l''admin', tst.cnt('select 1 from public.caregiver_checkins'), 0);
+select tst.ok('mesures du pilote sans le bilan', position('fatigue' in public.pilot_metrics()::text) = 0
+    and position('isolation' in public.pilot_metrics()::text) = 0);
+commit;
+
+-- Nouvelle version du texte : le bilan gardé reste. Retrait : il est effacé.
+insert into public.consent_texts (consent_type, version, sha256, published_on)
+    values ('caregiver_checkin', '2026-12-01', repeat('a', 64), '2026-12-01');
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select public.grant_consent('caregiver_checkin', '2026-12-01');
+commit;
+select tst.eq('nouvelle version acceptée : bilan conservé', (select count(*) from public.caregiver_checkins), 1);
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select public.revoke_consent((select id from public.consents where consent_type = 'caregiver_checkin' and revoked_at is null));
+commit;
+select tst.eq('consentement retiré : bilan effacé', (select count(*) from public.caregiver_checkins), 0);
+delete from public.consents where consent_type = 'caregiver_checkin';
+delete from public.consent_texts where consent_type = 'caregiver_checkin' and version = '2026-12-01';
+
+\o
+\echo '== étape 6 : demandes d''intervenante'
+\o /dev/null
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+insert into public.support_requests (care_file_id, origin, contact_name, preferred_contact, phone, preferred_times, message)
+    values (:'file5', 'button', ' Claire ', 'phone', '514 555-0101', 'En soirée', 'Je suis épuisée.');
+insert into public.support_requests (origin, contact_name, preferred_contact)
+    values ('distress_screen', 'Claire', 'email');
+select tst.ok('demandes au nom de la personne, état « nouvelle »', (
+    select bool_and(requester_id = auth.uid() and status = 'new' and assigned_worker_id is null) and count(*) = 2
+    from public.support_requests));
+select tst.ok('adresse du compte copiée seulement si choisie', (
+    select bool_and(case preferred_contact when 'email' then email = 'claire@example.test' else email is null end)
+    from public.support_requests));
+select tst.ok('nom nettoyé', (select bool_and(contact_name = 'Claire') from public.support_requests));
+select tst.denied('pas d''état choisi par le demandeur', $$insert into public.support_requests (origin, contact_name, preferred_contact, status)
+    values ('button', 'X', 'email', 'assigned')$$);
+select tst.fails('téléphone exigé pour un rappel', $$insert into public.support_requests (origin, contact_name, preferred_contact)
+    values ('button', 'X', 'phone')$$, '23514');
+select tst.denied('dossier d''une autre famille refusé', $$insert into public.support_requests (care_file_id, origin, contact_name, preferred_contact)
+    values (gen_random_uuid(), 'button', 'X', 'email')$$);
+select tst.eq('le demandeur ne change pas l''état', tst.affected($$update public.support_requests set status = 'closed'$$), 0);
+commit;
+select id as req_phone from public.support_requests where preferred_contact = 'phone' \gset
+select id as req_email from public.support_requests where preferred_contact = 'email' \gset
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"d0000000-0000-4000-8000-00000000000d","role":"authenticated","email":"denis@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('famille : demandes d''une autre personne invisibles', tst.cnt('select 1 from public.support_requests'), 0);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000f","role":"authenticated","email":"intervenante.w@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('intervenante sans MFA : rien', tst.cnt('select 1 from public.support_requests'), 0);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","email":"admin.x@example.test","aal":"aal2"}', true);
+set local role authenticated;
+select tst.eq('admin : pas le tableau des intervenantes', tst.cnt('select 1 from public.support_requests'), 0);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"f0000000-0000-4000-8000-00000000000f","role":"authenticated","email":"intervenante.w@example.test","aal":"aal2"}', true);
+set local role authenticated;
+select tst.eq('intervenante (MFA) : tableau complet', tst.cnt('select 1 from public.support_requests'), 2);
+select tst.fails('une demande ne se confie pas à quelqu''un d''autre', format($$update public.support_requests
+    set assigned_worker_id = '90000000-0000-4000-8000-000000000009', status = 'assigned' where id = %L$$, :'req_phone'), '42501');
+update public.support_requests set status = 'assigned' where id = :'req_phone';
+select tst.ok('prise en charge : intervenante et date notées', (
+    select assigned_worker_id = auth.uid() and assigned_at is not null from public.support_requests where id = :'req_phone'));
+insert into public.support_request_notes (support_request_id, body, author_id)
+    values (:'req_phone', 'Rappel fait, rencontre prévue jeudi.', 'c0000000-0000-4000-8000-00000000000c');
+select tst.ok('note interne signée par l''intervenante', (select author_id = auth.uid() from public.support_request_notes));
+select tst.fails('pas de retour à « nouvelle »', format($$update public.support_requests set status = 'new' where id = %L$$, :'req_phone'), '22023');
+update public.support_requests set status = 'closed' where id = :'req_phone';
+select tst.ok('fermeture : qui et quand', (
+    select closed_at is not null and closed_by = auth.uid() from public.support_requests where id = :'req_phone'));
+select tst.denied('intervenante : le message du demandeur ne se modifie pas', format($$update public.support_requests set message = 'X' where id = %L$$, :'req_phone'));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.eq('notes internes invisibles au demandeur', tst.cnt('select 1 from public.support_request_notes'), 0);
+select tst.denied('le demandeur n''écrit pas de note', format($$insert into public.support_request_notes (support_request_id, body) values (%L, 'X')$$, :'req_phone'));
+select public.cancel_support_request(:'req_email');
+select tst.ok('le demandeur retire sa demande', (
+    select status = 'closed' and closed_by = auth.uid() from public.support_requests where id = :'req_email'));
+select tst.fails('demande déjà fermée', format('select public.cancel_support_request(%L)', :'req_email'), '22023');
+select tst.ok('export personnel : demandes sans notes internes', (
+    select jsonb_array_length(e -> 'support_requests') = 2 and position('Rappel fait' in e::text) = 0
+    from (select public.export_my_data() as e) x));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select tst.ok('avis : une seule fois, adresses des intervenantes, sans contenu', (
+    select n ->> 'origin' = 'button' and n -> 'emails' = '["intervenante.w@example.test"]'::jsonb
+       and position('épuisée' in n::text) = 0 and position('Claire' in n::text) = 0
+    from (select public.claim_support_notification(:'req_phone', 'c0000000-0000-4000-8000-00000000000c') as n) x));
+select tst.ok('avis : pas deux fois', public.claim_support_notification(:'req_phone', 'c0000000-0000-4000-8000-00000000000c') is null);
+select tst.ok('avis : seulement pour le demandeur', public.claim_support_notification(:'req_email', 'd0000000-0000-4000-8000-00000000000d') is null);
+commit;
+
+\o
+\echo '== étape 6 : évaluation du pilote'
+\o /dev/null
+
+-- E possède un dossier sans avoir accepté l'évaluation : ses programmes ne sont pas comptés.
+\set file6 'f6000000-0000-4000-8000-000000000006'
+insert into public.care_files (id, owner_id, title) values (:'file6', 'e0000000-0000-4000-8000-00000000000e', 'Oncle');
+select id as p_one from public.programs order by sort_order limit 1 \gset
+select id as p_two from public.programs order by sort_order offset 1 limit 1 \gset
+insert into public.care_file_programs (care_file_id, program_id, match_level, identified_at) values
+    (:'file5', :'p_one', 'likely', now() - interval '10 days'),
+    (:'file5', :'p_two', 'possible', now() - interval '10 days'),
+    (:'file6', :'p_one', 'likely', now());
+update public.care_file_programs set status = 'in_progress' where care_file_id = :'file5' and program_id = :'p_one';
+update public.care_file_programs set requested_at = identified_at + interval '4 days' where care_file_id = :'file5' and program_id = :'p_one';
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.denied('évaluation seulement avec son consentement',
+    format($$insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (%L, 2, 4)$$, :'monday'));
+select public.grant_consent('pilot_evaluation', '2026-10-26');
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (:'monday', 2.5, 4);
+select tst.fails('heures par demi-heure', format($$update public.pilot_feedback set hours_saved = 2.3$$), '23514');
+select tst.fails('au moins une réponse', format($$insert into public.pilot_feedback (week_start) values (%L)$$, :'monday'::date - 7), '23514');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","email":"admin.x@example.test","aal":"aal2"}', true);
+set local role authenticated;
+select tst.eq('admin : aucune réponse individuelle', tst.cnt('select 1 from public.pilot_feedback'), 0);
+select tst.ok('moins de 3 répondants : moyennes masquées', (
+    select (m #>> '{feedback,suppressed}')::boolean and (m #> '{feedback,hours_saved_avg}') is null
+    from (select public.pilot_metrics() as m) x));
+select tst.ok('programmes comptés seulement chez qui a accepté l''évaluation', (
+    select (m #>> '{programs,identified}')::int = 2 and (m #>> '{programs,requested}')::int = 1
+       and (m #>> '{programs,median_days_to_request}')::numeric = 4
+    from (select public.pilot_metrics() as m) x));
+select tst.ok('demandes : nombres et délai de prise en charge', (
+    select (m #>> '{support,total}')::int = 2 and (m #>> '{support,closed}')::int = 2
+       and (m #>> '{support,from_distress_screen}')::int = 1 and (m #> '{support,median_hours_to_assignment}') is not null
+    from (select public.pilot_metrics() as m) x));
+commit;
+
+-- Deux autres répondants : les moyennes apparaissent.
+insert into public.consents (user_id, consent_type, text_version) values
+    ('d0000000-0000-4000-8000-00000000000d', 'pilot_evaluation', '2026-10-26'),
+    ('70000000-0000-4000-8000-000000000007', 'pilot_evaluation', '2026-10-26');
+begin;
+select set_config('request.jwt.claims', '{"sub":"d0000000-0000-4000-8000-00000000000d","role":"authenticated","email":"denis@example.test","aal":"aal1"}', true);
+set local role authenticated;
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (:'monday', 1, 5);
+select tst.eq('évaluation : chacun voit seulement la sienne', tst.cnt('select 1 from public.pilot_feedback'), 1);
+commit;
+begin;
+select set_config('request.jwt.claims', '{"sub":"70000000-0000-4000-8000-000000000007","role":"authenticated","email":"gilles@example.test","aal":"aal1"}', true);
+set local role authenticated;
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (:'monday', 3, 3);
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","email":"admin.x@example.test","aal":"aal2"}', true);
+set local role authenticated;
+select tst.ok('3 répondants : moyennes regroupées', (
+    select not (m #>> '{feedback,suppressed}')::boolean and (m #>> '{feedback,hours_saved_avg}')::numeric = 2.2
+       and (m #>> '{feedback,satisfaction_avg}')::numeric = 4.0 and (m #>> '{feedback,satisfaction,5}')::int = 1
+    from (select public.pilot_metrics() as m) x));
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"90000000-0000-4000-8000-000000000009","role":"authenticated","email":"admin.x@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('admin sans MFA : pas de mesures', 'select public.pilot_metrics()', '42501');
+commit;
+begin;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-00000000000c","role":"authenticated","email":"claire@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select tst.fails('membre : pas de mesures', 'select public.pilot_metrics()', '42501');
+commit;
+
+begin;
+select set_config('request.jwt.claims', '{"sub":"70000000-0000-4000-8000-000000000007","role":"authenticated","email":"gilles@example.test","aal":"aal1"}', true);
+set local role authenticated;
+select public.revoke_consent((select id from public.consents where consent_type = 'pilot_evaluation' and user_id = auth.uid()));
+commit;
+select tst.eq('évaluation retirée : réponses effacées', (select count(*) from public.pilot_feedback), 2);
 
 \o
 \echo 'RLS OK'

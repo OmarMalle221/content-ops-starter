@@ -1,11 +1,15 @@
+import { Link } from 'react-router';
 import { useHelpResources } from '../../app/queries';
-import { Notice, PageTitle } from '../../components/ui';
+import { useSession } from '../../app/session';
+import { buttonClass, Notice, PageTitle } from '../../components/ui';
 import { fr } from '../../i18n/fr';
+import { support as ts } from '../../i18n/support.fr';
 import { HelpResourceList } from './HelpResourceList';
 
 /** Page publique, accessible sans connexion depuis l'en-tête de chaque page. */
 export function HelpPage() {
     const resources = useHelpResources();
+    const { session } = useSession();
     return (
         <div className="flex flex-col gap-5">
             <PageTitle>{fr.help.title}</PageTitle>
@@ -27,6 +31,17 @@ export function HelpPage() {
                 <p>{fr.help.caregiverText}</p>
                 <HelpResourceList resources={resources} categories={['caregiver_support', 'respite', 'elder_abuse']} headingLevel="h3" />
             </section>
+            {session && (
+                <section aria-labelledby="worker-title" className="flex flex-col gap-3">
+                    <h2 id="worker-title" className="text-2xl font-bold">
+                        {ts.requestTitle}
+                    </h2>
+                    <p>{ts.homeSupportText}</p>
+                    <Link to="/parler-a-une-intervenante" className={buttonClass('secondary', 'self-start')}>
+                        {ts.distressAsk}
+                    </Link>
+                </section>
+            )}
         </div>
     );
 }

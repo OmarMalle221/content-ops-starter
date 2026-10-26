@@ -125,7 +125,9 @@ const { FAMILY_A, FAMILY_B } = await import('../tests/support/families.ts');
 const USERS = {
     claire: { id: 'de000000-0000-4000-8000-00000000000a', email: 'claire.demo@example.test', name: 'Claire' },
     marc: { id: 'de000000-0000-4000-8000-00000000000b', email: 'marc.demo@example.test', name: 'Marc' },
-    denis: { id: 'de000000-0000-4000-8000-00000000000c', email: 'denis.demo@example.test', name: 'Denis' }
+    denis: { id: 'de000000-0000-4000-8000-00000000000c', email: 'denis.demo@example.test', name: 'Denis' },
+    nadia: { id: 'de000000-0000-4000-8000-00000000000d', email: 'intervenante.demo@example.test', name: 'Nadia' },
+    ada: { id: 'de000000-0000-4000-8000-00000000000e', email: 'admin.demo@example.test', name: 'Ada' }
 };
 
 const actAs = (user) =>
@@ -157,13 +159,14 @@ const setStatus = (fileVar, slug, status, notes) =>
 
 // Dates relatives au jour de la démonstration (heure du Québec).
 const TODAY = "(now() at time zone 'America/Toronto')::date";
+const MONDAY = `date_trunc('week', ${TODAY})::date`;
 const dayAt = (days, time) => `((${TODAY} + ${days})::timestamp + interval '${time}') at time zone 'America/Toronto'`;
 
 const fileConsent = (fileVar) =>
     `select public.record_file_consent(:'${fileVar}', 'care_recipient_data', ${q(consentTexts.care_recipient_data.version)}, 'care_recipient_signed_form', 'person_consents');`;
 
 function demoFamiliesSql() {
-    const { claire, marc, denis } = USERS;
+    const { claire, marc, denis, nadia, ada } = USERS;
     return `-- FICHIER GÉNÉRÉ par scripts/generate-reference-sql.mjs à partir de tests/support/families.ts, des fiches
 -- (src/content/programs.fr.json) et du moteur de règles. Ne pas modifier.
 --
@@ -173,15 +176,24 @@ function demoFamiliesSql() {
 --   Famille A : ${claire.email} (aidante principale de Louise, 82 ans, à domicile)
 --               ${marc.email} (son frère, lecture seule)
 --   Famille B : ${denis.email} (aidant principal de Roger, 79 ans, en RPA, en attente de CHSLD)
+--   Équipe    : ${nadia.email} (intervenante), ${ada.email} (admin) ; code TOTP 654321
 -- Appliqué par : RELAIS_DEMO_SEED=1 bash scripts/test-db.sh --serve node tests/e2e/fake-supabase.mjs
 
 insert into auth.users (id, email) values
     (${q(claire.id)}, ${q(claire.email)}),
     (${q(marc.id)}, ${q(marc.email)}),
-    (${q(denis.id)}, ${q(denis.email)});
+    (${q(denis.id)}, ${q(denis.email)}),
+    (${q(nadia.id)}, ${q(nadia.email)}),
+    (${q(ada.id)}, ${q(ada.email)});
+update public.users set app_role = 'relais_worker' where id = ${q(nadia.id)};
+update public.users set app_role = 'admin' where id = ${q(ada.id)};
 
 -- ------------------------------------------------------------------- famille A : Louise, 82 ans
-${welcome(claire, ['privacy_policy', 'health_information'])}
+${welcome(claire, ['privacy_policy', 'health_information', 'caregiver_checkin', 'pilot_evaluation'])}
+insert into public.caregiver_checkins (week_start, fatigue, overwhelm, isolation) values
+    (${MONDAY} - 14, 3, 3, 2),
+    (${MONDAY} - 7, 4, 4, 3);
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (${MONDAY}, 2.5, 4);
 select public.create_care_file('Maman') as file_a \\gset
 ${fileConsent('file_a')}
 insert into public.care_recipients (care_file_id, first_name, last_name, birth_year, living_setting)
@@ -210,11 +222,13 @@ insert into public.journal_entries (care_file_id, body)
 values (:'file_a', 'Visite de dimanche : Maman était de bonne humeur et a bien mangé.');
 select public.create_invitation(:'file_a', ${q(marc.email)}, 'family_member', 'read_only') as invite_a \\gset
 
-${welcome(marc, ['privacy_policy'])}
+${welcome(marc, ['privacy_policy', 'pilot_evaluation'])}
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (${MONDAY}, 0.5, 3);
 select public.accept_invitation(:'invite_a');
 
 -- ------------------------------------------------- famille B : Roger, 79 ans, en RPA, attente CHSLD
-${welcome(denis, ['privacy_policy', 'health_information'])}
+${welcome(denis, ['privacy_policy', 'health_information', 'pilot_evaluation'])}
+insert into public.pilot_feedback (week_start, hours_saved, satisfaction) values (${MONDAY}, 3, 5);
 select public.create_care_file('Papa') as file_b \\gset
 ${fileConsent('file_b')}
 insert into public.care_recipients
@@ -237,6 +251,13 @@ insert into public.appointments (care_file_id, title, starts_at, location, compa
 values (:'file_b', 'Visite de la travailleuse sociale', ${dayAt(2, '14:00')}, 'Résidence fictive Les Érables', auth.uid());
 insert into public.journal_entries (care_file_id, body)
 values (:'file_b', 'Papa a demandé des nouvelles de sa place en CHSLD.');
+insert into public.support_requests (care_file_id, origin, contact_name, preferred_contact, phone, preferred_times, message)
+values (:'file_b', 'button', 'Denis', 'phone', '555 010-0003', 'En semaine, après 17 h',
+    'J’aimerais comprendre les démarches pour la place en CHSLD.');
+
+-- ------------------------------------------------------------------------------- équipe Relais
+${welcome(nadia, ['privacy_policy'])}
+${welcome(ada, ['privacy_policy'])}
 
 reset role;
 `;

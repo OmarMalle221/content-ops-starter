@@ -1,11 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useHelpResources } from '../../app/queries';
+import { useSession } from '../../app/session';
 import { Button } from '../../components/ui';
 import { fr } from '../../i18n/fr';
+import { support as ts } from '../../i18n/support.fr';
 import type { Resource } from '../../lib/api';
 import { logEvent } from '../../lib/log';
 import type { DistressResult } from '../../shared/distress/detect';
 import { HelpResourceList } from '../help/HelpResourceList';
+import { SupportRequestForm } from '../support/SupportRequestForm';
 
 interface DistressContextValue {
     /** Affiche immédiatement l'écran de ressources d'urgence pour ce résultat de détection. */
@@ -53,8 +56,28 @@ function supportsModalDialog(): boolean {
     return typeof HTMLDialogElement !== 'undefined' && typeof HTMLDialogElement.prototype.showModal === 'function';
 }
 
+/** Règle no 2 : proposer une intervenante, sans quitter l'écran (la saisie en cours n'est pas perdue). */
+function WorkerCallback() {
+    const [asking, setAsking] = useState(false);
+    return (
+        <section aria-labelledby="distress-worker" className="flex flex-col gap-3 rounded-xl border-2 border-line bg-surface p-4">
+            <h3 id="distress-worker" className="text-xl font-bold">
+                {ts.distressTitle}
+            </h3>
+            {asking ? (
+                <SupportRequestForm origin="distress_screen" compact />
+            ) : (
+                <Button variant="secondary" className="self-start" onClick={() => setAsking(true)}>
+                    {ts.distressAsk}
+                </Button>
+            )}
+        </section>
+    );
+}
+
 function DistressDialog({ result, onClose }: { result: DistressResult; onClose: () => void }) {
     const ref = useRef<HTMLDialogElement>(null);
+    const { session } = useSession();
     const resources = useHelpResources();
     const { heading, order } = presentation(result);
     const [modal] = useState(supportsModalDialog);
@@ -88,6 +111,7 @@ function DistressDialog({ result, onClose }: { result: DistressResult; onClose: 
                 </h2>
                 <p id="distress-body">{fr.distress.body}</p>
                 <HelpResourceList resources={resources} categories={order} headingLevel="h3" />
+                {session && <WorkerCallback />}
                 <p className="text-muted">{fr.distress.notEmergency}</p>
                 <Button variant="secondary" onClick={onClose}>
                     {fr.distress.close}

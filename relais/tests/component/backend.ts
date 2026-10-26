@@ -7,6 +7,7 @@ import type { FileConsent, Membership } from '../../src/lib/careFiles';
 import type { CareDocument, Extraction, MedicationMention, TimelineEvent } from '../../src/lib/documents';
 import type { FileProgram, Program } from '../../src/lib/benefits';
 import type { Appointment, AppointmentQuestion, JournalEntry, Task } from '../../src/lib/coordination';
+import type { Checkin, PilotFeedback, PilotMetrics, SupportNote, SupportRequest } from '../../src/lib/support';
 import type { BenefitAnswers } from '../../src/shared/benefits/engine';
 import programsJson from '../../src/content/programs.fr.json';
 import type { ConsentRecord, UserConsentType } from '../../src/lib/consents';
@@ -58,8 +59,20 @@ const emptyFile = (): FileState => ({
     journal: []
 });
 
+interface SupportState {
+    checkins: Checkin[];
+    myRequests: SupportRequest[];
+    board: SupportRequest[];
+    notes: SupportNote[];
+    feedback: PilotFeedback[];
+    metrics: PilotMetrics | null;
+}
+
+const emptySupport = (): SupportState => ({ checkins: [], myRequests: [], board: [], notes: [], feedback: [], metrics: null });
+
 interface BackendState {
     session: Session | null;
+    support: SupportState;
     profile: Profile;
     consents: ConsentRecord[];
     resources: Resource[];
@@ -70,6 +83,7 @@ interface BackendState {
 
 export const backend: BackendState = {
     session: null,
+    support: emptySupport(),
     profile: { id: USER_ID, display_name: null, app_role: 'member' },
     consents: [],
     resources: [],
@@ -90,6 +104,8 @@ export function resetBackend(): void {
     for (const fn of Object.values(documentsApi)) fn.mockClear();
     for (const fn of Object.values(benefitsApi)) fn.mockClear();
     for (const fn of Object.values(coordinationApi)) fn.mockClear();
+    for (const fn of Object.values(supportApi)) fn.mockClear();
+    backend.support = emptySupport();
     backend.programs = catalog();
 }
 
@@ -119,7 +135,7 @@ export const api = {
         if (backend.failResources) throw new Error('réseau indisponible');
         return [...backend.resources];
     }),
-    exportMyData: vi.fn(async () => ({ format: 'relais-export/1' })),
+    exportMyData: vi.fn(async () => ({ format: 'relais-export/2' })),
     deleteMyAccount: vi.fn(async () => undefined),
     signOutLocally: vi.fn(async () => undefined)
 };
@@ -317,4 +333,41 @@ export const coordinationApi = {
     addJournalEntry: vi.fn(async () => undefined),
     updateJournalEntry: vi.fn(async () => undefined),
     deleteJournalEntry: vi.fn(async () => undefined)
+};
+
+// ------------------------------------------------------------------------------------------ étape 6
+export function supportRequest(overrides: Partial<SupportRequest> = {}): SupportRequest {
+    return {
+        id: id(),
+        requester_id: USER_ID,
+        care_file_id: null,
+        origin: 'button',
+        contact_name: 'Claire',
+        preferred_contact: 'phone',
+        phone: '514 555-0101',
+        email: null,
+        preferred_times: 'En soirée',
+        message: 'Je suis épuisée.',
+        status: 'new',
+        assigned_worker_id: null,
+        assigned_at: null,
+        closed_at: null,
+        created_at: '2026-10-30T14:00:00Z',
+        ...overrides
+    };
+}
+
+export const supportApi = {
+    listMyCheckins: vi.fn(async () => [...backend.support.checkins]),
+    saveCheckin: vi.fn(async () => undefined),
+    createSupportRequest: vi.fn(async () => 'e5000000-0000-4000-8000-000000000001'),
+    listMySupportRequests: vi.fn(async () => [...backend.support.myRequests]),
+    cancelSupportRequest: vi.fn(async () => undefined),
+    listSupportRequests: vi.fn(async () => [...backend.support.board]),
+    setSupportStatus: vi.fn(async () => undefined),
+    listSupportNotes: vi.fn(async () => [...backend.support.notes]),
+    addSupportNote: vi.fn(async () => undefined),
+    listMyFeedback: vi.fn(async () => [...backend.support.feedback]),
+    saveFeedback: vi.fn(async () => undefined),
+    getPilotMetrics: vi.fn(async () => backend.support.metrics as PilotMetrics)
 };

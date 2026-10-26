@@ -7,6 +7,7 @@
 //   delete-care-file   : suppression du dossier puis de tous ses fichiers dans Storage
 //   explain-program    : explication d'un programme tirée de la seule fiche (cache par version)
 //   draft-letter       : modèle de lettre à espaces réservés, tiré de la seule fiche (cache par version)
+//   notify-support     : avis aux intervenantes d'une nouvelle demande (courriel sans contenu, une fois)
 import { z } from 'zod';
 import {
     explanationOutputSchema,
@@ -18,6 +19,8 @@ import {
 } from '../../../src/shared/benefits/ai.ts';
 import { criteriaSchema } from '../../../src/shared/benefits/engine.ts';
 import { EXTRACTION_SCHEMA_VERSION } from '../../../src/shared/extraction/schema.ts';
+import { supportNotificationEmail, type SupportOrigin } from '../../../src/shared/support/email.ts';
+import type { EmailClient } from './email.ts';
 import { extractDocument, type AiCallRow, type ExtractionErrorCode, type ExtractionStart } from './extract.ts';
 import type { LlmClient, LlmResult } from './llm.ts';
 import { serverLog } from './log.ts';
@@ -53,6 +56,10 @@ export interface ServerContext {
     recordAiCall(row: AiCallRow): Promise<void>;
     llm: LlmClient | null;
     ocr: OcrClient | null;
+    /** Courriels (avis aux intervenantes) ; null si aucun fournisseur n'est configuré. */
+    email?: EmailClient | null;
+    /** Adresse de l'application, pour les liens des courriels. */
+    appUrl?: string;
 }
 
 export interface HandlerResponse {
@@ -300,11 +307,55 @@ export const handleDraftLetter: Handler = async (ctx, body) => {
     }
 };
 
+const notifyRequest = z.object({ request_id: z.uuid() });
+const claimedNotification = z.object({
+    origin: z.enum(['button', 'distress_screen', 'checkin']),
+    emails: z.array(z.string().min(3))
+});
+
+/**
+ * Avis aux intervenantes : réservé une seule fois par la base, pour le demandeur seulement ; le courriel ne
+ * contient que l'origine et le lien vers le tableau. Un échec d'envoi n'annule pas la demande : elle reste
+ * dans le tableau de suivi.
+ */
+export const handleNotifySupport: Handler = async (ctx, body) => {
+    const request = notifyRequest.safeParse(body);
+    if (!request.success) return badRequest;
+    let claimed: z.infer<typeof claimedNotification>;
+    try {
+        const raw = await ctx.serviceRpc<unknown>('claim_support_notification', {
+            p_request_id: request.data.request_id,
+            p_requester: ctx.userId
+        });
+        if (raw === null) return { status: 200, body: { status: 'already_notified' } };
+        claimed = claimedNotification.parse(raw);
+    } catch (error) {
+        return fromRpcError(error);
+    }
+    if (!ctx.email || !ctx.appUrl) {
+        serverLog('support_notify_failed', { code: 'email_not_configured' });
+        return { status: 200, body: { status: 'email_not_configured' } };
+    }
+    const message = supportNotificationEmail(claimed.origin as SupportOrigin, ctx.appUrl);
+    let sent = 0;
+    for (const to of claimed.emails) {
+        try {
+            await ctx.email.send({ to, ...message });
+            sent += 1;
+        } catch (error) {
+            serverLog('support_notify_failed', { errorName: error instanceof Error ? error.name : 'unknown' });
+        }
+    }
+    serverLog('support_notified', { count: sent });
+    return { status: 200, body: { status: 'sent', count: sent } };
+};
+
 export const HANDLERS: Record<string, Handler> = {
     'extract-document': handleExtractDocument,
     'get-document-url': handleDocumentUrl,
     'delete-document': handleDeleteDocument,
     'delete-care-file': handleDeleteCareFile,
     'explain-program': handleExplainProgram,
-    'draft-letter': handleDraftLetter
+    'draft-letter': handleDraftLetter,
+    'notify-support': handleNotifySupport
 };

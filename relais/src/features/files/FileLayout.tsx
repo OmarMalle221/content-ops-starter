@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router';
 import { buttonClass, Loading, Notice } from '../../components/ui';
 import { benefits as tbf } from '../../i18n/benefits.fr';
@@ -118,7 +118,9 @@ export function FileLayout() {
                     )}
                 </Notice>
             )}
-            <Outlet context={{ file: file.data, access } satisfies FileContext} />
+            <Suspense fallback={<Loading />}>
+                <Outlet context={{ file: file.data, access } satisfies FileContext} />
+            </Suspense>
         </div>
     );
 }

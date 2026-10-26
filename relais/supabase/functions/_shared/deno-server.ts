@@ -28,7 +28,17 @@ function corsHeaders(request: Request): Record<string, string> {
     };
 }
 
-export function serveHandler(handler: Handler, options: { llm?: boolean } = {}): void {
+/** Client de courriel (Amazon SES) si ses secrets sont configurés. */
+function emailClient(): SesEmailClient | null {
+    const accessKeyId = Deno.env.get('AWS_SES_ACCESS_KEY_ID');
+    const secretAccessKey = Deno.env.get('AWS_SES_SECRET_ACCESS_KEY');
+    const from = Deno.env.get('RELAIS_EMAIL_FROM');
+    return accessKeyId && secretAccessKey && from
+        ? new SesEmailClient({ accessKeyId, secretAccessKey, from, region: Deno.env.get('AWS_SES_REGION') })
+        : null;
+}
+
+export function serveHandler(handler: Handler, options: { llm?: boolean; email?: boolean } = {}): void {
     Deno.serve(async (request) => {
         const headers = corsHeaders(request);
         if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
@@ -97,7 +107,9 @@ export function serveHandler(handler: Handler, options: { llm?: boolean } = {}):
                     if (error) throw new RpcError(error.code ?? 'unknown');
                 },
                 llm: options.llm && apiKey ? new AnthropicLlmClient({ apiKey, model: Deno.env.get('ANTHROPIC_MODEL') }) : null,
-                ocr: null // Q3 : aucun OCR configuré pour le pilote
+                ocr: null, // Q3 : aucun OCR configuré pour le pilote
+                email: options.email ? emailClient() : null,
+                appUrl: Deno.env.get('RELAIS_APP_URL')
             };
 
             const body = await request.json().catch(() => null);
@@ -122,19 +134,13 @@ export function serveScheduled(handler: ScheduledHandler): void {
             const service = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), {
                 auth: { persistSession: false, autoRefreshToken: false }
             });
-            const accessKeyId = Deno.env.get('AWS_SES_ACCESS_KEY_ID');
-            const secretAccessKey = Deno.env.get('AWS_SES_SECRET_ACCESS_KEY');
-            const from = Deno.env.get('RELAIS_EMAIL_FROM');
             const response = await handler({
                 serviceRpc: async (fn, args) => {
                     const { data, error } = await service.rpc(fn, args);
                     if (error) throw new RpcError(error.code ?? 'unknown');
                     return data;
                 },
-                email:
-                    accessKeyId && secretAccessKey && from
-                        ? new SesEmailClient({ accessKeyId, secretAccessKey, from, region: Deno.env.get('AWS_SES_REGION') })
-                        : null,
+                email: emailClient(),
                 appUrl: env('RELAIS_APP_URL'),
                 now: () => new Date()
             });

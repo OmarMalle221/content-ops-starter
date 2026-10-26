@@ -1,7 +1,13 @@
 import consentTexts from '../content/consent-texts.fr.json';
 
 /** Consentements de portée utilisateur, dans l'ordre d'affichage. */
-export const USER_CONSENT_TYPES = ['privacy_policy', 'health_information', 'email_reminders', 'pilot_evaluation'] as const;
+export const USER_CONSENT_TYPES = [
+    'privacy_policy',
+    'health_information',
+    'email_reminders',
+    'pilot_evaluation',
+    'caregiver_checkin'
+] as const;
 export type UserConsentType = (typeof USER_CONSENT_TYPES)[number];
 
 export interface ConsentTextSection {

@@ -7,9 +7,11 @@
 -- document_extractions, medication_mentions, timeline_events, storage_deletion_queue, bucket `documents`,
 -- fonctions register_document … confirm_document) et étape 4 (programs, program_explanations,
 -- program_letter_templates, benefit_assessments, care_file_programs, program_checklist_items, contrôle
--- « aucun montant », versionnage des fiches, save_benefit_assessment) et étape 5 (tasks, appointments,
--- appointment_questions, journal_entries en zone « santé », reminder_deliveries, reminders_due). Pour ces
--- tables, la migration l'emporte sur ce fichier, qui décrit surtout la cible de l'étape 6. Les tests automatisés sont dans
+-- « aucun montant », versionnage des fiches, save_benefit_assessment), étape 5 (tasks, appointments,
+-- appointment_questions, journal_entries en zone « santé », reminder_deliveries, reminders_due) et étape 6
+-- (caregiver_checkins avec son consentement distinct, support_requests, support_request_notes,
+-- pilot_feedback, pilot_metrics). Les 6 étapes sont livrées : les migrations font foi ; ce fichier reste
+-- une vue d'ensemble lisible du schéma. Les tests automatisés sont dans
 -- supabase/tests/rls_test.sql ; ce fichier-ci s'applique sans erreur sur PostgreSQL 16 + shim Supabase.
 --
 -- Principes
@@ -43,6 +45,7 @@ create type public.consent_type as enum (
     'health_information',      -- collecte et usage de renseignements de santé (distinct)
     'email_reminders',         -- rappels par courriel
     'pilot_evaluation',        -- usage des réponses pour évaluer le pilote
+    'caregiver_checkin',       -- garder ses réponses au bilan de la semaine (étape 6)
     'care_recipient_data',     -- dossier : consentement de la personne aidée ou de son représentant
     'ai_document_processing'   -- dossier : envoi de documents pseudonymisés au fournisseur d'IA
 );
@@ -77,7 +80,7 @@ create type public.resource_category as enum (
     'elder_abuse', 'info'
 );
 create type public.support_origin as enum ('button', 'distress_screen', 'checkin');
-create type public.support_status as enum ('new', 'assigned', 'in_progress', 'closed');
+create type public.support_status as enum ('new', 'assigned', 'closed');
 create type public.ai_purpose as enum ('document_extraction', 'program_explanation', 'letter_draft');
 create type public.access_action as enum (
     'file_opened', 'document_uploaded', 'document_viewed', 'document_deleted', 'extraction_viewed',
@@ -519,17 +522,17 @@ create table public.resources (
     check ((verification_status = 'verified') = (verified_on is not null and verified_by is not null))
 );
 
--- Bilan hebdomadaire privé : visible par son auteur seulement (pas même par l'aidant principal).
+-- Bilan de la semaine : visible par son auteur SEULEMENT (ni la famille, ni les intervenantes, ni l'admin).
+-- Gardé seulement avec le consentement « caregiver_checkin » ; effacé quand il est retiré.
 create table public.caregiver_checkins (
-    id           uuid primary key default gen_random_uuid(),
-    user_id      uuid not null references public.users (id) on delete cascade,
-    week_start   date not null check (extract(isodow from week_start) = 1),
-    fatigue      smallint not null check (fatigue between 1 and 5),
-    overwhelm    smallint not null check (overwhelm between 1 and 5),
-    isolation    smallint not null check (isolation between 1 and 5),
-    score        smallint generated always as (fatigue + overwhelm + isolation) stored,
-    comment      text check (char_length(comment) <= 1000),
-    created_at   timestamptz not null default now(),
+    id         uuid primary key default gen_random_uuid(),
+    user_id    uuid not null references public.users (id) on delete cascade,
+    week_start date not null check (extract(isodow from week_start) = 1),
+    fatigue    smallint not null check (fatigue between 1 and 5),
+    overwhelm  smallint not null check (overwhelm between 1 and 5),
+    isolation  smallint not null check (isolation between 1 and 5),
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
     unique (user_id, week_start)
 );
 
@@ -538,38 +541,52 @@ create table public.support_requests (
     requester_id       uuid not null references public.users (id) on delete cascade,
     care_file_id       uuid references public.care_files (id) on delete set null,
     origin             public.support_origin not null,
-    contact_name       text not null check (char_length(contact_name) between 1 and 80),
+    contact_name       text not null check (char_length(btrim(contact_name)) between 1 and 80),
     preferred_contact  text not null check (preferred_contact in ('phone', 'email')),
     phone              text check (char_length(phone) <= 40),
+    email              text check (char_length(email) <= 254),  -- copiée du compte si choisie
     preferred_times    text check (char_length(preferred_times) <= 240),
     message            text check (char_length(message) <= 2000),
     status             public.support_status not null default 'new',
     assigned_worker_id uuid references public.users (id) on delete set null,
+    assigned_at        timestamptz,
+    closed_at          timestamptz,
+    closed_by          uuid references public.users (id) on delete set null,
+    notified_at        timestamptz,                             -- avis sans contenu aux intervenantes
     created_at         timestamptz not null default now(),
     updated_at         timestamptz not null default now(),
-    closed_at          timestamptz,
-    check (preferred_contact <> 'phone' or phone is not null)
+    check (preferred_contact <> 'phone' or coalesce(char_length(btrim(phone)), 0) >= 7),
+    check (status <> 'assigned' or assigned_worker_id is not null),
+    check ((status = 'closed') = (closed_at is not null))
 );
 create index support_requests_status on public.support_requests (status, created_at);
+create index support_requests_requester on public.support_requests (requester_id);
+create index support_requests_file on public.support_requests (care_file_id);
+create index support_requests_worker on public.support_requests (assigned_worker_id);
+create index support_requests_closed_by on public.support_requests (closed_by);
 
 create table public.support_request_notes (
     id                 uuid primary key default gen_random_uuid(),
     support_request_id uuid not null references public.support_requests (id) on delete cascade,
     author_id          uuid references public.users (id) on delete set null,
-    body               text not null check (char_length(body) between 1 and 2000),
+    body               text not null check (char_length(btrim(body)) between 1 and 2000),
     created_at         timestamptz not null default now()
 );
+create index support_request_notes_request on public.support_request_notes (support_request_id, created_at);
+create index support_request_notes_author on public.support_request_notes (author_id);
 
--- Mesures du pilote (consentement pilot_evaluation requis) : heures gagnées, satisfaction.
+-- Mesures du pilote (consentement pilot_evaluation) : 2 questions, sans commentaire libre. L'admin ne voit
+-- que des agrégats (pilot_metrics), masqués sous 3 répondants.
 create table public.pilot_feedback (
     id           uuid primary key default gen_random_uuid(),
     user_id      uuid not null references public.users (id) on delete cascade,
     week_start   date not null check (extract(isodow from week_start) = 1),
-    hours_saved  numeric(4, 1) check (hours_saved between 0 and 80),
+    hours_saved  numeric(3, 1) check (hours_saved between 0 and 80 and hours_saved * 2 = trunc(hours_saved * 2)),
     satisfaction smallint check (satisfaction between 1 and 5),
-    comment      text check (char_length(comment) <= 1000),
     created_at   timestamptz not null default now(),
-    unique (user_id, week_start)
+    updated_at   timestamptz not null default now(),
+    unique (user_id, week_start),
+    check (hours_saved is not null or satisfaction is not null)
 );
 
 -- -----------------------------------------------------------------------------------------------------
@@ -1039,10 +1056,13 @@ grant select, insert, update, delete on
     public.program_checklist_items, public.caregiver_checkins
     to authenticated;
 
-grant select, insert on public.support_requests to authenticated;
-grant update (status, assigned_worker_id, closed_at) on public.support_requests to authenticated;
+grant select on public.support_requests to authenticated;
+grant insert (care_file_id, origin, contact_name, preferred_contact, phone, preferred_times, message)
+    on public.support_requests to authenticated;
+grant update (status, assigned_worker_id) on public.support_requests to authenticated;
 grant select, insert on public.support_request_notes to authenticated;
-grant select, insert, update on public.pilot_feedback to authenticated;
+grant select, insert, delete on public.pilot_feedback to authenticated;
+grant update (hours_saved, satisfaction) on public.pilot_feedback to authenticated;
 grant select on public.access_log, public.ai_calls to authenticated;
 
 -- -----------------------------------------------------------------------------------------------------
@@ -1172,27 +1192,31 @@ create policy resources_admin_update on public.resources for update to authentic
     using (private.is_admin()) with check (private.is_admin());
 create policy resources_admin_delete on public.resources for delete to authenticated using (private.is_admin());
 
--- Bilan de l'aidant : strictement personnel (pas même visible par l'aidant principal ni les intervenantes).
-create policy checkins_own on public.caregiver_checkins for all to authenticated
-    using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+-- Bilan de l'aidant : strictement personnel, et gardé seulement avec son consentement distinct.
+create policy checkins_select on public.caregiver_checkins for select to authenticated
+    using (user_id = (select auth.uid()));
+create policy checkins_insert on public.caregiver_checkins for insert to authenticated
+    with check (user_id = (select auth.uid()) and private.user_consent_active('caregiver_checkin'));
+create policy checkins_delete on public.caregiver_checkins for delete to authenticated
+    using (user_id = (select auth.uid()));
 
 -- Demandes d'intervenante : le demandeur voit les siennes ; les intervenantes (MFA) voient le tableau.
 create policy support_select on public.support_requests for select to authenticated
     using (requester_id = (select auth.uid()) or private.is_relais_worker());
 create policy support_insert on public.support_requests for insert to authenticated
-    with check (requester_id = (select auth.uid()) and status = 'new' and assigned_worker_id is null);
+    with check (care_file_id is null or private.member_access(care_file_id) is not null);
 create policy support_update on public.support_requests for update to authenticated
     using (private.is_relais_worker()) with check (private.is_relais_worker());
 create policy support_notes_select on public.support_request_notes for select to authenticated
     using (private.is_relais_worker());
 create policy support_notes_insert on public.support_request_notes for insert to authenticated
-    with check (private.is_relais_worker() and author_id = (select auth.uid()));
+    with check (private.is_relais_worker());
 
-create policy pilot_feedback_own on public.pilot_feedback for all to authenticated
-    using (user_id = (select auth.uid()))
+-- Évaluation : chacun ses réponses ; aucune lecture individuelle par l'admin (agrégats : pilot_metrics).
+create policy pilot_feedback_select on public.pilot_feedback for select to authenticated
+    using (user_id = (select auth.uid()));
+create policy pilot_feedback_insert on public.pilot_feedback for insert to authenticated
     with check (user_id = (select auth.uid()) and private.user_consent_active('pilot_evaluation'));
-create policy pilot_feedback_admin on public.pilot_feedback for select to authenticated
-    using (private.is_admin());
 
 -- Journaux : le propriétaire voit le journal de son dossier ; chacun voit ses propres actions.
 create policy access_log_select on public.access_log for select to authenticated

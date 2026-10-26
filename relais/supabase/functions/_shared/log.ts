@@ -9,7 +9,9 @@ export const SERVER_LOG_EVENTS = [
     'storage_purge_failed',
     'function_error',
     'reminders_sent',
-    'reminder_failed'
+    'reminder_failed',
+    'support_notified',
+    'support_notify_failed'
 ] as const;
 export type ServerLogEvent = (typeof SERVER_LOG_EVENTS)[number];
 

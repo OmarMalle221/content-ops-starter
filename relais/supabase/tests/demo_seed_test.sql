@@ -22,8 +22,14 @@ where r.first_name = 'Louise' and c.owner_id = 'de000000-0000-4000-8000-00000000
 select c.id as file_b from public.care_files c join public.care_recipients r on r.care_file_id = c.id
 where r.first_name = 'Roger' and c.owner_id = 'de000000-0000-4000-8000-00000000000c' \gset
 
-select pg_temp.check('trois comptes nommés',
-    (select count(*) from public.users where id::text like 'de000000-%' and display_name in ('Claire', 'Marc', 'Denis')) = 3);
+select pg_temp.check('cinq comptes nommés, dont une intervenante et une admin',
+    (select count(*) from public.users where id::text like 'de000000-%' and display_name in ('Claire', 'Marc', 'Denis', 'Nadia', 'Ada')) = 5
+    and exists (select 1 from public.users where display_name = 'Nadia' and app_role = 'relais_worker')
+    and exists (select 1 from public.users where display_name = 'Ada' and app_role = 'admin'));
+select pg_temp.check('bilan de Claire (2 semaines), 3 réponses d''évaluation, 1 demande d''intervenante',
+    (select count(*) from public.caregiver_checkins where user_id = 'de000000-0000-4000-8000-00000000000a') = 2
+    and (select count(*) from public.pilot_feedback where user_id::text like 'de000000-%') = 3
+    and (select count(*) from public.support_requests where requester_id::text like 'de000000-%' and status = 'new') = 1);
 select pg_temp.check('Marc, membre en lecture seule du dossier de Louise',
     exists (select 1 from public.care_file_members where care_file_id = :'file_a'
             and user_id = 'de000000-0000-4000-8000-00000000000b' and access_level = 'read_only'));
@@ -69,6 +75,8 @@ select pg_temp.check('Marc ne voit pas le dossier de Roger', (select count(*) fr
 with changed as (update public.tasks set status = 'done' returning 1)
 select pg_temp.check('Marc ne coche pas de tâche', (select count(*) from changed) = 0);
 select pg_temp.check('Marc lit le carnet', (select count(*) from public.journal_entries) = 1);
+select pg_temp.check('Marc ne voit ni le bilan de Claire ni la demande de Denis',
+    (select count(*) from public.caregiver_checkins) = 0 and (select count(*) from public.support_requests) = 0);
 reset role;
 
 \o

@@ -62,6 +62,15 @@ service de santé ni un service de crise.
     aidée. Est-ce compatible avec son droit à la suppression, ou faut-il effacer ses notes aussi ?
 20. **Page « Préparer un rendez-vous ».** Elle réunit des renseignements de santé sur papier ; son
     impression est notée au journal des accès. Mention « gardez la copie en lieu sûr » suffisante ?
+21. **Bilan de la semaine et évaluation du pilote.** Nouveau consentement distinct « Mon bilan de la
+    semaine » (texte à approuver). Retirer ce consentement, ou celui de l'évaluation du pilote, efface les
+    réponses déjà données : est-ce la bonne règle pour l'évaluation (le texte dit seulement « pour
+    arrêter ») ? Les mesures ne montrent que des agrégats, masqués sous 3 répondants : seuil suffisant
+    pour 10 familles ?
+22. **Demandes d'intervenante.** Les notes internes des intervenantes ne sont pas montrées au demandeur ni
+    incluses dans son export : compatible avec son droit d'accès ? Les demandes et notes sont effacées si
+    la personne supprime son compte : faut-il garder une trace minimale (obligations professionnelles) ?
+    Les consultations du tableau ne sont pas journalisées en v0.1 : faut-il les ajouter ?
 
 ## B. Travailleuse sociale — sécurité, ton et parcours
 
@@ -74,7 +83,7 @@ service de santé ni un service de crise.
    Info-aidant, maltraitance) ; qui vérifie et à quelle fréquence.
 4. **Bilan hebdomadaire.** Les 3 questions proposées (fatigue, débordement, isolement), l'échelle de 1 à
    5, le seuil (total ≥ 12 ou une réponse à 5) et la formulation des suggestions de répit. Le bilan doit
-   rester privé et ne pas passer pour un outil clinique.
+   rester privé et ne pas passer pour un outil clinique. Formulation actuelle : `src/i18n/support.fr.ts`.
 5. **Documents qui évoquent une crise** (ex. note clinique mentionnant des idées suicidaires) : afficher
    l'écran d'urgence à l'aidant, ou seulement un bandeau discret ?
 6. **Demandes d'intervenante.** Triage, priorités, délai de réponse, conduite quand la demande vient de

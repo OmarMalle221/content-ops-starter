@@ -28,7 +28,7 @@ describe('accès aux pages', () => {
         await waitFor(() => expect(router.state.location.pathname).toBe('/bienvenue'));
         expect(await screen.findByText(/La politique de confidentialité a changé/)).toBeInTheDocument();
         // Seule la politique est proposée de nouveau ; les autres textes n'ont pas changé de version.
-        expect(screen.getAllByRole('checkbox')).toHaveLength(4);
+        expect(screen.getAllByRole('checkbox')).toHaveLength(5);
     });
 
     it('envoie une intervenante vers la vérification en deux étapes', async () => {
@@ -57,14 +57,14 @@ describe('accès aux pages', () => {
 });
 
 describe('accueil des nouveaux', () => {
-    it('propose 4 consentements distincts, aucun pré-coché', async () => {
+    it('propose 5 consentements distincts, aucun pré-coché', async () => {
         backend.session = fakeSession();
         renderApp('/bienvenue');
         const boxes = await screen.findAllByRole('checkbox');
-        expect(boxes).toHaveLength(4);
+        expect(boxes).toHaveLength(5);
         for (const box of boxes) expect(box).not.toBeChecked();
         expect(screen.getByText('Obligatoire')).toBeInTheDocument();
-        expect(screen.getAllByText('Facultatif')).toHaveLength(3);
+        expect(screen.getAllByText('Facultatif')).toHaveLength(4);
     });
 
     it('refuse de continuer sans la politique de confidentialité', async () => {

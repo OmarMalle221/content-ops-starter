@@ -67,6 +67,10 @@ import_map = "./functions/import_map.json"
 verify_jwt = true
 import_map = "./functions/import_map.json"
 
+[functions.notify-support]
+verify_jwt = true
+import_map = "./functions/import_map.json"
+
 # Planifiée (pg_cron → pg_net, voir supabase/cron/) : pas de jeton d'utilisateur ; secret partagé
 # RELAIS_CRON_SECRET vérifié par la fonction.
 [functions.send-reminders]

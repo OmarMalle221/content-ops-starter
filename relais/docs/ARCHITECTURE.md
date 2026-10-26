@@ -310,11 +310,25 @@ elle refusera tant que la personne est propriétaire d'un dossier (transfert ou 
   questions de la famille), **chaque élément avec sa source** (profil, document et sa date, note à la main
   et son auteur). Version imprimée en noir sur blanc, sans navigation, avec des lignes pour les réponses.
   L'impression est notée au journal des accès (`prep_sheet_printed`).
-- **Bilan hebdomadaire** : 3 questions (fatigue, débordement, isolement) sur 1 à 5 ; au-delà du seuil
-  (proposé : total ≥ 12 ou une réponse à 5, à valider par la TS), suggestions de répit tirées de
-  `resources` et offre de parler à une intervenante. Pas un outil clinique.
-- **Mesures du pilote** : temps gagné estimé et satisfaction (consentement `pilot_evaluation`),
-  programmes repérés → demandés → décision (dates dans `care_file_programs`).
+- **Bilan de la semaine** (`/bilan`) : 3 questions de 1 à 5 (manque d'énergie, débordement, porter tout ça
+  sans aide). Résultat calculé sur le téléphone ; seuil proposé (total ≥ 12 ou une réponse à 5, à valider
+  par la TS) → répit et lignes d'aide tirés de `resources`, et offre de parler à une intervenante. Les
+  réponses ne sont **gardées** qu'avec un consentement distinct (« Mon bilan de la semaine ») et ne sont
+  visibles **que par la personne** : ni la famille, ni les intervenantes, ni l'admin, ni les mesures du
+  pilote. Retirer ce consentement efface l'historique. Pas un outil clinique.
+- **Parler à une intervenante** : depuis l'accueil, la page d'aide, le bilan, ou **directement dans
+  l'écran d'urgence** (formulaire court, sans quitter la saisie en cours). Rappel par téléphone ou par
+  courriel (adresse du compte), disponibilités, message facultatif. Aucun délai n'est promis (Q4). Les
+  intervenantes reçoivent un **avis sans contenu** (`notify-support`, une seule fois par demande : origine
+  et lien seulement) et suivent les demandes dans un **tableau** réservé à leur rôle, avec vérification en
+  deux étapes : prise en charge (pour soi seulement), notes internes invisibles du demandeur, fermeture ;
+  le demandeur voit l'état de ses demandes et peut retirer la sienne. Mentionner un dossier n'y donne pas
+  accès : il faut que la famille invite l'intervenante.
+- **Mesures du pilote** : 2 questions par semaine (heures gagnées par demi-heure, satisfaction 1 à 5 ; pas
+  de commentaire libre), avec le consentement `pilot_evaluation`. L'admin (MFA) ne voit que les agrégats
+  de `pilot_metrics()` : réponses masquées sous 3 répondants, programmes repérés → demandés → décidés
+  (seulement dans les dossiers dont l'aidante principale participe), demandes d'intervenante (origine,
+  délai médian de prise en charge).
 
 ## 10. Tests et intégration continue
 
@@ -325,6 +339,8 @@ elle refusera tant que la personne est propriétaire d'un dossier (transfert ou 
 | Intégration                 | Vitest + client IA simulé ; test réel optionnel avec clé     | Pipeline d'extraction, temps < 30 s sur PDF fictif de 3 pages                              |
 | Bout en bout                | Playwright (Pixel 7) + axe, faux Supabase local              | Parcours par étape, aucune violation WCAG 2.2 AA, aucune violation de la CSP de production |
 | Performance / accessibilité | Lighthouse (mobile), piloté par Playwright                   | Accessibilité ≥ 90 sur chaque page, y compris les pages connectées                         |
+| Redistribution              | Playwright à 320 px de large                                 | Aucun défilement horizontal (WCAG 1.4.10), pages publiques et du dossier                   |
+| Taille                      | `npm run check:bundle`                                       | Premier chargement ≤ 240 ko compressés ; les pages se chargent à la demande                |
 
 Le faux Supabase (`tests/e2e/fake-supabase.mjs`) simule Auth (code par courriel, TOTP) et traduit chaque
 requête PostgREST de l'application en SQL, exécuté sur la vraie base migrée sous le rôle et l'identité de

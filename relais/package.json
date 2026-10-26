@@ -21,7 +21,8 @@
         "test:ai-live": "vitest run --project integration",
         "test:e2e": "playwright test",
         "generate:reference": "node scripts/generate-reference-sql.mjs",
-        "check:reference": "node scripts/generate-reference-sql.mjs --check"
+        "check:reference": "node scripts/generate-reference-sql.mjs --check",
+        "check:bundle": "vite build --mode e2e --outDir .tmp/dist-budget --emptyOutDir && node scripts/check-bundle.mjs .tmp/dist-budget"
     },
     "dependencies": {
         "@fontsource/atkinson-hyperlegible": "5.3.0",

@@ -4,9 +4,11 @@ Application web mobile qui aide les proches aidants du Québec à coordonner les
 obtenir les services et les aides auxquels il a droit. Relais n'est pas un service de santé : il ne pose
 aucun diagnostic et ne donne aucun conseil médical.
 
-**Statut : étapes 1 à 5 sur 6 livrées** (socle, consentements, écran d'urgence ; dossier familial et
-membres ; documents, lecture automatique pseudonymisée et chronologie ; navigateur de droits ; tâches,
-agenda, rappels et page « Préparer un rendez-vous »). Suivi dans [`PROGRESS.md`](PROGRESS.md).
+**Statut : les 6 étapes de la v0.1 sont livrées** (socle, consentements, écran d'urgence ; dossier familial
+et membres ; documents, lecture automatique pseudonymisée et chronologie ; navigateur de droits ; tâches,
+agenda, rappels et page « Préparer un rendez-vous » ; bilan de l'aidant, demandes d'intervenante et mesures
+du pilote). Avant le pilote : [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md). Suivi dans
+[`PROGRESS.md`](PROGRESS.md).
 
 ## Démarrer
 
@@ -17,6 +19,7 @@ npm test               # tests unitaires et de composants (Vitest)
 npm run test:db        # migrations + tests RLS sur PostgreSQL 16 (local ou DATABASE_URL)
 npm run test:e2e       # parcours sur téléphone (Playwright + axe + Lighthouse), faux Supabase local
 npm run test:ai-live   # extraction réelle avec Claude (ANTHROPIC_API_KEY requis), cible < 30 s
+npm run check:bundle   # budget du premier chargement (≤ 240 ko compressés)
 ```
 
 Démonstration locale sans compte Supabase (PostgreSQL 16 requis) :
@@ -27,11 +30,14 @@ documents, explications, lettres, URL signées, suppressions) tournent avec une 
 réseau ; les rappels par courriel se déclenchent par `POST /functions/v1/send-reminders` avec l'en-tête
 `x-relais-cron-secret: test-cron-secret` et restent en mémoire (jamais envoyés). Avec
 `RELAIS_DEMO_SEED=1` devant la première commande, deux familles fictives sont chargées
-(`claire.demo@example.test`, `marc.demo@example.test`, `denis.demo@example.test`).
+(`claire.demo@example.test`, `marc.demo@example.test`, `denis.demo@example.test`), avec une intervenante
+(`intervenante.demo@example.test`) et une admin (`admin.demo@example.test`).
 
-| Document                                       | Contenu                                                           |
-| ---------------------------------------------- | ----------------------------------------------------------------- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Architecture, flux de données, IA, sécurité et vie privée         |
-| [`docs/schema.sql`](docs/schema.sql)           | Schéma cible des 6 étapes (les migrations livrées font foi)       |
-| [`docs/PLAN.md`](docs/PLAN.md)                 | Plan en 6 étapes livrables et portes avant le pilote              |
-| [`docs/VALIDATIONS.md`](docs/VALIDATIONS.md)   | Points à faire valider par un juriste et une travailleuse sociale |
+| Document                                           | Contenu                                                           |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)     | Architecture, flux de données, IA, sécurité et vie privée         |
+| [`docs/schema.sql`](docs/schema.sql)               | Schéma cible des 6 étapes (les migrations livrées font foi)       |
+| [`docs/PLAN.md`](docs/PLAN.md)                     | Plan en 6 étapes livrables et portes avant le pilote              |
+| [`docs/VALIDATIONS.md`](docs/VALIDATIONS.md)       | Points à faire valider par un juriste et une travailleuse sociale |
+| [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md)     | Liste de contrôle avant le pilote (juridique, contenu, infra)     |
+| [`docs/EFVP-brouillon.md`](docs/EFVP-brouillon.md) | Brouillon technique de l'EFVP, à compléter par le juriste         |

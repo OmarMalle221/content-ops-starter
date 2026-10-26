@@ -32,8 +32,14 @@ async function accessibilityScore(path: string): Promise<{ score: number; failin
     return { score: category?.score ?? 0, failing };
 }
 
+/** Score de performance Lighthouse (mobile, réseau et processeur ralentis par simulation). */
+async function performanceScore(path: string): Promise<number> {
+    const result = await lighthouse(`${APP}${path}`, { port: PORT, onlyCategories: ['performance'], output: 'json', logLevel: 'error' });
+    return result?.lhr.categories.performance?.score ?? 0;
+}
+
 test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectées', async () => {
-    test.setTimeout(600_000);
+    test.setTimeout(900_000);
     await resetBackend();
     const profile = mkdtempSync(join(tmpdir(), 'relais-lh-'));
     const context = await chromium.launchPersistentContext(profile, { args: [`--remote-debugging-port=${PORT}`] });
@@ -48,6 +54,15 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         };
 
         for (const path of ['/', '/connexion', '/confidentialite', '/aide']) await audit(path);
+        // Performance : mesurée et affichée (le budget de taille, lui, est vérifié par npm run check:bundle).
+        const performance = { '/': await performanceScore('/'), '/aide': await performanceScore('/aide') };
+        console.log(
+            'Performance Lighthouse (mobile) :',
+            Object.entries(performance)
+                .map(([p, s]) => `${p} ${Math.round(s * 100)}`)
+                .join(' · ')
+        );
+        expect(Math.min(...Object.values(performance))).toBeGreaterThanOrEqual(0.8);
 
         await signIn(page, 'lighthouse@example.test');
         await waitForTitle(page, 'Bienvenue dans Relais');
@@ -115,6 +130,15 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         const appointmentPath = new URL(page.url()).pathname;
         for (const path of [appointmentPath, `${appointmentPath}/preparer`, `${fileUrl}/agenda`, fileUrl]) await audit(path);
 
+        // Étape 6 : bilan, demande d'intervenante (créée pour le tableau plus bas), évaluation.
+        for (const path of ['/bilan', '/parler-a-une-intervenante', '/evaluation']) await audit(path);
+        await page.goto(`${APP}/parler-a-une-intervenante`);
+        await waitForTitle(page, 'Parler à une intervenante');
+        await page.getByLabel('Votre numéro de téléphone').fill('514 555-0101');
+        await page.getByRole('button', { name: 'Envoyer ma demande' }).click();
+        await expect(page.getByText(/Votre demande est envoyée/)).toBeVisible();
+        await audit('/parler-a-une-intervenante');
+
         // Administration : autre compte (rôle admin, vérification en deux étapes).
         await context.clearCookies();
         await page.evaluate(() => {
@@ -134,8 +158,36 @@ test('accessibilité Lighthouse ≥ 90 sur mobile, pages publiques et connectée
         await page.goto(`${APP}/admin/programmes`);
         await waitForTitle(page, 'Fiches des programmes');
         const programPath = await page.getByRole('link', { name: /CIPH/ }).getAttribute('href');
-        for (const path of ['/admin', '/admin/programmes', programPath as string, '/admin/programmes/nouvelle', '/admin/ressources'])
+        for (const path of [
+            '/admin',
+            '/admin/programmes',
+            programPath as string,
+            '/admin/programmes/nouvelle',
+            '/admin/ressources',
+            '/admin/pilote'
+        ])
             await audit(path);
+
+        // Tableau des intervenantes : autre compte (rôle intervenante, vérification en deux étapes).
+        await context.clearCookies();
+        await page.evaluate(() => {
+            localStorage.clear();
+            sessionStorage.clear();
+        });
+        await signIn(page, 'intervenante.lighthouse@example.test');
+        await waitForTitle(page, 'Vérification en deux étapes');
+        await page.getByLabel('Code de l’application (6 chiffres)').fill(TOTP_CODE);
+        await page.getByRole('button', { name: 'Vérifier' }).click();
+        await waitForTitle(page, 'Bienvenue dans Relais');
+        await page.getByLabel(/J’accepte : Comment Relais protège vos renseignements/).check();
+        await page.getByRole('button', { name: 'Enregistrer mes choix' }).click();
+        await page.getByLabel('Votre prénom').fill('Nadia');
+        await page.getByRole('button', { name: 'Continuer' }).click();
+        await waitForTitle(page, 'Bonjour Nadia');
+        await page.goto(`${APP}/intervenante`);
+        await waitForTitle(page, 'Demandes d’intervenante');
+        const requestPath = await page.getByRole('link', { name: /Lucie/ }).getAttribute('href');
+        for (const path of ['/intervenante', requestPath as string]) await audit(path);
     } finally {
         await context.close();
         rmSync(profile, { recursive: true, force: true });

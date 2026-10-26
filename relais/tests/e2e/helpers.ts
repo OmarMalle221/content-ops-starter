@@ -102,6 +102,22 @@ export interface BackendState {
     journalEntries: Array<{ body: string; author_id: string | null }>;
     reminderDeliveries: Array<{ user_id: string; sent_on: string; task_count: number; appointment_count: number }>;
     emails: Array<{ to: string; subject: string; text: string; html: string }>;
+    checkins: Array<{ user_id: string; week_start: string; fatigue: number; overwhelm: number; isolation: number }>;
+    supportRequests: Array<{
+        id: string;
+        requester_id: string;
+        origin: string;
+        contact_name: string;
+        preferred_contact: string;
+        phone: string | null;
+        email: string | null;
+        status: string;
+        assigned_worker_id: string | null;
+        notified_at: string | null;
+        closed_at: string | null;
+    }>;
+    supportNotes: Array<{ support_request_id: string; author_id: string | null; body: string }>;
+    pilotFeedback: Array<{ user_id: string; week_start: string; hours_saved: string | null; satisfaction: number | null }>;
     explanations: Array<{ program_id: string; program_version: number }>;
     resources: Array<{ slug: string; phone: string | null; verification_status: string; verified_by: string | null }>;
     aiCalls: Array<{

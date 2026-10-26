@@ -8,6 +8,7 @@ import { useProfile } from '../../app/queries';
 import { Button, buttonClass, Card, Checkbox, Loading, Notice, PageTitle, TextField } from '../../components/ui';
 import { fr } from '../../i18n/fr';
 import { benefits as tb } from '../../i18n/benefits.fr';
+import { support as ts } from '../../i18n/support.fr';
 import { ApiError } from '../../lib/api';
 import {
     createProgram,
@@ -47,6 +48,9 @@ export function AdminHomePage() {
                 </Link>
                 <Link to="/admin/ressources" className={buttonClass('secondary')}>
                     {tb.adminResources}
+                </Link>
+                <Link to="/admin/pilote" className={buttonClass('secondary')}>
+                    {ts.pilotTitle}
                 </Link>
             </AdminOnly>
         </div>

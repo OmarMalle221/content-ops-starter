@@ -1,6 +1,6 @@
 # Relais — PROGRESS
 
-Dernière mise à jour : 2026-10-25 (étape 5)
+Dernière mise à jour : 2026-10-26 (étape 6 : v0.1 complète)
 
 ## Fait
 
@@ -213,10 +213,59 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
 - **Non vérifié ici** : envoi réel par SES (aucun compte AWS dans cet environnement) ; la signature est
   vérifiée sur les exemples officiels, la requête SES sans réseau.
 
+### Étape 6 — Charge de l'aidant, demandes d'intervenante, mesures du pilote (livrée)
+
+- **Base de données** (`20261031000001_caregiver_checkin_consent.sql`, `20261031000002_caregiver_support.sql`) :
+  `caregiver_checkins` (bilan de la semaine, visible par son auteur **seulement**), `support_requests`,
+  `support_request_notes`, `pilot_feedback` ; nouveau consentement distinct **« Mon bilan de la
+  semaine »** (`caregiver_checkin`) ; retrait de ce consentement ou de l'évaluation du pilote → réponses
+  effacées (vérifié à la fin de la transaction, pour qu'une nouvelle version du texte ne les efface pas).
+  Fonctions : `cancel_support_request` (le demandeur retire sa demande), `claim_support_notification`
+  (serveur seulement, une fois par demande, origine et adresses des intervenantes, aucun contenu),
+  `pilot_metrics()` (admin avec MFA, agrégats seulement, masqués sous 3 répondants ; programmes comptés
+  seulement dans les dossiers dont l'aidante principale participe à l'évaluation ; rien du bilan).
+  `export_my_data` (format `relais-export/2`) étendue.
+- **Fonction serveur** `notify-support` : avis aux intervenantes par courriel (Amazon SES), sans aucun
+  renseignement sur la personne ; l'écran d'urgence est signalé dans l'objet pour prioriser.
+- **PWA** : **bilan de la semaine** (`/bilan` : résultat sur le téléphone, répit et lignes d'aide tirés de
+  la table des ressources, offre d'intervenante si la semaine semble lourde, historique seulement avec le
+  consentement) ; **parler à une intervenante** (`/parler-a-une-intervenante`, aussi depuis l'accueil,
+  l'aide, le bilan et **directement dans l'écran d'urgence**, sans perdre la saisie ; aucun délai promis ;
+  « mes demandes » et retrait) ; **tableau de suivi des intervenantes** (`/intervenante`, MFA : écran
+  d'urgence en premier, prise en charge pour soi, notes internes, fermeture) ; **évaluation du pilote**
+  (`/evaluation`, 2 questions) ; **mesures du pilote** (`/admin/pilote`) ; section « Pour vous » à
+  l'accueil.
+- **Passe finale** : pages chargées à la demande (premier chargement 228 ko compressés, contre 256) et
+  budget vérifié en CI (`npm run check:bundle`, ≤ 240 ko) ; test de redistribution à 320 px (WCAG 1.4.10)
+  sur 24 pages ; Lighthouse sur toutes les pages (42) ; performance mobile mesurée (accueil public 94,
+  aide 89).
+- **Livrables avant pilote** : [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (liste de contrôle par
+  responsable) et [`docs/EFVP-brouillon.md`](docs/EFVP-brouillon.md) (brouillon technique de l'EFVP).
+- **Familles de démonstration** : intervenante et admin de démo, bilan gardé de Claire (2 semaines),
+  3 réponses d'évaluation, une demande d'intervenante de Denis.
+- **Tests, tous verts en local** :
+  - Base : 396 vérifications RLS (53 de plus : bilan invisible à la famille, aux intervenantes et à
+    l'admin ; consentement exigé et effacement au retrait ; demandes : état et auteur imposés, téléphone
+    exigé, intervenante avec MFA seulement, prise en charge pour soi, notes internes invisibles au
+    demandeur, avis une seule fois et sans contenu ; évaluation : agrégats masqués sous 3 répondants,
+    programmes des seuls dossiers participants) ; contrôle par mutation (bilan ouvert aux intervenantes,
+    seuil de masquage à 1 : détectés).
+  - Unitaires et composants : 366 tests, dont seuil du bilan en table de vérité, semaine au Québec, avis
+    sans contenu, fonction `notify-support` (5), écrans (13).
+  - Bout en bout : 25 parcours, dont 2 pour l'étape 6 (bilan → demande, écran d'urgence → demande sur
+    place, avis sans contenu, tableau avec MFA, notes invisibles, retrait du consentement qui efface le
+    bilan ; évaluation par 3 personnes, masquée à 2, agrégée à 3) et 1 de redistribution à 320 px.
+  - Lighthouse accessibilité mobile : 100 sur les 42 pages auditées, y compris le tableau des
+    intervenantes et les mesures du pilote.
+- **Corrigé en route** : un rappel par téléphone était accepté sans numéro (contrôle de la base trompé par
+  une valeur vide, trouvé par les tests RLS) ; le message « Merci » de l'évaluation disparaissait après
+  l'enregistrement (trouvé par les tests de bout en bout).
+
 ## En cours
 
-- Rien. **Prochaine étape : 6 — Charge de l'aidant, demandes d'intervenante, mesures du pilote et passe
-  finale (performance, accessibilité)**, à lancer sur ton feu vert.
+- Rien : **les 6 étapes de la v0.1 sont livrées.** Le pilote attend la liste de
+  [`docs/AVANT-PILOTE.md`](docs/AVANT-PILOTE.md) (EFVP, validations, vérification des fiches, projet
+  Supabase et SES, intervenantes).
 
 ## Décisions
 
@@ -276,6 +325,14 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
 | D52 | Heures de l'agenda saisies et affichées à l'heure du Québec, changements d'heure compris                                                                                                     | Pilote au Québec ; un téléphone réglé ailleurs n'en décale pas les rendez-vous                                      |
 | D53 | Page « Préparer un rendez-vous » sans IA : faits du dossier avec leur source, chronologie des 3 derniers mois                                                                                | Rien d'inventé ni d'interprété ; le professionnel voit d'où vient chaque élément                                    |
 | D54 | Une note du carnet reste au dossier si son auteur supprime son compte (auteur effacé)                                                                                                        | Elle appartient à l'histoire du dossier ; à valider par le juriste (A19)                                            |
+| D55 | Bilan de la semaine gardé seulement avec un consentement distinct ; sans lui, résultat calculé sur le téléphone et oublié                                                                    | Le bien-être de l'aidant est un renseignement sensible que les consentements existants ne couvraient pas            |
+| D56 | Bilan visible par son auteur seulement, y compris pour l'équipe Relais ; absent des mesures du pilote                                                                                        | Confidentialité exigée par le plan ; l'aidant doit pouvoir répondre franchement                                     |
+| D57 | Demande d'intervenante possible directement dans l'écran d'urgence, sans quitter la page                                                                                                     | Règle 2 : proposer une intervenante sans faire perdre la saisie ni retarder les numéros d'urgence                   |
+| D58 | Avis aux intervenantes par courriel sans contenu, une seule fois par demande ; tout le reste derrière la MFA                                                                                 | Règle 5 ; un courriel peut être lu par d'autres                                                                     |
+| D59 | Notes internes des intervenantes hors du détecteur de détresse                                                                                                                               | Ce sont des notes professionnelles, pas la parole d'une personne aidante                                            |
+| D60 | Évaluation du pilote limitée aux 2 questions du consentement, sans commentaire libre ; admin : agrégats masqués sous 3 répondants                                                            | Respect strict du texte de consentement ; 10 familles : risque de ré-identification                                 |
+| D61 | Pages chargées à la demande et budget de 240 ko vérifié en CI ; bibliothèques gardées telles quelles                                                                                         | ~195 ko viennent de React, du routeur, de Zod et de Supabase : les remplacer en fin de projet serait risqué         |
+| D62 | Aucun délai de rappel promis (Q4) : « dès que possible »                                                                                                                                     | Heures et effectifs des intervenantes inconnus                                                                      |
 
 ### Hypothèses appliquées en attendant les réponses aux questions bloquantes
 
@@ -285,7 +342,8 @@ tests/e2e/fake-supabase.mjs`, puis `npx vite --mode e2e`, connexion `claire.demo
   est offert.
 - **Q3** : appliquée à l'étape 3 : aucune image envoyée ; saisie à la main en attendant un OCR hébergé au
   Canada (D31).
-- **Q4** : l'écran d'urgence dit seulement que Relais n'est pas un service d'urgence ; aucun délai promis.
+- **Q4** : l'écran d'urgence dit seulement que Relais n'est pas un service d'urgence ; la demande
+  d'intervenante promet un rappel « dès que possible », sans heure ni délai (D62).
 - **Q5** : appliquée à l'étape 2 : sans consentement valide (personne ou représentant légal), la base refuse
   les renseignements sur la personne aidée ; la page de consentement explique que le dossier ne peut pas
   être accueilli pendant le pilote si le parent ne peut plus consentir et n'a pas de représentant.
@@ -347,8 +405,8 @@ Points précis :
   valider et compléter par la travailleuse sociale (B1).
 - Textes de consentement (`src/content/consent-texts.fr.json`) : à faire valider par le juriste ;
   coordonnées de la personne responsable des renseignements personnels à fournir.
-- Taille de l'application : 256 ko compressés au premier chargement (245 avant l'étape 5) ;
-  découpage par page prévu à la passe de performance de l'étape 6.
+- Taille de l'application : 228 ko compressés au premier chargement (256 avant le découpage par page).
+  Pistes si le budget devient serré : Zod « mini », client Supabase sans le temps réel.
 - Revérification périodique des fiches (ex. rappel aux admins pour toute fiche vérifiée il y a plus de
   12 mois) : le fournisseur de courriel existe maintenant ; à ajouter à l'étape 6 si l'équipe le veut.
 - Heure d'envoi des rappels (8 h l'été, 7 h l'hiver) et texte du courriel : à valider par la travailleuse

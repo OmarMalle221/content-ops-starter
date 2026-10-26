@@ -485,7 +485,9 @@ async function handleFunction(req, res, name) {
             );
         },
         llm,
-        ocr: null
+        ocr: null,
+        email: { send: async (message) => void emails.push(message) },
+        appUrl: 'http://127.0.0.1:4173'
     };
     const response = await handler(ctx, body);
     return send(res, response.status, response.body);
@@ -608,6 +610,12 @@ async function state() {
         ),
         journalEntries: await q('select body, author_id from public.journal_entries order by created_at'),
         reminderDeliveries: await q('select user_id, sent_on, task_count, appointment_count from public.reminder_deliveries'),
+        checkins: await q('select user_id, week_start, fatigue, overwhelm, isolation from public.caregiver_checkins'),
+        supportRequests: await q(
+            'select id, requester_id, origin, contact_name, preferred_contact, phone, email, status, assigned_worker_id, notified_at, closed_at from public.support_requests order by created_at'
+        ),
+        supportNotes: await q('select support_request_id, author_id, body from public.support_request_notes order by created_at'),
+        pilotFeedback: await q('select user_id, week_start, hours_saved, satisfaction from public.pilot_feedback'),
         emails: [...emails],
         aiCalls: await q('select * from public.ai_calls order by created_at'),
         llmInputs: [...llm.inputs],

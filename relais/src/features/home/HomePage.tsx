@@ -3,6 +3,7 @@ import { useMyConsents, useProfile } from '../../app/queries';
 import { buttonClass, Card, Loading, Notice, PageTitle } from '../../components/ui';
 import { benefits as tb } from '../../i18n/benefits.fr';
 import { fr } from '../../i18n/fr';
+import { support as ts } from '../../i18n/support.fr';
 import { ACCESS_LABELS, files as tf, ROLE_LABELS } from '../../i18n/files.fr';
 import { activeConsent } from '../../lib/consents';
 import { useMyFiles } from '../files/useFile';
@@ -15,6 +16,7 @@ export function HomePage() {
     if (profile.isPending || consents.isPending || myFiles.isPending) return <Loading />;
     const name = profile.data?.display_name ?? '';
     const healthGranted = consents.data ? activeConsent(consents.data, 'health_information') !== undefined : true;
+    const pilotGranted = consents.data ? activeConsent(consents.data, 'pilot_evaluation') !== undefined : false;
     const files = myFiles.data ?? [];
 
     return (
@@ -33,6 +35,11 @@ export function HomePage() {
             {profile.data?.app_role === 'admin' && (
                 <Link to="/admin" className={buttonClass('secondary')}>
                     {tb.adminTitle}
+                </Link>
+            )}
+            {profile.data?.app_role === 'relais_worker' && (
+                <Link to="/intervenante" className={buttonClass('primary')}>
+                    {ts.homeWorker}
                 </Link>
             )}
 
@@ -63,6 +70,28 @@ export function HomePage() {
                 <Link to="/dossiers/nouveau" className={buttonClass(files.length === 0 ? 'primary' : 'secondary')}>
                     {tf.createFile}
                 </Link>
+            </section>
+
+            <section aria-labelledby="for-you-title" className="flex flex-col gap-3">
+                <h2 id="for-you-title" className="text-2xl font-bold">
+                    {fr.home.forYou}
+                </h2>
+                <Link to="/bilan" className="flex min-h-12 flex-col rounded-xl border-2 border-line bg-surface p-4 hover:border-brand">
+                    <span className="text-xl font-bold text-brand-strong">{ts.homeCheckin}</span>
+                    <span className="text-muted">{ts.homeCheckinText}</span>
+                </Link>
+                <Link
+                    to="/parler-a-une-intervenante"
+                    className="flex min-h-12 flex-col rounded-xl border-2 border-line bg-surface p-4 hover:border-brand"
+                >
+                    <span className="text-xl font-bold text-brand-strong">{ts.homeSupport}</span>
+                    <span className="text-muted">{ts.homeSupportText}</span>
+                </Link>
+                {pilotGranted && (
+                    <Link to="/evaluation" className={buttonClass('secondary', 'self-start')}>
+                        {ts.homeFeedback}
+                    </Link>
+                )}
             </section>
 
             {!healthGranted && (

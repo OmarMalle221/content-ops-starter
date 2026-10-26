@@ -103,12 +103,14 @@ export const fr = {
             health_information:
                 'Vous ne pourrez plus ajouter de renseignements de santé. Ceux déjà enregistrés restent visibles pour vous jusqu’à ce que vous les supprimiez.',
             email_reminders: 'Vous ne recevrez plus de rappels par courriel.',
-            pilot_evaluation: 'Vos réponses ne seront plus utilisées pour évaluer le pilote.'
+            pilot_evaluation: 'Vos réponses déjà données sont effacées et ne serviront plus à évaluer le pilote.',
+            caregiver_checkin: 'Les réponses gardées de votre bilan de la semaine sont effacées tout de suite.'
         } as Record<string, string>,
         granted: 'Consentement accordé.',
         revoked: 'Consentement retiré.'
     },
     home: {
+        forYou: 'Pour vous',
         greeting: (name: string) => `Bonjour ${name}`,
         fileTitle: 'Le dossier de votre proche',
         fileSoon: 'Prochaine étape du pilote : créer le dossier de votre parent, inviter votre famille et ajouter ses contacts clés.',

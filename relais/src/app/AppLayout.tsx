@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router';
-import { buttonClass, Notice, PageTitle, requestPageTitleFocus } from '../components/ui';
+import { buttonClass, Loading, Notice, PageTitle, requestPageTitleFocus } from '../components/ui';
 import { fr } from '../i18n/fr';
 import { useSession } from './session';
 
@@ -72,7 +72,9 @@ export function AppLayout() {
                         <Notice tone="success">{notice}</Notice>
                     </div>
                 )}
-                <Outlet />
+                <Suspense fallback={<Loading />}>
+                    <Outlet />
+                </Suspense>
             </main>
             <footer className="no-print border-t border-line bg-surface">
                 <div className="mx-auto flex max-w-2xl flex-col gap-1 px-4 py-4 text-muted">

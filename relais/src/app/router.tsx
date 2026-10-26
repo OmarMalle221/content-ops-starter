@@ -1,36 +1,49 @@
 import { createBrowserRouter } from 'react-router';
-import { AccountPage } from '../features/account/AccountPage';
 import { SignInPage } from '../features/auth/SignInPage';
 import { MyConsentsPage } from '../features/consents/MyConsentsPage';
 import { HelpPage } from '../features/help/HelpPage';
 import { HomePage } from '../features/home/HomePage';
 import { LandingPage } from '../features/landing/LandingPage';
 import { MfaPage } from '../features/mfa/MfaPage';
-import { AdminHomePage, AdminProgramEditPage, AdminProgramsPage, AdminResourcesPage } from '../features/admin/AdminPages';
-import { BenefitsPage } from '../features/benefits/BenefitsPage';
-import { AgendaPage, AppointmentEditPage, AppointmentPage } from '../features/coordination/AgendaPages';
-import { JournalPage } from '../features/coordination/JournalPage';
-import { PrepSheetPage } from '../features/coordination/PrepSheetPage';
-import { TasksPage } from '../features/coordination/TasksPage';
-import { ProgramPage } from '../features/benefits/ProgramPage';
-import { DocumentPage } from '../features/documents/DocumentPage';
-import { FileDocumentsPage } from '../features/documents/FileDocumentsPage';
-import { TimelinePage } from '../features/documents/TimelinePage';
-import { ConsentFormPage } from '../features/files/ConsentFormPage';
-import { FileConsentPage } from '../features/files/FileConsentPage';
-import { FileContactsPage } from '../features/files/FileContactsPage';
 import { FileLayout } from '../features/files/FileLayout';
-import { FileLogPage } from '../features/files/FileLogPage';
-import { FileMembersPage } from '../features/files/FileMembersPage';
-import { FileOverviewPage } from '../features/files/FileOverviewPage';
-import { FileProfilePage } from '../features/files/FileProfilePage';
-import { FileSettingsPage } from '../features/files/FileSettingsPage';
-import { NewCareFilePage } from '../features/files/NewCareFilePage';
 import { InvitationPage } from '../features/invitations/InvitationPage';
 import { WelcomePage } from '../features/onboarding/WelcomePage';
 import { PrivacyPage } from '../features/privacy/PrivacyPage';
 import { AppLayout, NotFoundPage } from './AppLayout';
 import { RequireOnboarding, RequireSession, RequireStaffMfa } from './guards';
+import { lazyPage } from './lazyPage';
+// Pages chargées à la demande : le premier écran (accueil, connexion, aide) reste léger.
+const AccountPage = lazyPage(() => import('../features/account/AccountPage'), 'AccountPage');
+const AdminHomePage = lazyPage(() => import('../features/admin/AdminPages'), 'AdminHomePage');
+const AdminProgramEditPage = lazyPage(() => import('../features/admin/AdminPages'), 'AdminProgramEditPage');
+const AdminProgramsPage = lazyPage(() => import('../features/admin/AdminPages'), 'AdminProgramsPage');
+const AdminResourcesPage = lazyPage(() => import('../features/admin/AdminPages'), 'AdminResourcesPage');
+const AdminPilotPage = lazyPage(() => import('../features/admin/AdminPilotPage'), 'AdminPilotPage');
+const CheckinPage = lazyPage(() => import('../features/support/CheckinPage'), 'CheckinPage');
+const FeedbackPage = lazyPage(() => import('../features/support/FeedbackPage'), 'FeedbackPage');
+const SupportPage = lazyPage(() => import('../features/support/SupportPage'), 'SupportPage');
+const WorkerBoardPage = lazyPage(() => import('../features/support/WorkerPages'), 'WorkerBoardPage');
+const WorkerRequestPage = lazyPage(() => import('../features/support/WorkerPages'), 'WorkerRequestPage');
+const BenefitsPage = lazyPage(() => import('../features/benefits/BenefitsPage'), 'BenefitsPage');
+const ProgramPage = lazyPage(() => import('../features/benefits/ProgramPage'), 'ProgramPage');
+const AgendaPage = lazyPage(() => import('../features/coordination/AgendaPages'), 'AgendaPage');
+const AppointmentEditPage = lazyPage(() => import('../features/coordination/AgendaPages'), 'AppointmentEditPage');
+const AppointmentPage = lazyPage(() => import('../features/coordination/AgendaPages'), 'AppointmentPage');
+const JournalPage = lazyPage(() => import('../features/coordination/JournalPage'), 'JournalPage');
+const PrepSheetPage = lazyPage(() => import('../features/coordination/PrepSheetPage'), 'PrepSheetPage');
+const TasksPage = lazyPage(() => import('../features/coordination/TasksPage'), 'TasksPage');
+const DocumentPage = lazyPage(() => import('../features/documents/DocumentPage'), 'DocumentPage');
+const FileDocumentsPage = lazyPage(() => import('../features/documents/FileDocumentsPage'), 'FileDocumentsPage');
+const TimelinePage = lazyPage(() => import('../features/documents/TimelinePage'), 'TimelinePage');
+const ConsentFormPage = lazyPage(() => import('../features/files/ConsentFormPage'), 'ConsentFormPage');
+const FileConsentPage = lazyPage(() => import('../features/files/FileConsentPage'), 'FileConsentPage');
+const FileContactsPage = lazyPage(() => import('../features/files/FileContactsPage'), 'FileContactsPage');
+const FileLogPage = lazyPage(() => import('../features/files/FileLogPage'), 'FileLogPage');
+const FileMembersPage = lazyPage(() => import('../features/files/FileMembersPage'), 'FileMembersPage');
+const FileOverviewPage = lazyPage(() => import('../features/files/FileOverviewPage'), 'FileOverviewPage');
+const FileProfilePage = lazyPage(() => import('../features/files/FileProfilePage'), 'FileProfilePage');
+const FileSettingsPage = lazyPage(() => import('../features/files/FileSettingsPage'), 'FileSettingsPage');
+const NewCareFilePage = lazyPage(() => import('../features/files/NewCareFilePage'), 'NewCareFilePage');
 
 // Adresses en français (visibles par les personnes) ; code en anglais.
 export const routes = [
@@ -61,6 +74,12 @@ export const routes = [
                                     { path: '/admin/programmes', element: <AdminProgramsPage /> },
                                     { path: '/admin/programmes/:programId', element: <AdminProgramEditPage /> },
                                     { path: '/admin/ressources', element: <AdminResourcesPage /> },
+                                    { path: '/admin/pilote', element: <AdminPilotPage /> },
+                                    { path: '/bilan', element: <CheckinPage /> },
+                                    { path: '/parler-a-une-intervenante', element: <SupportPage /> },
+                                    { path: '/evaluation', element: <FeedbackPage /> },
+                                    { path: '/intervenante', element: <WorkerBoardPage /> },
+                                    { path: '/intervenante/demandes/:requestId', element: <WorkerRequestPage /> },
                                     { path: '/dossiers/nouveau', element: <NewCareFilePage /> },
                                     { path: '/dossiers/:fileId/formulaire-consentement', element: <ConsentFormPage /> },
                                     {

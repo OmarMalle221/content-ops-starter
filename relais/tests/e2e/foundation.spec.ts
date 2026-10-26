@@ -47,7 +47,7 @@ test('nouveau compte : code par courriel, consentements distincts, prénom', asy
     await page.getByRole('button', { name: 'Me connecter' }).click();
 
     await waitForTitle(page, 'Bienvenue dans Relais');
-    await expect(page.getByRole('checkbox')).toHaveCount(4);
+    await expect(page.getByRole('checkbox')).toHaveCount(5);
     for (const box of await page.getByRole('checkbox').all()) await expect(box).not.toBeChecked();
     await expectAccessible(page);
 
@@ -105,7 +105,7 @@ test('mon compte : export de mes renseignements, puis suppression du compte', as
     const file = await download;
     expect(file.suggestedFilename()).toMatch(/^relais-mes-renseignements-\d{4}-\d{2}-\d{2}\.json$/);
     const content = JSON.parse(await (await file.createReadStream()).toArray().then((c) => Buffer.concat(c).toString('utf8')));
-    expect(content.format).toBe('relais-export/1');
+    expect(content.format).toBe('relais-export/2');
     expect(content.account.email).toBe('nadine@example.test');
 
     const remove = page.getByRole('button', { name: 'Supprimer mon compte' });
