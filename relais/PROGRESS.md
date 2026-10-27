@@ -294,7 +294,7 @@ Jusqu'ici, la logique des fonctions serveur était testée sous Node (Vitest, fa
 qui les branche sous Deno (`_shared/deno-server.ts` : client Supabase, jeton, Storage, CORS, secret des
 tâches planifiées) n'avait jamais tourné.
 
-- **Vérification de types sous Deno** (`npm run check:functions`, Deno 2.9.6 épinglé via
+- **Vérification de types sous Deno** (`npm run check:functions`, Deno épinglé via
   `scripts/deno.sh`, configuration `supabase/functions/deno.local.json`) des 9 fonctions et de tout ce
   qu'elles importent.
 - **Essai réel** (`npm run test:functions`) : les 9 fonctions lancées sous Deno contre le faux Supabase
@@ -333,6 +333,25 @@ plus (15 au total) :
 
 Reste à faire avec une vraie clé : `npm run test:ai-live` (qualité du brouillon, délai réel, conditions de
 l'API).
+
+### Préproduction sur Supabase (en cours)
+
+Projet `cargoflow-verify` (`ca-central-1`), application abandonnée que le responsable a choisi de
+réutiliser pour Relais (aucun coût supplémentaire ; données fictives seulement).
+
+- **Fonction sonde** `relais-probe` (accès par jeton seulement, ne renvoie que des versions) : le moteur de
+  Supabase empaquette le code de `src/shared` (hors du dossier `functions`) et les paquets npm de l'import
+  map ; il tourne en **`ca-central-1`** ; c'est **`supabase-edge-runtime-1.77.8`, compatible Deno 2.1.4**.
+- En conséquence, la vérification et l'essai des fonctions en CI passent de Deno 2.9.6 à **Deno 2.1.4**.
+  Deux écarts trouvés et corrigés : un type `Uint8Array<ArrayBuffer>` inconnu du TypeScript de Deno 2.1
+  (signature SigV4, sans effet à l'exécution) ; `DENO_SERVE_ADDRESS` absent de Deno 2.1, remplacé dans les
+  tests par un lanceur qui impose le port (`tests/deno/serve-on-port.mjs`).
+- Extension `pg_net` installée (nécessaire aux tâches planifiées ; sert aussi à appeler les fonctions
+  depuis la base, le réseau de l'environnement de développement n'atteignant pas `*.supabase.co`).
+- **Bloqué** : l'effacement de CargoFlow et l'installation des migrations demandent une confirmation que
+  l'outil Supabase n'a pas pu obtenir ; scripts prêts à coller dans l'éditeur SQL (validés en local).
+  Ensuite : déploiement des 9 fonctions, secrets, essai réel avec des comptes fictifs, advisors.
+- À supprimer à la fin (tableau de bord) : la fonction `relais-probe` et les 4 fonctions de CargoFlow.
 
 ## En cours
 
@@ -443,10 +462,10 @@ l'API).
   passer par l'API d'administration dans une fonction serveur).
 - Gabarits de courriel « code » (`supabase/templates/code.html`) et réglages Auth de
   `supabase/config.toml` à reproduire dans le tableau de bord ; SMTP au Canada (ex. Amazon SES).
-- Région effective des Edge Functions : vérifier l'en-tête de réponse en préproduction.
-- Déploiement des fonctions (`supabase functions deploy`) : Deno 2.9 résout et exécute les imports de
-  `src/shared` (vérifié en CI) ; reste à confirmer que la CLI Supabase les empaquette (sinon, les copier par
-  un script de construction). Secrets : `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`.
+- ~~Région effective des Edge Functions~~ : **vérifiée en préproduction, `ca-central-1`** (sonde, 2026-10-27).
+- ~~Empaquetage des imports de `src/shared`~~ : **vérifié en préproduction** (déploiement par l'API, même
+  disposition de fichiers que la CLI ; import map et paquets npm compris). Secrets : `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`.
 - Lancer `ANTHROPIC_API_KEY=… npm run test:ai-live` : brouillon réel en moins de 30 s sur le PDF de
   3 pages (non exécuté ici, faute de clé), et vérifier que le repli serveur (`server-side-fallback`) est
   ouvert au compte.

@@ -5,4 +5,4 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export DENO_DIR="${DENO_DIR:-$ROOT/.tmp/deno}"
 export NO_COLOR=1
-exec npx -y deno@2.9.6 "$@"
+exec npx -y deno@2.1.4 "$@"

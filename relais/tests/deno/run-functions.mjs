@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Essai réel des 9 fonctions Edge sous Deno (le vrai `deno-server.ts`, le vrai client Supabase), contre le
-// faux Supabase branché sur la base migrée. Vérifie ce que les tests de bout en bout ne touchent pas : le
-// démarrage sous Deno, les imports (npm:, src/shared), le jeton de l'utilisateur, la clé serveur, Storage
-// (lecture, URL signée, effacement), CORS et le secret des fonctions planifiées.
+// Essai réel des 9 fonctions Edge sous Deno 2.1 (version du moteur de Supabase ; le vrai `deno-server.ts`, le
+// vrai client Supabase), contre le faux Supabase branché sur la base migrée. Vérifie ce que les tests de bout
+// en bout ne touchent pas : le démarrage sous Deno, les imports (npm:, src/shared), le jeton de l'utilisateur,
+// la clé serveur, Storage (lecture, URL signée, effacement), CORS et le secret des fonctions planifiées.
 //
 // Sans clé d'IA ni de courriel : les fonctions doivent le dire proprement (« unavailable »,
 // « ai_unavailable », « email_not_configured »). Les 3 fonctions d'IA sont aussi lancées AVEC une clé,
@@ -184,8 +184,18 @@ async function main() {
     for (const { name, ai } of INSTANCES) {
         start(
             deno,
-            ['run', '--config', 'supabase/functions/deno.local.json', '--allow-net', '--allow-env', `supabase/functions/${name}/index.ts`],
-            { ...env, ...(ai ? aiEnv : {}), DENO_SERVE_ADDRESS: `tcp:127.0.0.1:${port(name, ai)}` },
+            [
+                'run',
+                '--config',
+                'supabase/functions/deno.local.json',
+                '--allow-net',
+                '--allow-env',
+                '--allow-read',
+                'tests/deno/serve-on-port.mjs',
+                String(port(name, ai)),
+                `supabase/functions/${name}/index.ts`
+            ],
+            { ...env, ...(ai ? aiEnv : {}) },
             ai ? `${name} (IA)` : name
         );
     }

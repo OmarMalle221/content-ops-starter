@@ -47,8 +47,9 @@ Rôles : **R** = responsable du projet Relais, **J** = juriste, **TS** = travail
       (`update public.users set app_role = …`) (T).
 - [ ] Fonctions Edge déployées : `extract-document`, `get-document-url`, `delete-document`,
       `delete-care-file`, `explain-program`, `draft-letter`, `notify-support`, `send-reminders`,
-      `purge-storage`. Elles sont vérifiées et essayées sous Deno 2.9 en CI (`npm run test:functions`) ;
-      vérifier au déploiement que la CLI empaquette les imports de `src/shared` (T).
+      `purge-storage`. Elles sont vérifiées et essayées en CI sous Deno 2.1.4, la version du moteur de
+      Supabase (`npm run test:functions`) ; l'empaquetage des imports de `src/shared` est vérifié en
+      préproduction (T).
 - [ ] Secrets des fonctions : `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `RELAIS_APP_ORIGINS`,
       `RELAIS_APP_URL`, `RELAIS_EMAIL_FROM`, `RELAIS_CRON_SECRET`, `AWS_SES_ACCESS_KEY_ID`,
       `AWS_SES_SECRET_ACCESS_KEY`, `AWS_SES_REGION` (T).
@@ -58,7 +59,8 @@ Rôles : **R** = responsable du projet Relais, **J** = juriste, **TS** = travail
       (purge de Storage, chaque heure) (T).
 - [ ] Une heure plus tard : les deux tâches réussies dans `cron.job_run_details`, et la file
       `storage_deletion_queue` vide (T).
-- [ ] Région effective des fonctions vérifiée (en-tête de réponse) (T).
+- [x] Région effective des fonctions vérifiée : `ca-central-1` en préproduction (en-tête `x-sb-edge-region`) ;
+      à revérifier sur le projet du pilote (T).
 - [ ] `delete_my_account` vérifiée sur Supabase hébergé (suppression dans `auth.users`) (T).
 - [ ] Sauvegardes et restauration (PITR) activées et testées une fois (T).
 - [ ] Netlify : variables `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY`, en-têtes de sécurité et CSP

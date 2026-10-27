@@ -85,7 +85,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: relais/.tmp/deno
-          key: deno-2.9.6-${{ hashFiles('relais/supabase/functions/import_map.json') }}
+          key: deno-2.1.4-${{ hashFiles('relais/supabase/functions/import_map.json') }}
       - run: npm run check:functions
       - run: npm run test:functions
 

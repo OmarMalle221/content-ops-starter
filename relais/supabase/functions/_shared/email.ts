@@ -31,7 +31,15 @@ async function sha256Hex(data: string): Promise<string> {
     return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(data)));
 }
 
-async function hmac(key: ArrayBuffer | Uint8Array<ArrayBuffer>, data: string): Promise<ArrayBuffer> {
+/** Octets d'un texte dans un ArrayBuffer à part (même typage pour le TypeScript de Deno 2.1 et le récent). */
+function textBuffer(text: string): ArrayBuffer {
+    const view = encoder.encode(text);
+    const buffer = new ArrayBuffer(view.byteLength);
+    new Uint8Array(buffer).set(view);
+    return buffer;
+}
+
+async function hmac(key: ArrayBuffer, data: string): Promise<ArrayBuffer> {
     const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     return crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
 }
@@ -40,7 +48,7 @@ async function hmac(key: ArrayBuffer | Uint8Array<ArrayBuffer>, data: string): P
 const awsEncode = (value: string) => encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 
 export async function signingKey(secretAccessKey: string, dateStamp: string, region: string, service: string): Promise<ArrayBuffer> {
-    const kDate = await hmac(encoder.encode(`AWS4${secretAccessKey}`), dateStamp);
+    const kDate = await hmac(textBuffer(`AWS4${secretAccessKey}`), dateStamp);
     const kRegion = await hmac(kDate, region);
     const kService = await hmac(kRegion, service);
     return hmac(kService, 'aws4_request');
