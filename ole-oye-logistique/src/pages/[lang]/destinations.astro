@@ -1,0 +1,76 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import CtaBand from '../../components/CtaBand.astro';
+import Icon from '../../components/Icon.astro';
+import { siteConfig, pick } from '../../config/site.config';
+import { useTranslations } from '../../i18n';
+import { localeStaticPaths, pagePath } from '../../lib/paths';
+
+export const getStaticPaths = localeStaticPaths;
+
+const { lang } = Astro.params;
+const { t } = useTranslations(lang);
+---
+
+<BaseLayout lang={lang} page="destinations">
+  <PageHeader title={t('destinations.title')} lead={t('destinations.lead')} />
+
+  <div class="container-page section">
+    <div class="overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
+      <table class="w-full text-left">
+        <caption class="sr-only">{t('destinations.title')}</caption>
+        <thead class="hidden bg-primary text-sm tracking-wide text-white uppercase sm:table-header-group">
+          <tr>
+            <th scope="col" class="px-5 py-3.5 font-semibold">{t('destinations.port')}</th>
+            <th scope="col" class="px-5 py-3.5 font-semibold">{t('destinations.country')}</th>
+            <th scope="col" class="px-5 py-3.5 font-semibold">{t('destinations.transit')}</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200 bg-white">
+          {
+            siteConfig.destinations.map((destination) => (
+              <tr class="flex flex-col px-4 py-4 sm:table-row sm:p-0">
+                <th scope="row" class="font-display text-lg font-bold text-primary sm:px-5 sm:py-4">
+                  {destination.city}
+                  {destination.via && (
+                    <span class="ml-1 font-sans text-sm font-normal text-slate-600">
+                      {t('destinations.via', { port: destination.via })}
+                    </span>
+                  )}
+                </th>
+                <td class="text-slate-700 sm:px-5 sm:py-4">{pick(destination.country, lang)}</td>
+                <td class="mt-1 sm:mt-0 sm:px-5 sm:py-4">
+                  <span class="text-sm text-slate-600 sm:hidden">{t('destinations.transit')} : </span>
+                  {destination.transit ? (
+                    <span class="font-semibold text-slate-900">{pick(destination.transit, lang)}</span>
+                  ) : (
+                    <span class="text-slate-600">{t('destinations.transitUnknown')}</span>
+                  )}
+                </td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-4 text-sm text-slate-600">{t('destinations.disclaimer')}</p>
+
+    {
+      siteConfig.acceptsOtherDestinations && (
+        <section class="mt-10 rounded-2xl bg-surface p-6 sm:p-8" aria-labelledby="other-title">
+          <h2 id="other-title" class="text-2xl font-bold">
+            {t('destinations.otherTitle')}
+          </h2>
+          <p class="mt-2 max-w-3xl text-lg leading-relaxed">{t('destinations.otherText')}</p>
+          <a href={pagePath(lang, 'quote')} class="btn-primary mt-5">
+            {t('cta.quote')}
+            <Icon name="arrow" class="size-5" />
+          </a>
+        </section>
+      )
+    }
+  </div>
+
+  <CtaBand lang={lang} />
+</BaseLayout>

@@ -1,0 +1,272 @@
+---
+/**
+ * Suivi d'expédition. Îlot sans framework : le script interroge la fonction
+ * `/api/track` et dessine la frise des étapes.
+ * Un lien `…/suivi/?q=NUMERO` lance la recherche tout seul : pratique à envoyer par WhatsApp.
+ */
+import Icon from './Icon.astro';
+import { siteConfig } from '../config/site.config';
+import { useTranslations } from '../i18n';
+import { SHIPMENT_STATUSES } from '../lib/statuses';
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const { t, tx } = useTranslations(lang);
+const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.locales[0];
+
+const clientConfig = {
+  endpoint: '/api/track',
+  htmlLang: locale.htmlLang,
+  statuses: SHIPMENT_STATUSES,
+  whatsapp: siteConfig.contact.whatsapp,
+  messages: {
+    statuses: tx<Record<string, string>>('statuses'),
+    errors: tx<Record<string, string>>('tracking.errors'),
+    submit: t('tracking.submit'),
+    searching: t('tracking.searching'),
+    resultTitle: t('tracking.resultTitle'),
+    etaUnknown: t('tracking.etaUnknown'),
+    pending: t('tracking.pending'),
+    stepDone: t('tracking.stepDone'),
+    stepCurrent: t('tracking.stepCurrent'),
+    stepPending: t('tracking.stepPending'),
+    helpWhatsappMessage: t('tracking.helpWhatsappMessage'),
+  },
+};
+---
+
+<div data-tracking-root data-config={JSON.stringify(clientConfig)}>
+  <form class="card sm:p-8" novalidate data-tracking-form>
+    <label for="track-q" class="field-label text-base">{t('tracking.label')}</label>
+    <div class="flex flex-col gap-3 sm:flex-row">
+      <input
+        id="track-q"
+        name="q"
+        type="text"
+        required
+        maxlength="40"
+        autocomplete="off"
+        autocapitalize="characters"
+        spellcheck="false"
+        enterkeyhint="search"
+        placeholder={t('tracking.placeholder')}
+        class="field-input font-semibold tracking-wide uppercase placeholder:font-normal placeholder:tracking-normal placeholder:normal-case"
+        aria-describedby="track-hint track-error"
+      />
+      <button type="submit" class="btn-accent shrink-0 sm:min-w-36" data-submit>
+        <Icon name="search" class="size-5" />
+        <span data-submit-label>{t('tracking.submit')}</span>
+      </button>
+    </div>
+    <p id="track-hint" class="field-hint">{t('tracking.hint')}</p>
+    <p id="track-error" role="alert" class="field-error text-base" hidden></p>
+  </form>
+
+  <section class="mt-8 hidden scroll-mt-20" aria-live="polite" aria-labelledby="track-result-title" data-tracking-result>
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="bg-primary p-6 text-white sm:p-8">
+        <h2 id="track-result-title" tabindex="-1" class="text-sm font-semibold tracking-wide text-slate-200 uppercase" data-result-title></h2>
+        <p class="mt-3 text-sm font-semibold tracking-wide text-accent uppercase">{t('tracking.currentStatus')}</p>
+        <p class="font-display text-3xl leading-tight font-extrabold sm:text-4xl" data-current-status></p>
+      </div>
+
+      <dl class="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3">
+        <div class="bg-white p-4 sm:p-5">
+          <dt class="text-sm text-slate-600">{t('tracking.originPort')}</dt>
+          <dd class="font-display text-lg font-bold text-primary" data-origin></dd>
+        </div>
+        <div class="bg-white p-4 sm:p-5">
+          <dt class="text-sm text-slate-600">{t('tracking.destinationPort')}</dt>
+          <dd class="font-display text-lg font-bold text-primary" data-destination></dd>
+        </div>
+        <div class="col-span-2 bg-white p-4 sm:col-span-1 sm:p-5">
+          <dt class="text-sm text-slate-600">{t('tracking.eta')}</dt>
+          <dd class="font-display text-lg font-bold text-primary" data-eta></dd>
+        </div>
+      </dl>
+
+      <div class="p-6 sm:p-8">
+        <h3 class="text-xl font-bold">{t('tracking.history')}</h3>
+        <ol class="mt-6" data-timeline></ol>
+      </div>
+    </div>
+
+    <div class="mt-6 flex flex-col gap-4 rounded-2xl bg-surface p-6 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 class="text-lg font-bold">{t('tracking.helpTitle')}</h3>
+        <p class="mt-1">{t('tracking.helpText')}</p>
+      </div>
+      <a href="#" class="btn-whatsapp shrink-0" rel="noopener" data-help-link>
+        <Icon name="whatsapp" class="size-5" />
+        {t('cta.whatsappShort')}
+      </a>
+    </div>
+  </section>
+
+  <!-- Modèle d'une étape de la frise, cloné par le script. -->
+  <template data-step-template>
+    <li class="relative flex gap-4 pb-7 last:pb-0" data-step>
+      <span class="absolute top-9 bottom-0 left-[1.0625rem] w-0.5 bg-slate-300" data-line aria-hidden="true"></span>
+      <span class="relative flex size-9 shrink-0 items-center justify-center rounded-full border-2" data-dot aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="size-5" data-check>
+          <path d="m5 12.5 4.5 4.5L19 7.5"></path>
+        </svg>
+      </span>
+      <div class="min-w-0 pt-1">
+        <p class="font-display text-lg leading-tight font-bold" data-label></p>
+        <p class="mt-0.5 text-slate-600" data-date></p>
+        <span class="sr-only" data-state></span>
+      </div>
+    </li>
+  </template>
+</div>
+
+<script>
+  import { CONTAINER_RE, REFERENCE_RE, normalizeContainer, normalizeReference, type TrackingResult } from '../lib/tracking';
+
+  interface ClientConfig {
+    endpoint: string;
+    htmlLang: string;
+    statuses: string[];
+    whatsapp: string;
+    messages: {
+      statuses: Record<string, string>;
+      errors: Record<string, string>;
+      submit: string;
+      searching: string;
+      resultTitle: string;
+      etaUnknown: string;
+      pending: string;
+      stepDone: string;
+      stepCurrent: string;
+      stepPending: string;
+      helpWhatsappMessage: string;
+    };
+  }
+
+  const root = document.querySelector<HTMLElement>('[data-tracking-root]');
+  if (root) {
+    const config = JSON.parse(root.dataset.config ?? '{}') as ClientConfig;
+    const { messages } = config;
+    const form = root.querySelector<HTMLFormElement>('[data-tracking-form]')!;
+    const input = root.querySelector<HTMLInputElement>('#track-q')!;
+    const errorBox = root.querySelector<HTMLElement>('#track-error')!;
+    const result = root.querySelector<HTMLElement>('[data-tracking-result]')!;
+    const timeline = root.querySelector<HTMLOListElement>('[data-timeline]')!;
+    const template = root.querySelector<HTMLTemplateElement>('[data-step-template]')!;
+    const submit = root.querySelector<HTMLButtonElement>('[data-submit]')!;
+    const submitLabel = root.querySelector<HTMLElement>('[data-submit-label]')!;
+    const part = (name: string) => result.querySelector<HTMLElement>(`[data-${name}]`)!;
+
+    const longDate = new Intl.DateTimeFormat(config.htmlLang, { dateStyle: 'long' });
+    const formatDate = (iso: string) => longDate.format(new Date(iso));
+    // Une date seule (AAAA-MM-JJ) est affichée telle quelle, sans décalage de fuseau.
+    const formatDay = (day: string) =>
+      new Intl.DateTimeFormat(config.htmlLang, { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00Z`));
+
+    const showError = (code: string | null) => {
+      errorBox.textContent = code ? (messages.errors[code] ?? messages.errors.server) : '';
+      errorBox.hidden = !code;
+      input.setAttribute('aria-invalid', String(Boolean(code)));
+    };
+
+    const render = (query: string, shipment: TrackingResult) => {
+      const currentIndex = config.statuses.indexOf(shipment.status);
+      part('result-title').textContent = messages.resultTitle.replace('{query}', query);
+      part('current-status').textContent = messages.statuses[shipment.status] ?? shipment.status;
+      part('origin').textContent = shipment.origin_port;
+      part('destination').textContent = shipment.destination_port;
+      part('eta').textContent = shipment.eta ? formatDay(shipment.eta) : messages.etaUnknown;
+
+      // Date de chaque statut : la plus récente des étapes enregistrées pour ce statut.
+      const dates = new Map<string, string>();
+      for (const event of shipment.events) dates.set(event.status, event.occurred_at);
+
+      timeline.replaceChildren(
+        ...config.statuses.map((status, index) => {
+          const step = (template.content.cloneNode(true) as DocumentFragment).querySelector<HTMLElement>('[data-step]')!;
+          const state = index < currentIndex ? 'done' : index === currentIndex ? 'current' : 'pending';
+          const dot = step.querySelector<HTMLElement>('[data-dot]')!;
+          const label = step.querySelector<HTMLElement>('[data-label]')!;
+          const date = dates.get(status);
+
+          label.textContent = messages.statuses[status] ?? status;
+          step.querySelector<HTMLElement>('[data-date]')!.textContent =
+            state === 'pending' ? messages.pending : date ? formatDate(date) : '';
+          step.querySelector<HTMLElement>('[data-state]')!.textContent =
+            state === 'done' ? messages.stepDone : state === 'current' ? messages.stepCurrent : messages.stepPending;
+          step.querySelector<HTMLElement>('[data-check]')!.classList.toggle('hidden', state === 'pending');
+          step.querySelector<HTMLElement>('[data-line]')!.classList.toggle('hidden', index === config.statuses.length - 1);
+          if (state === 'current') step.setAttribute('aria-current', 'step');
+
+          dot.classList.add(
+            ...(state === 'done'
+              ? ['border-primary', 'bg-primary', 'text-white']
+              : state === 'current'
+                ? ['border-accent', 'bg-accent', 'text-primary-dark', 'ring-4', 'ring-accent/30']
+                : ['border-slate-400', 'bg-white']),
+          );
+          label.classList.add(state === 'pending' ? 'text-slate-600' : 'text-primary');
+          if (index < currentIndex) step.querySelector<HTMLElement>('[data-line]')!.classList.replace('bg-slate-300', 'bg-primary');
+          return step;
+        }),
+      );
+
+      const help = messages.helpWhatsappMessage.replace('{query}', query);
+      result.querySelector<HTMLAnchorElement>('[data-help-link]')!.href =
+        `https://wa.me/${config.whatsapp}?text=${encodeURIComponent(help)}`;
+      result.classList.remove('hidden');
+      part('result-title').focus({ preventScroll: true });
+      result.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    };
+
+    const search = async (raw: string) => {
+      const query = normalizeReference(raw);
+      showError(null);
+      result.classList.add('hidden');
+      if (!REFERENCE_RE.test(query) || !CONTAINER_RE.test(normalizeContainer(raw))) {
+        showError('invalid');
+        input.focus();
+        return;
+      }
+      input.value = query;
+      submit.disabled = true;
+      submitLabel.textContent = messages.searching;
+      try {
+        const response = await fetch(`${config.endpoint}?q=${encodeURIComponent(query)}`, {
+          headers: { Accept: 'application/json' },
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          shipment?: TrackingResult;
+          error?: string;
+        };
+        if (response.ok && payload.ok && payload.shipment) {
+          render(query, payload.shipment);
+          history.replaceState(null, '', `?q=${encodeURIComponent(query)}`);
+        } else {
+          showError(payload.error ?? 'server');
+        }
+      } catch {
+        showError('network');
+      } finally {
+        submit.disabled = false;
+        submitLabel.textContent = messages.submit;
+      }
+    };
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void search(input.value);
+    });
+
+    const initial = new URLSearchParams(location.search).get('q');
+    if (initial) {
+      input.value = initial;
+      void search(initial);
+    }
+  }
+</script>

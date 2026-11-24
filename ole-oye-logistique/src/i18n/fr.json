@@ -1,0 +1,425 @@
+{
+  "meta": {
+    "home": {
+      "title": "{company} — Export de véhicules et conteneurs de {city} vers {region}",
+      "description": "{company} expédie vos véhicules, conteneurs complets et colis groupés de {city} vers {region}. Devis rapide, suivi en ligne et équipe joignable sur WhatsApp."
+    },
+    "services": {
+      "title": "Services d'export vers {region} — {company}",
+      "description": "Export de véhicules, conteneur complet 20' et 40', groupage, achat de véhicule et dédouanement à l'arrivée : ce qui est inclus dans chaque service de {company}."
+    },
+    "destinations": {
+      "title": "Destinations et délais de transit — {company}",
+      "description": "Ports et pays desservis au départ de {city}, avec les délais de transit indicatifs. {company} expédie vers {region}."
+    },
+    "quote": {
+      "title": "Demander un devis — {company}",
+      "description": "Décrivez votre envoi (véhicule, conteneur complet ou groupage) et recevez un devis de {company}. Réponse par téléphone, courriel ou WhatsApp."
+    },
+    "tracking": {
+      "title": "Suivi d'expédition — {company}",
+      "description": "Entrez votre numéro de conteneur ou de dossier pour voir où se trouve votre expédition : étapes franchies, port d'arrivée et date prévue."
+    },
+    "contact": {
+      "title": "Contact et entrepôt à {city} — {company}",
+      "description": "Téléphone, WhatsApp, courriel, adresse de l'entrepôt et heures d'ouverture de {company} à {city}."
+    },
+    "privacy": {
+      "title": "Politique de confidentialité — {company}",
+      "description": "Comment {company} recueille, utilise et protège vos renseignements personnels, conformément à la Loi 25 du Québec."
+    },
+    "legal": {
+      "title": "Mentions légales — {company}",
+      "description": "Éditeur du site, hébergement et conditions d'utilisation du site de {company}."
+    }
+  },
+  "nav": {
+    "home": "Accueil",
+    "services": "Services",
+    "destinations": "Destinations",
+    "quote": "Devis",
+    "tracking": "Suivi",
+    "contact": "Contact",
+    "privacy": "Politique de confidentialité",
+    "legal": "Mentions légales",
+    "menu": "Menu",
+    "main": "Navigation principale",
+    "skip": "Aller au contenu",
+    "language": "Langue"
+  },
+  "cta": {
+    "quote": "Demander un devis",
+    "whatsapp": "Écrire sur WhatsApp",
+    "whatsappShort": "WhatsApp",
+    "call": "Appeler",
+    "track": "Suivre une expédition",
+    "allServices": "Voir tous les services",
+    "allDestinations": "Voir toutes les destinations",
+    "whatsappMessage": "Bonjour {company}, j'aimerais avoir des renseignements sur un envoi."
+  },
+  "home": {
+    "eyebrow": "Exportateur à {city}",
+    "title": "Vos véhicules et vos marchandises, de {city} à toute {region}.",
+    "lead": "{company} expédie véhicules, conteneurs complets et colis groupés vers les ports africains. Vous obtenez un prix clair avant le départ et vous suivez votre envoi en ligne.",
+    "routeFrom": "Départ",
+    "routeTo": "Arrivée",
+    "trustTitle": "Pourquoi nous confier votre envoi",
+    "servicesEyebrow": "Nos services",
+    "servicesTitle": "Un service pour chaque type d'envoi",
+    "servicesLead": "Du véhicule seul au conteneur complet, nous nous occupons du chargement, des documents et du transport maritime.",
+    "destinationsEyebrow": "Destinations",
+    "destinationsTitle": "Nous desservons toute {region}",
+    "destinationsLead": "Voici les ports les plus demandés. Votre ville n'y figure pas ? Écrivez-nous, nous expédions aussi vers les autres pays du continent.",
+    "stepsEyebrow": "Comment ça marche",
+    "stepsTitle": "Votre envoi en quatre étapes",
+    "steps": [
+      {
+        "title": "Vous demandez un devis",
+        "text": "Remplissez le formulaire ou écrivez-nous sur WhatsApp avec les détails de votre envoi."
+      },
+      {
+        "title": "Vous déposez à l'entrepôt",
+        "text": "Vous apportez le véhicule ou les marchandises à notre entrepôt de {city}."
+      },
+      {
+        "title": "Nous chargeons et expédions",
+        "text": "Nous chargeons le conteneur, préparons les documents et le livrons au port."
+      },
+      {
+        "title": "Vous suivez en ligne",
+        "text": "Avec votre numéro de dossier, vous voyez chaque étape jusqu'à l'arrivée."
+      }
+    ],
+    "ctaTitle": "Prêt à expédier ?",
+    "ctaText": "Décrivez votre envoi en deux minutes. Nous vous répondons avec un prix et une date de départ."
+  },
+  "services": {
+    "title": "Nos services",
+    "lead": "Chaque envoi est différent. Voici ce que comprend chacun de nos services ; le devis précise ensuite le prix selon votre destination.",
+    "included": "Ce qui est inclus",
+    "askQuote": "Demander un devis pour ce service"
+  },
+  "destinations": {
+    "title": "Destinations",
+    "lead": "Nous expédions de {city} vers toute {region}. Les délais ci-dessous sont indicatifs : ils comptent du départ du navire jusqu'à l'arrivée au port et varient selon la compagnie maritime et la saison.",
+    "port": "Port ou ville",
+    "country": "Pays",
+    "transit": "Délai de transit indicatif",
+    "transitUnknown": "À confirmer au devis",
+    "via": "via {port}",
+    "otherTitle": "Une autre destination ?",
+    "otherText": "Cette liste présente les ports les plus demandés. Nous expédions aussi vers les autres pays du continent : indiquez votre destination dans la demande de devis.",
+    "disclaimer": "Les délais sont donnés à titre indicatif et ne constituent pas un engagement."
+  },
+  "quote": {
+    "title": "Demander un devis",
+    "lead": "Décrivez votre envoi. Nous vous répondons avec un prix et une date de départ, par téléphone, courriel ou WhatsApp.",
+    "required": "Les champs marqués d'un astérisque (*) sont obligatoires.",
+    "sectionContact": "Vos coordonnées",
+    "sectionShipment": "Votre envoi",
+    "name": "Nom complet",
+    "phone": "Téléphone (WhatsApp)",
+    "phoneHint": "Avec l'indicatif du pays si le numéro n'est pas canadien.",
+    "email": "Courriel",
+    "shipmentType": "Type d'envoi",
+    "types": {
+      "vehicle": "Véhicule",
+      "full_container": "Conteneur complet",
+      "groupage": "Groupage",
+      "other": "Autre"
+    },
+    "vehicleLegend": "Le véhicule",
+    "vehicleMake": "Marque",
+    "vehicleModel": "Modèle",
+    "vehicleYear": "Année",
+    "vehicleRunning": "Le véhicule est-il roulant ?",
+    "runningYes": "Oui, il roule",
+    "runningNo": "Non, il ne roule pas",
+    "containerLegend": "Le conteneur",
+    "containerSize": "Taille du conteneur",
+    "container20": "20 pieds",
+    "container40": "40 pieds",
+    "destination": "Destination",
+    "destinationPlaceholder": "Choisir une destination",
+    "destinationOther": "Autre destination (à préciser dans le message)",
+    "desiredDate": "Date souhaitée",
+    "desiredDateHint": "Facultatif. Date approximative à laquelle vous aimeriez expédier.",
+    "message": "Message",
+    "messageHint": "Facultatif. Précisez le contenu, le volume ou toute autre information utile.",
+    "honeypot": "Ne remplissez pas ce champ",
+    "consent": "J'accepte que {company} utilise ces renseignements pour traiter ma demande de devis et me répondre, conformément à la",
+    "consentLink": "politique de confidentialité",
+    "submit": "Envoyer ma demande",
+    "sending": "Envoi en cours…",
+    "noscript": "Ce formulaire a besoin de JavaScript. Vous pouvez aussi nous écrire directement sur WhatsApp.",
+    "errorSummary": "Certains champs sont à corriger avant l'envoi.",
+    "errors": {
+      "required": "Ce champ est obligatoire.",
+      "name": "Indiquez votre nom complet.",
+      "phone": "Indiquez un numéro de téléphone valide, avec l'indicatif régional.",
+      "email": "Indiquez une adresse courriel valide.",
+      "shipment_type": "Choisissez un type d'envoi.",
+      "vehicle_year": "Indiquez une année valide (4 chiffres).",
+      "vehicle_running": "Indiquez si le véhicule roule.",
+      "container_size": "Choisissez la taille du conteneur.",
+      "destination": "Choisissez une destination.",
+      "desired_date": "Indiquez une date valide, à partir d'aujourd'hui.",
+      "too_long": "Ce texte est trop long.",
+      "consent": "Votre consentement est nécessaire pour traiter la demande.",
+      "rate_limited": "Vous avez envoyé plusieurs demandes en peu de temps. Réessayez dans quelques minutes ou écrivez-nous sur WhatsApp.",
+      "server": "L'envoi n'a pas fonctionné. Réessayez dans un instant ou écrivez-nous sur WhatsApp.",
+      "network": "Connexion impossible. Vérifiez votre réseau, puis réessayez."
+    },
+    "successTitle": "Demande reçue",
+    "successText": "Merci. Votre demande est enregistrée et nous vous répondrons rapidement.",
+    "successReference": "Numéro de votre demande",
+    "successWhatsapp": "Continuer sur WhatsApp",
+    "successWhatsappHint": "Pour une réponse plus rapide, envoyez-nous ce numéro sur WhatsApp. Vous pourrez y joindre des photos.",
+    "successWhatsappMessage": "Bonjour {company}, je viens d'envoyer la demande de devis n° {reference}.",
+    "successNew": "Envoyer une autre demande",
+    "asideTitle": "Besoin d'aide ?",
+    "asideText": "Vous préférez expliquer votre envoi de vive voix ou envoyer des photos ? Contactez-nous directement."
+  },
+  "tracking": {
+    "title": "Suivi d'expédition",
+    "lead": "Entrez votre numéro de conteneur ou votre numéro de dossier pour voir où se trouve votre expédition.",
+    "label": "Numéro de conteneur ou de dossier",
+    "placeholder": "Ex. MSCU1234567",
+    "hint": "Le numéro de dossier figure sur votre reçu. Le numéro de conteneur vous est communiqué après le chargement.",
+    "submit": "Suivre",
+    "searching": "Recherche…",
+    "resultTitle": "Expédition {query}",
+    "currentStatus": "Statut actuel",
+    "originPort": "Port de départ",
+    "destinationPort": "Port d'arrivée",
+    "eta": "Arrivée prévue",
+    "etaUnknown": "À confirmer",
+    "history": "Étapes du parcours",
+    "stepDone": "Étape franchie",
+    "stepCurrent": "Étape en cours",
+    "stepPending": "À venir",
+    "pending": "À venir",
+    "helpTitle": "Une question sur votre expédition ?",
+    "helpText": "Envoyez-nous votre numéro sur WhatsApp, nous vous répondons.",
+    "helpWhatsappMessage": "Bonjour {company}, j'ai une question sur l'expédition {query}.",
+    "errors": {
+      "invalid": "Entrez un numéro de 4 à 30 caractères (lettres, chiffres et tirets).",
+      "not_found": "Aucune expédition ne correspond à ce numéro. Vérifiez la saisie ou écrivez-nous sur WhatsApp.",
+      "rate_limited": "Trop de recherches en peu de temps. Réessayez dans quelques minutes.",
+      "server": "Le suivi est momentanément indisponible. Réessayez dans un instant.",
+      "network": "Connexion impossible. Vérifiez votre réseau, puis réessayez."
+    }
+  },
+  "statuses": {
+    "received_at_warehouse": "Reçu à l'entrepôt",
+    "loaded_in_container": "Chargé en conteneur",
+    "delivered_to_port": "Livré au port",
+    "on_board": "À bord",
+    "arrived_at_destination": "Arrivé au port de destination",
+    "available_delivered": "Disponible / Livré"
+  },
+  "contact": {
+    "title": "Contact",
+    "lead": "Appelez-nous, écrivez-nous sur WhatsApp ou passez à l'entrepôt pendant les heures d'ouverture.",
+    "phone": "Téléphone",
+    "whatsapp": "WhatsApp",
+    "email": "Courriel",
+    "address": "Adresse de l'entrepôt",
+    "hours": "Heures d'ouverture",
+    "map": "Voir sur Google Maps",
+    "mapNote": "Le lien ouvre Google Maps dans un nouvel onglet.",
+    "quoteTitle": "Vous avez un envoi à préparer ?",
+    "quoteText": "Le formulaire de devis nous donne toutes les informations nécessaires pour vous répondre avec un prix."
+  },
+  "footer": {
+    "navigation": "Navigation",
+    "contact": "Nous joindre",
+    "legal": "Informations légales",
+    "rights": "Tous droits réservés.",
+    "newTab": "(nouvel onglet)"
+  },
+  "privacy": {
+    "title": "Politique de confidentialité",
+    "updated": "Dernière mise à jour : {date}",
+    "intro": "{company} respecte la Loi sur la protection des renseignements personnels dans le secteur privé du Québec, modifiée par la Loi 25. Cette politique explique quels renseignements nous recueillons sur ce site, pourquoi, et quels sont vos droits.",
+    "sections": [
+      {
+        "title": "Responsable de la protection des renseignements personnels",
+        "body": [
+          "La personne responsable de la protection des renseignements personnels chez {company} est {officerName}.",
+          "Pour toute question ou demande concernant vos renseignements, écrivez à {officerEmail}."
+        ]
+      },
+      {
+        "title": "Renseignements que nous recueillons",
+        "body": [
+          "Lorsque vous remplissez la demande de devis, nous recueillons votre nom, votre numéro de téléphone, votre adresse courriel et les détails de votre envoi : type d'envoi, véhicule, taille du conteneur, destination, date souhaitée et message.",
+          "Le suivi d'expédition ne demande aucun renseignement personnel : il affiche seulement l'état d'un conteneur ou d'un dossier à partir de son numéro.",
+          "Pour limiter les abus, nous conservons brièvement une empreinte chiffrée de l'adresse IP des appareils qui envoient un formulaire. Cette empreinte ne permet pas de retrouver l'adresse d'origine."
+        ]
+      },
+      {
+        "title": "Pourquoi nous les utilisons",
+        "body": [
+          "Vos renseignements servent uniquement à préparer votre devis, à vous répondre et, si vous nous confiez un envoi, à organiser l'expédition.",
+          "Nous ne vendons pas vos renseignements et nous ne les utilisons pas pour de la publicité."
+        ]
+      },
+      {
+        "title": "Votre consentement",
+        "body": [
+          "Nous recueillons vos renseignements seulement après que vous avez coché la case de consentement du formulaire. Sans cette case, la demande n'est pas envoyée.",
+          "Vous pouvez retirer votre consentement en tout temps en écrivant à la personne responsable. Nous supprimerons alors votre demande, sauf si la loi nous oblige à la conserver."
+        ]
+      },
+      {
+        "title": "Fournisseurs et lieu de conservation",
+        "body": [
+          "Nous faisons appel à des fournisseurs pour faire fonctionner ce site : Netlify (hébergement du site), Supabase (base de données) et Resend (envoi de courriels). Ils traitent vos renseignements pour notre compte et n'ont pas le droit de les utiliser à d'autres fins.",
+          "Ces fournisseurs peuvent conserver des données à l'extérieur du Québec. Nous avons tenu compte de la protection offerte avant de les retenir."
+        ]
+      },
+      {
+        "title": "Durée de conservation",
+        "body": [
+          "Les demandes de devis sont conservées {retentionMonths} mois après notre dernier échange, puis supprimées. Les documents liés à une expédition réalisée sont conservés aussi longtemps que la loi l'exige."
+        ]
+      },
+      {
+        "title": "Sécurité",
+        "body": [
+          "Les échanges avec ce site sont chiffrés. L'accès aux demandes est réservé au personnel autorisé de {company} et la base de données n'est pas accessible au public."
+        ]
+      },
+      {
+        "title": "Témoins (cookies)",
+        "body": [
+          "Ce site n'utilise aucun témoin publicitaire ni outil de suivi de votre navigation. Le seul témoin utilisé sert à garder connecté le personnel dans l'espace d'administration."
+        ]
+      },
+      {
+        "title": "Vos droits",
+        "body": [
+          "Vous pouvez demander à consulter les renseignements que nous détenons sur vous, à les faire corriger ou à les faire supprimer. Écrivez à la personne responsable : nous répondons dans les 30 jours.",
+          "Si notre réponse ne vous satisfait pas, vous pouvez porter plainte à la Commission d'accès à l'information du Québec."
+        ]
+      },
+      {
+        "title": "Modifications",
+        "body": [
+          "Nous mettons cette politique à jour lorsque nos pratiques changent. La date de la dernière mise à jour figure en haut de la page."
+        ]
+      }
+    ]
+  },
+  "legal": {
+    "title": "Mentions légales",
+    "sections": [
+      {
+        "title": "Éditeur du site",
+        "body": [
+          "Ce site est édité par {legalName}, {address}.",
+          "Téléphone : {phone}. Courriel : {email}."
+        ]
+      },
+      {
+        "title": "Hébergement",
+        "body": [
+          "Le site est hébergé par Netlify, Inc., 101 2nd Street, San Francisco, Californie, États-Unis."
+        ]
+      },
+      {
+        "title": "Informations publiées",
+        "body": [
+          "Les délais de transit et les descriptions de services sont donnés à titre indicatif. Seul le devis que nous vous remettons précise le prix et les conditions de votre envoi.",
+          "Le suivi d'expédition reflète les dernières étapes enregistrées par notre équipe. La date d'arrivée prévue peut changer selon la compagnie maritime."
+        ]
+      },
+      {
+        "title": "Propriété intellectuelle",
+        "body": [
+          "Les textes, le logo et les éléments graphiques de ce site appartiennent à {legalName}. Ils ne peuvent pas être reproduits sans autorisation."
+        ]
+      },
+      {
+        "title": "Renseignements personnels",
+        "body": [
+          "Le traitement de vos renseignements personnels est décrit dans notre politique de confidentialité."
+        ]
+      }
+    ]
+  },
+  "admin": {
+    "title": "Administration",
+    "subtitle": "Expéditions",
+    "loading": "Chargement…",
+    "loginTitle": "Connexion",
+    "loginText": "Entrez votre courriel. Vous recevrez un lien de connexion.",
+    "email": "Courriel",
+    "sendLink": "Recevoir le lien",
+    "linkSent": "Si ce courriel est autorisé, un message vient de lui être envoyé. Ouvrez le lien sur cet appareil, ou entrez le code reçu.",
+    "code": "Code reçu par courriel",
+    "verifyCode": "Valider le code",
+    "changeEmail": "Utiliser un autre courriel",
+    "logout": "Se déconnecter",
+    "signedInAs": "Connecté : {email}",
+    "newShipment": "Nouvelle expédition",
+    "reference": "Numéro de dossier",
+    "referenceHint": "Communiqué au client pour le suivi.",
+    "containerNumber": "Numéro de conteneur",
+    "containerHint": "Facultatif. Peut être ajouté après le chargement.",
+    "originPort": "Port de départ",
+    "destinationPort": "Port d'arrivée",
+    "eta": "Arrivée prévue",
+    "note": "Note interne",
+    "noteHint": "Jamais affichée au public.",
+    "create": "Créer l'expédition",
+    "cancel": "Annuler",
+    "save": "Enregistrer",
+    "edit": "Modifier",
+    "search": "Rechercher un dossier ou un conteneur",
+    "empty": "Aucune expédition pour l'instant.",
+    "noResult": "Aucun résultat.",
+    "nextStep": "Étape suivante",
+    "otherStep": "Autre étape",
+    "addStep": "Ajouter une étape",
+    "status": "Étape",
+    "occurredAt": "Date et heure",
+    "location": "Lieu",
+    "locationHint": "Facultatif. Ex. Port de Montréal.",
+    "confirm": "Confirmer",
+    "completed": "Expédition terminée",
+    "saved": "Enregistré.",
+    "created": "Expédition créée.",
+    "stepAdded": "Étape ajoutée.",
+    "history": "Étapes enregistrées",
+    "removeStep": "Retirer",
+    "removeStepConfirm": "Retirer cette étape ?",
+    "publicLink": "Voir le suivi public",
+    "errors": {
+      "generic": "Une erreur est survenue. Réessayez.",
+      "network": "Connexion impossible. Vérifiez votre réseau.",
+      "unauthorized": "Votre session a expiré. Reconnectez-vous.",
+      "invalid_code": "Code invalide ou expiré.",
+      "invalid_email": "Entrez une adresse courriel valide.",
+      "rate_limited": "Trop de tentatives. Réessayez dans quelques minutes.",
+      "reference_required": "Le numéro de dossier est obligatoire (4 à 30 lettres, chiffres ou tirets).",
+      "reference_taken": "Ce numéro de dossier existe déjà.",
+      "container_invalid": "Numéro de conteneur invalide (4 à 30 lettres ou chiffres).",
+      "ports_required": "Indiquez le port de départ et le port d'arrivée.",
+      "not_configured": "Le serveur n'est pas encore configuré (variables d'environnement manquantes).",
+      "not_allowed": "Ce courriel n'a pas accès à l'administration."
+    }
+  },
+  "email": {
+    "subject": "Nouvelle demande de devis {reference} — {name}",
+    "intro": "Une nouvelle demande de devis vient d'arriver par le site.",
+    "reference": "Numéro de la demande",
+    "replyHint": "Répondez à ce courriel pour écrire directement à la personne.",
+    "whatsapp": "Ouvrir la conversation WhatsApp",
+    "running": "Roulant",
+    "yes": "Oui",
+    "no": "Non",
+    "locale": "Langue du visiteur"
+  }
+}

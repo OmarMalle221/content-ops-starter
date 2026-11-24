@@ -1,0 +1,28 @@
+---
+import { siteConfig, pick } from '../config/site.config';
+import { useTranslations } from '../i18n';
+
+interface Props {
+  lang: string;
+  /** Limite le nombre de destinations affichées (page d'accueil). */
+  limit?: number;
+}
+
+const { lang, limit } = Astro.props;
+const { t } = useTranslations(lang);
+const destinations = limit ? siteConfig.destinations.slice(0, limit) : siteConfig.destinations;
+---
+
+<ul class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+  {
+    destinations.map((destination) => (
+      <li class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <p class="font-display text-lg leading-tight font-bold text-primary">{destination.city}</p>
+        <p class="text-sm text-slate-600">
+          {pick(destination.country, lang)}
+          {destination.via && <span> · {t('destinations.via', { port: destination.via })}</span>}
+        </p>
+      </li>
+    ))
+  }
+</ul>

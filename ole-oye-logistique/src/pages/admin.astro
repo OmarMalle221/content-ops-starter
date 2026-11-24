@@ -1,0 +1,34 @@
+---
+/**
+ * Administration minimale : créer une expédition et ajouter une étape en deux
+ * clics, depuis un téléphone. Toute la logique passe par les fonctions
+ * `/api/admin/*` ; aucune clé Supabase n'est présente dans cette page.
+ */
+import '@fontsource-variable/archivo';
+import '../styles/global.css';
+import AdminApp from '../components/admin/AdminApp.astro';
+import { siteConfig } from '../config/site.config';
+import { useTranslations } from '../i18n';
+
+const lang = siteConfig.defaultLocale;
+const { t } = useTranslations(lang);
+const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.locales[0];
+const { colors } = siteConfig.brand;
+const brandCss = `:root{--brand-primary:${colors.primary};--brand-primary-dark:${colors.primaryDark};--brand-primary-soft:${colors.primarySoft};--brand-accent:${colors.accent};--brand-accent-dark:${colors.accentDark};--brand-accent-text:${colors.accentText};--brand-surface:${colors.surface}}`;
+---
+
+<!doctype html>
+<html lang={locale.htmlLang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content={colors.primary} />
+    <title>{`${t('admin.title')} — ${siteConfig.name}`}</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style is:inline set:html={brandCss}></style>
+  </head>
+  <body class="min-h-screen bg-surface">
+    <AdminApp lang={lang} />
+  </body>
+</html>

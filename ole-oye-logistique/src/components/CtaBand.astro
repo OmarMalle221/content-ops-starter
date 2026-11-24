@@ -1,0 +1,32 @@
+---
+import Icon from './Icon.astro';
+import { useTranslations } from '../i18n';
+import { pagePath } from '../lib/paths';
+import { whatsappLink } from '../lib/whatsapp';
+
+interface Props {
+  lang: string;
+  title?: string;
+  text?: string;
+}
+
+const { lang } = Astro.props;
+const { t } = useTranslations(lang);
+const { title = t('home.ctaTitle'), text = t('home.ctaText') } = Astro.props;
+---
+
+<section class="bg-primary text-white">
+  <div class="container-page flex flex-col items-start gap-6 py-12 sm:py-14 lg:flex-row lg:items-center lg:justify-between">
+    <div class="max-w-2xl">
+      <h2 class="text-3xl font-bold text-white">{title}</h2>
+      <p class="mt-2 text-lg text-slate-200">{text}</p>
+    </div>
+    <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+      <a href={pagePath(lang, 'quote')} class="btn-accent">{t('cta.quote')}</a>
+      <a href={whatsappLink(t('cta.whatsappMessage'))} class="btn-whatsapp" rel="noopener">
+        <Icon name="whatsapp" class="size-5" />
+        {t('cta.whatsappShort')}
+      </a>
+    </div>
+  </div>
+</section>

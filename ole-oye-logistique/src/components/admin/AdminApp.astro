@@ -1,0 +1,605 @@
+---
+import Icon from '../Icon.astro';
+import { siteConfig } from '../../config/site.config';
+import { useTranslations } from '../../i18n';
+import { pagePath } from '../../lib/paths';
+import { SHIPMENT_STATUSES } from '../../lib/statuses';
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const { t, tx } = useTranslations(lang);
+const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.locales[0];
+
+const clientConfig = {
+  htmlLang: locale.htmlLang,
+  statuses: SHIPMENT_STATUSES,
+  trackingUrl: pagePath(lang, 'tracking'),
+  referencePrefix: siteConfig.referencePrefix,
+  messages: { ...tx<Record<string, unknown>>('admin'), statuses: tx<Record<string, string>>('statuses') },
+};
+const smallButton = 'btn min-h-11 px-4 py-2 text-[0.95rem]';
+---
+
+<div data-admin-root data-config={JSON.stringify(clientConfig)}>
+  <header class="bg-primary text-white">
+    <div class="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">
+      <div class="flex min-w-0 items-center gap-2.5">
+        <img src={siteConfig.brand.logo} alt="" width="36" height="36" class="size-9 shrink-0 rounded-lg ring-1 ring-white/30" />
+        <div class="min-w-0">
+          <p class="truncate font-display leading-tight font-bold">{siteConfig.name}</p>
+          <p class="truncate text-sm text-slate-200" data-user>{t('admin.title')}</p>
+        </div>
+      </div>
+      <button type="button" class="btn-ghost-light min-h-10 shrink-0 px-3 py-1.5 text-sm" data-logout hidden>
+        {t('admin.logout')}
+      </button>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-3xl px-4 py-6">
+    <p role="status" aria-live="polite" class="mb-4 hidden rounded-lg px-4 py-3 font-semibold" data-notice></p>
+
+    <p class="py-10 text-center text-slate-600" data-view="loading">{t('admin.loading')}</p>
+
+    <!-- Connexion -->
+    <section class="card mx-auto hidden max-w-md" data-view="login" aria-labelledby="login-title">
+      <h1 id="login-title" class="text-2xl font-bold">{t('admin.loginTitle')}</h1>
+
+      <form class="mt-3 space-y-4" novalidate data-login-form>
+        <p>{t('admin.loginText')}</p>
+        <div>
+          <label for="login-email" class="field-label">{t('admin.email')}</label>
+          <input id="login-email" name="email" type="email" autocomplete="email" inputmode="email" required class="field-input" />
+        </div>
+        <button type="submit" class="btn-primary w-full">{t('admin.sendLink')}</button>
+      </form>
+
+      <form class="mt-3 hidden space-y-4" novalidate data-code-form>
+        <p data-link-sent>{t('admin.linkSent')}</p>
+        <div>
+          <label for="login-code" class="field-label">{t('admin.code')}</label>
+          <input id="login-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" class="field-input text-center text-xl font-semibold tracking-[0.3em]" />
+        </div>
+        <button type="submit" class="btn-primary w-full">{t('admin.verifyCode')}</button>
+        <button type="button" class="btn w-full text-primary underline" data-change-email>{t('admin.changeEmail')}</button>
+      </form>
+    </section>
+
+    <!-- Expéditions -->
+    <section class="hidden" data-view="app" aria-labelledby="app-title">
+      <div class="flex items-center justify-between gap-3">
+        <h1 id="app-title" class="text-2xl font-bold">{t('admin.subtitle')}</h1>
+        <button type="button" class={`${smallButton} bg-accent text-primary-dark hover:bg-accent-dark`} aria-expanded="false" aria-controls="create-form" data-toggle-create>
+          <Icon name="plus" class="size-5" />
+          {t('admin.newShipment')}
+        </button>
+      </div>
+
+      <form id="create-form" class="card mt-4 hidden space-y-4" novalidate data-create-form>
+        <h2 class="text-xl font-bold">{t('admin.newShipment')}</h2>
+        <div>
+          <label for="c-reference" class="field-label">{t('admin.reference')} *</label>
+          <input id="c-reference" name="reference" type="text" required maxlength="30" autocapitalize="characters" autocomplete="off" spellcheck="false" class="field-input font-semibold uppercase" aria-describedby="c-reference-hint" />
+          <p id="c-reference-hint" class="field-hint">{t('admin.referenceHint')}</p>
+        </div>
+        <div>
+          <label for="c-container" class="field-label">{t('admin.containerNumber')}</label>
+          <input id="c-container" name="container_number" type="text" maxlength="30" autocapitalize="characters" autocomplete="off" spellcheck="false" class="field-input font-semibold uppercase" aria-describedby="c-container-hint" />
+          <p id="c-container-hint" class="field-hint">{t('admin.containerHint')}</p>
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label for="c-origin" class="field-label">{t('admin.originPort')} *</label>
+            <input id="c-origin" name="origin_port" type="text" required maxlength="80" value={siteConfig.origin.port} class="field-input" />
+          </div>
+          <div>
+            <label for="c-destination" class="field-label">{t('admin.destinationPort')} *</label>
+            <input id="c-destination" name="destination_port" type="text" required maxlength="80" list="destination-options" class="field-input" />
+          </div>
+        </div>
+        <div>
+          <label for="c-eta" class="field-label">{t('admin.eta')}</label>
+          <input id="c-eta" name="eta" type="date" class="field-input" />
+        </div>
+        <div>
+          <label for="c-note" class="field-label">{t('admin.note')}</label>
+          <textarea id="c-note" name="internal_note" rows="2" maxlength="500" class="field-input" aria-describedby="c-note-hint"></textarea>
+          <p id="c-note-hint" class="field-hint">{t('admin.noteHint')}</p>
+        </div>
+        <div class="flex gap-3">
+          <button type="submit" class="btn-primary flex-1">{t('admin.create')}</button>
+          <button type="button" class="btn-outline" data-cancel-create>{t('admin.cancel')}</button>
+        </div>
+      </form>
+
+      <datalist id="destination-options">
+        {siteConfig.destinations.filter((d) => !d.via).map((d) => <option value={d.city} />)}
+      </datalist>
+
+      <form class="mt-4" role="search" data-search-form>
+        <label for="admin-search" class="sr-only">{t('admin.search')}</label>
+        <input id="admin-search" name="q" type="search" placeholder={t('admin.search')} autocomplete="off" class="field-input" />
+      </form>
+
+      <ul class="mt-4 space-y-4" data-list></ul>
+      <p class="hidden py-10 text-center text-slate-600" data-empty></p>
+    </section>
+  </main>
+
+  <!-- Carte d'une expédition, clonée par le script. -->
+  <template data-card-template>
+    <li class="card p-4 sm:p-5" data-card>
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h2 class="font-display text-xl font-extrabold break-all text-primary" data-reference></h2>
+          <p class="font-semibold text-slate-700" data-container></p>
+        </div>
+        <span class="shrink-0 rounded-full bg-primary px-3 py-1 text-sm font-semibold text-white" data-status></span>
+      </div>
+      <p class="mt-2 text-slate-700" data-route></p>
+      <p class="text-slate-700" data-eta></p>
+      <p class="mt-1 text-sm text-slate-600 italic" data-note></p>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button type="button" class={`${smallButton} flex-1 bg-accent text-primary-dark hover:bg-accent-dark`} data-next></button>
+        <button type="button" class={`${smallButton} border-2 border-primary text-primary`} data-edit>{t('admin.edit')}</button>
+      </div>
+      <p class="mt-4 rounded-lg bg-emerald-50 px-3 py-2 font-semibold text-emerald-800" data-completed hidden>{t('admin.completed')}</p>
+
+      <form class="mt-4 space-y-4 rounded-xl bg-surface p-4" novalidate data-step-form hidden>
+        <div>
+          <label class="field-label" data-for="status">{t('admin.status')}</label>
+          <select name="status" class="field-input" data-id="status"></select>
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="field-label" data-for="occurred_at">{t('admin.occurredAt')}</label>
+            <input name="occurred_at" type="datetime-local" class="field-input" data-id="occurred_at" />
+          </div>
+          <div>
+            <label class="field-label" data-for="location">{t('admin.location')}</label>
+            <input name="location" type="text" maxlength="120" class="field-input" data-id="location" />
+            <p class="field-hint">{t('admin.locationHint')}</p>
+          </div>
+        </div>
+        <div class="flex gap-3">
+          <button type="submit" class="btn-primary flex-1">{t('admin.confirm')}</button>
+          <button type="button" class="btn-outline" data-cancel>{t('admin.cancel')}</button>
+        </div>
+      </form>
+
+      <form class="mt-4 space-y-4 rounded-xl bg-surface p-4" novalidate data-edit-form hidden>
+        <div>
+          <label class="field-label" data-for="container_number">{t('admin.containerNumber')}</label>
+          <input name="container_number" type="text" maxlength="30" autocapitalize="characters" autocomplete="off" spellcheck="false" class="field-input font-semibold uppercase" data-id="container_number" />
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="field-label" data-for="destination_port">{t('admin.destinationPort')}</label>
+            <input name="destination_port" type="text" maxlength="80" list="destination-options" class="field-input" data-id="destination_port" />
+          </div>
+          <div>
+            <label class="field-label" data-for="eta">{t('admin.eta')}</label>
+            <input name="eta" type="date" class="field-input" data-id="eta" />
+          </div>
+        </div>
+        <div>
+          <label class="field-label" data-for="internal_note">{t('admin.note')}</label>
+          <textarea name="internal_note" rows="2" maxlength="500" class="field-input" data-id="internal_note"></textarea>
+        </div>
+        <div class="flex gap-3">
+          <button type="submit" class="btn-primary flex-1">{t('admin.save')}</button>
+          <button type="button" class="btn-outline" data-cancel>{t('admin.cancel')}</button>
+        </div>
+      </form>
+
+      <details class="mt-4 border-t border-slate-200 pt-3">
+        <summary class="flex min-h-11 cursor-pointer items-center font-semibold text-primary" data-history-summary></summary>
+        <ol class="mt-1 divide-y divide-slate-200" data-events></ol>
+        <a class="mt-3 inline-flex min-h-11 items-center gap-2 font-semibold text-primary underline" target="_blank" rel="noopener" data-public-link>
+          {t('admin.publicLink')}
+        </a>
+      </details>
+    </li>
+  </template>
+
+  <template data-event-template>
+    <li class="flex items-center justify-between gap-3 py-2">
+      <div class="min-w-0">
+        <p class="font-semibold text-slate-900" data-event-status></p>
+        <p class="text-sm text-slate-600" data-event-meta></p>
+      </div>
+      <button type="button" class="min-h-11 shrink-0 rounded-lg px-3 text-sm font-semibold text-red-700 underline" data-event-delete>
+        {t('admin.removeStep')}
+      </button>
+    </li>
+  </template>
+</div>
+
+<script>
+  import { nextStatus, type ShipmentStatus } from '../../lib/statuses';
+
+  interface ShipmentEvent {
+    id: string;
+    status: ShipmentStatus;
+    occurred_at: string;
+    location: string | null;
+  }
+  interface Shipment {
+    id: string;
+    reference: string;
+    container_number: string | null;
+    origin_port: string;
+    destination_port: string;
+    eta: string | null;
+    current_status: ShipmentStatus;
+    internal_note: string | null;
+    shipment_events: ShipmentEvent[];
+  }
+  interface Messages {
+    statuses: Record<string, string>;
+    errors: Record<string, string>;
+    [key: string]: unknown;
+  }
+  interface ClientConfig {
+    htmlLang: string;
+    statuses: ShipmentStatus[];
+    trackingUrl: string;
+    referencePrefix: string;
+    messages: Messages;
+  }
+  type ApiResult = { status: number; body: Record<string, any> };
+
+  const root = document.querySelector<HTMLElement>('[data-admin-root]');
+  if (root) {
+    const config = JSON.parse(root.dataset.config ?? '{}') as ClientConfig;
+    const m = config.messages;
+    const msg = (key: string) => String(m[key] ?? key);
+    const $ = <T extends HTMLElement>(selector: string, parent: ParentNode = root) => parent.querySelector<T>(selector)!;
+
+    const notice = $('[data-notice]');
+    const list = $<HTMLUListElement>('[data-list]');
+    const empty = $('[data-empty]');
+    const loginForm = $<HTMLFormElement>('[data-login-form]');
+    const codeForm = $<HTMLFormElement>('[data-code-form]');
+    const createForm = $<HTMLFormElement>('[data-create-form]');
+    const toggleCreate = $<HTMLButtonElement>('[data-toggle-create]');
+    const searchInput = $<HTMLInputElement>('#admin-search');
+    const cardTemplate = $<HTMLTemplateElement>('[data-card-template]');
+    const eventTemplate = $<HTMLTemplateElement>('[data-event-template]');
+
+    let shipments: Shipment[] = [];
+    let loginEmail = '';
+    let uid = 0;
+
+    const dateTime = new Intl.DateTimeFormat(config.htmlLang, { dateStyle: 'medium', timeStyle: 'short' });
+    const dayFormat = new Intl.DateTimeFormat(config.htmlLang, { dateStyle: 'long', timeZone: 'UTC' });
+    const formatDay = (day: string) => dayFormat.format(new Date(`${day}T00:00:00Z`));
+
+    // ── Outils ────────────────────────────────────────────────────────────
+    const showView = (name: 'loading' | 'login' | 'app') => {
+      root.querySelectorAll<HTMLElement>('[data-view]').forEach((view) => {
+        view.classList.toggle('hidden', view.dataset.view !== name);
+      });
+      $('[data-logout]').hidden = name !== 'app';
+    };
+
+    let noticeTimer = 0;
+    const showNotice = (text: string | null, kind: 'success' | 'error' = 'success') => {
+      window.clearTimeout(noticeTimer);
+      notice.textContent = text ?? '';
+      notice.className = `mb-4 rounded-lg px-4 py-3 font-semibold ${
+        !text ? 'hidden' : kind === 'error' ? 'bg-red-50 text-red-800 ring-1 ring-red-700' : 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-700'
+      }`;
+      if (text) {
+        notice.scrollIntoView({ block: 'nearest' });
+        if (kind === 'success') noticeTimer = window.setTimeout(() => showNotice(null), 4000);
+      }
+    };
+    const showError = (code: string | undefined) => showNotice(m.errors[code ?? ''] ?? m.errors.generic, 'error');
+
+    const api = async (path: string, body?: unknown): Promise<ApiResult> => {
+      try {
+        const response = await fetch(path, {
+          method: body ? 'POST' : 'GET',
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+          credentials: 'same-origin',
+        });
+        const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
+        return { status: response.status, body: payload };
+      } catch {
+        return { status: 0, body: { error: 'network' } };
+      }
+    };
+
+    /** Appel réservé aux administrateurs : une session expirée renvoie à la connexion. */
+    const adminApi = async (body?: unknown, query = ''): Promise<ApiResult | null> => {
+      const result = await api(`/api/admin/shipments${query}`, body);
+      if (result.status === 401) {
+        showView('login');
+        showError('unauthorized');
+        return null;
+      }
+      if (!result.body.ok) {
+        showError(result.body.error);
+        return null;
+      }
+      return result;
+    };
+
+    const busy = async (form: HTMLFormElement, work: () => Promise<void>) => {
+      const buttons = Array.from(form.querySelectorAll<HTMLButtonElement>('button'));
+      buttons.forEach((button) => (button.disabled = true));
+      try {
+        await work();
+      } finally {
+        buttons.forEach((button) => (button.disabled = false));
+      }
+    };
+
+    // ── Affichage des expéditions ─────────────────────────────────────────
+    const renderCard = (shipment: Shipment): HTMLElement => {
+      const card = (cardTemplate.content.cloneNode(true) as DocumentFragment).querySelector<HTMLElement>('[data-card]')!;
+      const part = <T extends HTMLElement = HTMLElement>(name: string) => $<T>(`[data-${name}]`, card);
+      const next = nextStatus(shipment.current_status);
+
+      // Les libellés des formulaires clonés ont besoin d'identifiants uniques.
+      const suffix = ++uid;
+      card.querySelectorAll<HTMLLabelElement>('label[data-for]').forEach((label) => {
+        const form = label.closest('form')!;
+        const control = form.querySelector<HTMLElement>(`[data-id="${label.dataset.for}"]`)!;
+        control.id = `${form.dataset.stepForm !== undefined ? 'step' : 'edit'}-${label.dataset.for}-${suffix}`;
+        label.htmlFor = control.id;
+      });
+
+      part('reference').textContent = shipment.reference;
+      part('container').textContent = shipment.container_number ?? '';
+      part('status').textContent = m.statuses[shipment.current_status];
+      part('route').textContent = `${shipment.origin_port} → ${shipment.destination_port}`;
+      part('eta').textContent = shipment.eta ? `${msg('eta')} : ${formatDay(shipment.eta)}` : '';
+      part('note').textContent = shipment.internal_note ?? '';
+      part('note').hidden = !shipment.internal_note;
+      part('completed').hidden = next !== null;
+
+      const stepForm = part<HTMLFormElement>('step-form');
+      const editForm = part<HTMLFormElement>('edit-form');
+      const nextButton = part<HTMLButtonElement>('next');
+      const statusSelect = $<HTMLSelectElement>('select[name="status"]', stepForm);
+      statusSelect.replaceChildren(...config.statuses.map((status) => new Option(m.statuses[status], status)));
+
+      const openStepForm = () => {
+        statusSelect.value = next ?? shipment.current_status;
+        editForm.hidden = true;
+        stepForm.hidden = false;
+        $<HTMLButtonElement>('button[type="submit"]', stepForm).focus();
+      };
+
+      // Premier clic : « Étape suivante ». Second clic : « Confirmer ».
+      nextButton.textContent = next ? `${msg('nextStep')} : ${m.statuses[next]}` : msg('otherStep');
+      nextButton.classList.toggle('bg-accent', next !== null);
+      nextButton.classList.toggle('bg-white', next === null);
+      nextButton.classList.toggle('ring-1', next === null);
+      nextButton.classList.toggle('ring-slate-400', next === null);
+      nextButton.addEventListener('click', openStepForm);
+
+      stepForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const data = new FormData(stepForm);
+        const when = String(data.get('occurred_at') ?? '');
+        void busy(stepForm, async () => {
+          const result = await adminApi({
+            action: 'add_event',
+            shipment_id: shipment.id,
+            status: data.get('status'),
+            // Champ vide = maintenant : la date est alors fixée par le serveur.
+            occurred_at: when ? new Date(when).toISOString() : undefined,
+            location: data.get('location'),
+          });
+          if (result) {
+            replaceShipment(result.body.shipment as Shipment);
+            showNotice(msg('stepAdded'));
+          }
+        });
+      });
+
+      part<HTMLButtonElement>('edit').addEventListener('click', () => {
+        $<HTMLInputElement>('[name="container_number"]', editForm).value = shipment.container_number ?? '';
+        $<HTMLInputElement>('[name="destination_port"]', editForm).value = shipment.destination_port;
+        $<HTMLInputElement>('[name="eta"]', editForm).value = shipment.eta ?? '';
+        $<HTMLTextAreaElement>('[name="internal_note"]', editForm).value = shipment.internal_note ?? '';
+        stepForm.hidden = true;
+        editForm.hidden = false;
+        $<HTMLInputElement>('[name="container_number"]', editForm).focus();
+      });
+
+      editForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const data = Object.fromEntries(new FormData(editForm).entries());
+        void busy(editForm, async () => {
+          const result = await adminApi({ action: 'update', id: shipment.id, ...data });
+          if (result) {
+            replaceShipment(result.body.shipment as Shipment);
+            showNotice(msg('saved'));
+          }
+        });
+      });
+
+      card.querySelectorAll<HTMLButtonElement>('[data-cancel]').forEach((button) => {
+        button.addEventListener('click', () => {
+          button.closest('form')!.hidden = true;
+          nextButton.focus();
+        });
+      });
+
+      part('history-summary').textContent = `${msg('history')} (${shipment.shipment_events.length})`;
+      part('events').replaceChildren(
+        ...shipment.shipment_events.map((item) => {
+          const row = (eventTemplate.content.cloneNode(true) as DocumentFragment).querySelector<HTMLElement>('li')!;
+          $('[data-event-status]', row).textContent = m.statuses[item.status];
+          $('[data-event-meta]', row).textContent = [dateTime.format(new Date(item.occurred_at)), item.location]
+            .filter(Boolean)
+            .join(' · ');
+          const remove = $<HTMLButtonElement>('[data-event-delete]', row);
+          // La dernière étape restante ne se retire pas : la frise publique serait vide.
+          remove.hidden = shipment.shipment_events.length <= 1;
+          remove.setAttribute('aria-label', `${msg('removeStep')} : ${m.statuses[item.status]}`);
+          remove.addEventListener('click', async () => {
+            if (!window.confirm(`${msg('removeStepConfirm')}\n${m.statuses[item.status]}`)) return;
+            remove.disabled = true;
+            const result = await adminApi({ action: 'delete_event', event_id: item.id });
+            if (result) {
+              replaceShipment(result.body.shipment as Shipment, true);
+              showNotice(msg('saved'));
+            } else {
+              remove.disabled = false;
+            }
+          });
+          return row;
+        }),
+      );
+      part<HTMLAnchorElement>('public-link').href = `${config.trackingUrl}?q=${encodeURIComponent(shipment.reference)}`;
+      card.dataset.id = shipment.id;
+      return card;
+    };
+
+    const renderList = () => {
+      list.replaceChildren(...shipments.map(renderCard));
+      empty.textContent = searchInput.value ? msg('noResult') : msg('empty');
+      empty.classList.toggle('hidden', shipments.length > 0);
+    };
+
+    const replaceShipment = (updated: Shipment, keepHistoryOpen = false) => {
+      shipments = shipments.map((shipment) => (shipment.id === updated.id ? updated : shipment));
+      const previous = list.querySelector<HTMLElement>(`[data-id="${updated.id}"]`);
+      const card = renderCard(updated);
+      if (keepHistoryOpen) $<HTMLDetailsElement>('details', card).open = true;
+      previous?.replaceWith(card);
+    };
+
+    const loadShipments = async () => {
+      const search = searchInput.value.trim();
+      const result = await adminApi(undefined, search ? `?q=${encodeURIComponent(search)}` : '');
+      if (!result) return;
+      shipments = result.body.shipments as Shipment[];
+      renderList();
+    };
+
+    const enterApp = async (email: string) => {
+      $('[data-user]').textContent = email;
+      showView('app');
+      await loadShipments();
+    };
+
+    // ── Connexion ─────────────────────────────────────────────────────────
+    loginForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      loginEmail = String(new FormData(loginForm).get('email') ?? '').trim();
+      void busy(loginForm, async () => {
+        const result = await api('/api/admin/auth', { action: 'request', email: loginEmail });
+        if (!result.body.ok) return showError(result.body.error);
+        showNotice(null);
+        loginForm.classList.add('hidden');
+        codeForm.classList.remove('hidden');
+        $<HTMLInputElement>('#login-code').focus();
+      });
+    });
+
+    codeForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const code = String(new FormData(codeForm).get('code') ?? '');
+      void busy(codeForm, async () => {
+        const result = await api('/api/admin/auth', { action: 'verify', email: loginEmail, code });
+        if (!result.body.ok) return showError(result.body.error === 'unauthorized' ? 'invalid_code' : result.body.error);
+        showNotice(null);
+        await enterApp(result.body.email as string);
+      });
+    });
+
+    $('[data-change-email]').addEventListener('click', () => {
+      codeForm.classList.add('hidden');
+      loginForm.classList.remove('hidden');
+      $<HTMLInputElement>('#login-email').focus();
+    });
+
+    $('[data-logout]').addEventListener('click', async () => {
+      await api('/api/admin/auth', { action: 'logout' });
+      shipments = [];
+      list.replaceChildren();
+      $('[data-user]').textContent = msg('title');
+      codeForm.classList.add('hidden');
+      loginForm.classList.remove('hidden');
+      showView('login');
+    });
+
+    // ── Nouvelle expédition ───────────────────────────────────────────────
+    const setCreateOpen = (open: boolean) => {
+      createForm.classList.toggle('hidden', !open);
+      toggleCreate.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const reference = $<HTMLInputElement>('#c-reference');
+        if (!reference.value) reference.value = `${config.referencePrefix}-${String(new Date().getFullYear()).slice(2)}-`;
+        reference.focus();
+      }
+    };
+    toggleCreate.addEventListener('click', () => setCreateOpen(createForm.classList.contains('hidden')));
+    $('[data-cancel-create]').addEventListener('click', () => setCreateOpen(false));
+
+    createForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(createForm).entries());
+      void busy(createForm, async () => {
+        const result = await adminApi({ action: 'create', ...data });
+        if (!result) return;
+        createForm.reset();
+        setCreateOpen(false);
+        searchInput.value = '';
+        shipments = [result.body.shipment as Shipment, ...shipments];
+        renderList();
+        showNotice(msg('created'));
+      });
+    });
+
+    let searchTimer = 0;
+    searchInput.addEventListener('input', () => {
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(() => void loadShipments(), 300);
+    });
+    $<HTMLFormElement>('[data-search-form]').addEventListener('submit', (event) => {
+      event.preventDefault();
+      window.clearTimeout(searchTimer);
+      void loadShipments();
+    });
+
+    // ── Démarrage ─────────────────────────────────────────────────────────
+    const start = async () => {
+      // Retour du lien reçu par courriel : Supabase place le jeton dans le fragment de l'adresse.
+      const fragment = new URLSearchParams(location.hash.slice(1));
+      const accessToken = fragment.get('access_token');
+      const linkError = fragment.get('error_description') ?? fragment.get('error');
+      if (accessToken || linkError) history.replaceState(null, '', location.pathname);
+
+      if (accessToken) {
+        const result = await api('/api/admin/auth', { action: 'session', access_token: accessToken });
+        if (result.body.ok) return enterApp(result.body.email as string);
+        showView('login');
+        return showError(result.body.error === 'unauthorized' ? 'not_allowed' : result.body.error);
+      }
+
+      const session = await api('/api/admin/auth');
+      if (session.body.authenticated) return enterApp(session.body.email as string);
+      showView('login');
+      if (linkError) showError('invalid_code');
+      else if (session.status === 503) showError('not_configured');
+      else if (session.status === 0) showError('network');
+    };
+    void start();
+    // Lien ouvert dans un onglet où la page est déjà affichée : seul le fragment change.
+    window.addEventListener('hashchange', () => {
+      if (location.hash.includes('access_token=')) void start();
+    });
+  }
+</script>

@@ -1,0 +1,110 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import Icon from '../../components/Icon.astro';
+import { siteConfig, pick, isTodo } from '../../config/site.config';
+import { useTranslations } from '../../i18n';
+import { localeStaticPaths, pagePath } from '../../lib/paths';
+import { mapsLink } from '../../lib/seo';
+import { whatsappLink } from '../../lib/whatsapp';
+
+export const getStaticPaths = localeStaticPaths;
+
+const { lang } = Astro.params;
+const { t } = useTranslations(lang);
+const { contact } = siteConfig;
+const iconBox = 'flex size-12 shrink-0 items-center justify-center rounded-xl bg-primary-soft text-primary';
+---
+
+<BaseLayout lang={lang} page="contact">
+  <PageHeader title={t('contact.title')} lead={t('contact.lead')} />
+
+  <div class="container-page section grid gap-6 lg:grid-cols-2">
+    <div class="space-y-4">
+      <div class="card flex items-center gap-4">
+        <span class={iconBox}><Icon name="phone" /></span>
+        <div class="min-w-0 flex-1">
+          <h2 class="text-sm font-semibold tracking-wide text-slate-600 uppercase">{t('contact.phone')}</h2>
+          <a href={`tel:${contact.phone}`} class="font-display text-xl font-bold text-primary hover:underline">
+            {contact.phoneDisplay}
+          </a>
+        </div>
+      </div>
+
+      <div class="card flex items-center gap-4">
+        <span class="flex size-12 shrink-0 items-center justify-center rounded-xl bg-whatsapp text-whatsapp-ink">
+          <Icon name="whatsapp" class="size-7" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <h2 class="text-sm font-semibold tracking-wide text-slate-600 uppercase">{t('contact.whatsapp')}</h2>
+          <a
+            href={whatsappLink(t('cta.whatsappMessage'))}
+            rel="noopener"
+            class="font-display text-xl font-bold text-primary hover:underline"
+          >
+            {contact.phoneDisplay}
+          </a>
+        </div>
+      </div>
+
+      <div class="card flex items-center gap-4">
+        <span class={iconBox}><Icon name="mail" /></span>
+        <div class="min-w-0 flex-1">
+          <h2 class="text-sm font-semibold tracking-wide text-slate-600 uppercase">{t('contact.email')}</h2>
+          {
+            isTodo(contact.email) ? (
+              <p class="font-display text-xl font-bold text-primary">{contact.email}</p>
+            ) : (
+              <a href={`mailto:${contact.email}`} class="font-display text-xl font-bold break-words text-primary hover:underline">
+                {contact.email}
+              </a>
+            )
+          }
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <div class="card">
+        <div class="flex items-start gap-4">
+          <span class={iconBox}><Icon name="pin" /></span>
+          <div>
+            <h2 class="text-sm font-semibold tracking-wide text-slate-600 uppercase">{t('contact.address')}</h2>
+            <address class="mt-1 text-lg leading-relaxed text-slate-900 not-italic">
+              {contact.address.street}<br />
+              {`${contact.address.city}, ${contact.address.region} ${contact.address.postalCode}`}
+            </address>
+          </div>
+        </div>
+        <a href={mapsLink()} target="_blank" rel="noopener noreferrer" class="btn-outline mt-5 w-full sm:w-auto">
+          <Icon name="external" class="size-5" />
+          {t('contact.map')}
+          <span class="sr-only">{t('footer.newTab')}</span>
+        </a>
+      </div>
+
+      <div class="card flex items-start gap-4">
+        <span class={iconBox}><Icon name="clock" /></span>
+        <div>
+          <h2 class="text-sm font-semibold tracking-wide text-slate-600 uppercase">{t('contact.hours')}</h2>
+          <ul class="mt-1 text-lg leading-relaxed text-slate-900">
+            {pick(contact.hours.display, lang).map((line) => <li>{line}</li>)}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section class="bg-surface">
+    <div class="container-page flex flex-col items-start gap-5 py-12 sm:flex-row sm:items-center sm:justify-between">
+      <div class="max-w-2xl">
+        <h2 class="text-2xl font-bold sm:text-3xl">{t('contact.quoteTitle')}</h2>
+        <p class="mt-2 text-lg">{t('contact.quoteText')}</p>
+      </div>
+      <a href={pagePath(lang, 'quote')} class="btn-accent w-full shrink-0 sm:w-auto">
+        {t('cta.quote')}
+        <Icon name="arrow" class="size-5" />
+      </a>
+    </div>
+  </section>
+</BaseLayout>

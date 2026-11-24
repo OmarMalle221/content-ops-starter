@@ -1,0 +1,425 @@
+{
+  "meta": {
+    "home": {
+      "title": "{company} — Vehicle and container shipping from {city} to {region}",
+      "description": "{company} ships your vehicles, full containers and shared-container parcels from {city} to {region}. Fast quotes, online tracking and a team you can reach on WhatsApp."
+    },
+    "services": {
+      "title": "Export services to {region} — {company}",
+      "description": "Vehicle export, 20' and 40' full containers, shared containers, vehicle purchase and customs clearance on arrival: what each {company} service includes."
+    },
+    "destinations": {
+      "title": "Destinations and transit times — {company}",
+      "description": "Ports and countries served from {city}, with indicative transit times. {company} ships to {region}."
+    },
+    "quote": {
+      "title": "Request a quote — {company}",
+      "description": "Describe your shipment (vehicle, full container or shared container) and get a quote from {company}. We reply by phone, email or WhatsApp."
+    },
+    "tracking": {
+      "title": "Shipment tracking — {company}",
+      "description": "Enter your container or file number to see where your shipment is: completed steps, arrival port and expected date."
+    },
+    "contact": {
+      "title": "Contact and warehouse in {city} — {company}",
+      "description": "Phone, WhatsApp, email, warehouse address and opening hours of {company} in {city}."
+    },
+    "privacy": {
+      "title": "Privacy policy — {company}",
+      "description": "How {company} collects, uses and protects your personal information, in accordance with Québec's Law 25."
+    },
+    "legal": {
+      "title": "Legal notice — {company}",
+      "description": "Publisher, hosting and terms of use of the {company} website."
+    }
+  },
+  "nav": {
+    "home": "Home",
+    "services": "Services",
+    "destinations": "Destinations",
+    "quote": "Quote",
+    "tracking": "Tracking",
+    "contact": "Contact",
+    "privacy": "Privacy policy",
+    "legal": "Legal notice",
+    "menu": "Menu",
+    "main": "Main navigation",
+    "skip": "Skip to content",
+    "language": "Language"
+  },
+  "cta": {
+    "quote": "Request a quote",
+    "whatsapp": "Message us on WhatsApp",
+    "whatsappShort": "WhatsApp",
+    "call": "Call",
+    "track": "Track a shipment",
+    "allServices": "See all services",
+    "allDestinations": "See all destinations",
+    "whatsappMessage": "Hello {company}, I would like some information about a shipment."
+  },
+  "home": {
+    "eyebrow": "Exporter based in {city}",
+    "title": "Your vehicles and goods, from {city} to all of {region}.",
+    "lead": "{company} ships vehicles, full containers and shared-container parcels to African ports. You get a clear price before departure and track your shipment online.",
+    "routeFrom": "Departure",
+    "routeTo": "Arrival",
+    "trustTitle": "Why ship with us",
+    "servicesEyebrow": "Our services",
+    "servicesTitle": "A service for every kind of shipment",
+    "servicesLead": "From a single vehicle to a full container, we handle loading, paperwork and ocean freight.",
+    "destinationsEyebrow": "Destinations",
+    "destinationsTitle": "We serve all of {region}",
+    "destinationsLead": "These are the most requested ports. Don't see your city? Message us: we also ship to the other countries on the continent.",
+    "stepsEyebrow": "How it works",
+    "stepsTitle": "Your shipment in four steps",
+    "steps": [
+      {
+        "title": "You request a quote",
+        "text": "Fill in the form or message us on WhatsApp with the details of your shipment."
+      },
+      {
+        "title": "You drop off at the warehouse",
+        "text": "Bring the vehicle or goods to our warehouse in {city}."
+      },
+      {
+        "title": "We load and ship",
+        "text": "We load the container, prepare the documents and deliver it to the port."
+      },
+      {
+        "title": "You track online",
+        "text": "With your file number, you see every step until arrival."
+      }
+    ],
+    "ctaTitle": "Ready to ship?",
+    "ctaText": "Describe your shipment in two minutes. We reply with a price and a departure date."
+  },
+  "services": {
+    "title": "Our services",
+    "lead": "Every shipment is different. Here is what each of our services includes; the quote then gives the price for your destination.",
+    "included": "What's included",
+    "askQuote": "Request a quote for this service"
+  },
+  "destinations": {
+    "title": "Destinations",
+    "lead": "We ship from {city} to all of {region}. The times below are indicative: they run from the vessel's departure to its arrival at the port and vary with the shipping line and the season.",
+    "port": "Port or city",
+    "country": "Country",
+    "transit": "Indicative transit time",
+    "transitUnknown": "Confirmed with your quote",
+    "via": "via {port}",
+    "otherTitle": "Another destination?",
+    "otherText": "This list shows the most requested ports. We also ship to the other countries on the continent: enter your destination in the quote request.",
+    "disclaimer": "Transit times are indicative and are not a commitment."
+  },
+  "quote": {
+    "title": "Request a quote",
+    "lead": "Describe your shipment. We reply with a price and a departure date, by phone, email or WhatsApp.",
+    "required": "Fields marked with an asterisk (*) are required.",
+    "sectionContact": "Your contact details",
+    "sectionShipment": "Your shipment",
+    "name": "Full name",
+    "phone": "Phone (WhatsApp)",
+    "phoneHint": "Include the country code if the number is not Canadian.",
+    "email": "Email",
+    "shipmentType": "Type of shipment",
+    "types": {
+      "vehicle": "Vehicle",
+      "full_container": "Full container",
+      "groupage": "Shared container",
+      "other": "Other"
+    },
+    "vehicleLegend": "The vehicle",
+    "vehicleMake": "Make",
+    "vehicleModel": "Model",
+    "vehicleYear": "Year",
+    "vehicleRunning": "Does the vehicle run?",
+    "runningYes": "Yes, it runs",
+    "runningNo": "No, it does not run",
+    "containerLegend": "The container",
+    "containerSize": "Container size",
+    "container20": "20 foot",
+    "container40": "40 foot",
+    "destination": "Destination",
+    "destinationPlaceholder": "Choose a destination",
+    "destinationOther": "Other destination (specify in the message)",
+    "desiredDate": "Preferred date",
+    "desiredDateHint": "Optional. Approximate date you would like to ship.",
+    "message": "Message",
+    "messageHint": "Optional. Describe the contents, the volume or anything else that helps.",
+    "honeypot": "Do not fill in this field",
+    "consent": "I agree that {company} may use this information to process my quote request and reply to me, in accordance with the",
+    "consentLink": "privacy policy",
+    "submit": "Send my request",
+    "sending": "Sending…",
+    "noscript": "This form needs JavaScript. You can also message us directly on WhatsApp.",
+    "errorSummary": "Some fields need to be corrected before sending.",
+    "errors": {
+      "required": "This field is required.",
+      "name": "Enter your full name.",
+      "phone": "Enter a valid phone number, including the area code.",
+      "email": "Enter a valid email address.",
+      "shipment_type": "Choose a type of shipment.",
+      "vehicle_year": "Enter a valid year (4 digits).",
+      "vehicle_running": "Tell us whether the vehicle runs.",
+      "container_size": "Choose the container size.",
+      "destination": "Choose a destination.",
+      "desired_date": "Enter a valid date, today or later.",
+      "too_long": "This text is too long.",
+      "consent": "We need your consent to process the request.",
+      "rate_limited": "You have sent several requests in a short time. Try again in a few minutes or message us on WhatsApp.",
+      "server": "The request could not be sent. Try again in a moment or message us on WhatsApp.",
+      "network": "Could not connect. Check your network, then try again."
+    },
+    "successTitle": "Request received",
+    "successText": "Thank you. Your request is saved and we will reply shortly.",
+    "successReference": "Your request number",
+    "successWhatsapp": "Continue on WhatsApp",
+    "successWhatsappHint": "For a faster reply, send us this number on WhatsApp. You can attach photos there.",
+    "successWhatsappMessage": "Hello {company}, I just sent quote request no. {reference}.",
+    "successNew": "Send another request",
+    "asideTitle": "Need help?",
+    "asideText": "Prefer to explain your shipment by voice or send photos? Contact us directly."
+  },
+  "tracking": {
+    "title": "Shipment tracking",
+    "lead": "Enter your container number or your file number to see where your shipment is.",
+    "label": "Container or file number",
+    "placeholder": "E.g. MSCU1234567",
+    "hint": "The file number is on your receipt. The container number is sent to you after loading.",
+    "submit": "Track",
+    "searching": "Searching…",
+    "resultTitle": "Shipment {query}",
+    "currentStatus": "Current status",
+    "originPort": "Departure port",
+    "destinationPort": "Arrival port",
+    "eta": "Expected arrival",
+    "etaUnknown": "To be confirmed",
+    "history": "Journey steps",
+    "stepDone": "Step completed",
+    "stepCurrent": "Current step",
+    "stepPending": "Upcoming",
+    "pending": "Upcoming",
+    "helpTitle": "A question about your shipment?",
+    "helpText": "Send us your number on WhatsApp and we will reply.",
+    "helpWhatsappMessage": "Hello {company}, I have a question about shipment {query}.",
+    "errors": {
+      "invalid": "Enter a number of 4 to 30 characters (letters, digits and hyphens).",
+      "not_found": "No shipment matches this number. Check what you typed or message us on WhatsApp.",
+      "rate_limited": "Too many searches in a short time. Try again in a few minutes.",
+      "server": "Tracking is temporarily unavailable. Try again in a moment.",
+      "network": "Could not connect. Check your network, then try again."
+    }
+  },
+  "statuses": {
+    "received_at_warehouse": "Received at the warehouse",
+    "loaded_in_container": "Loaded in container",
+    "delivered_to_port": "Delivered to the port",
+    "on_board": "On board",
+    "arrived_at_destination": "Arrived at destination port",
+    "available_delivered": "Available / Delivered"
+  },
+  "contact": {
+    "title": "Contact",
+    "lead": "Call us, message us on WhatsApp or come by the warehouse during opening hours.",
+    "phone": "Phone",
+    "whatsapp": "WhatsApp",
+    "email": "Email",
+    "address": "Warehouse address",
+    "hours": "Opening hours",
+    "map": "View on Google Maps",
+    "mapNote": "The link opens Google Maps in a new tab.",
+    "quoteTitle": "Have a shipment to prepare?",
+    "quoteText": "The quote form gives us everything we need to reply with a price."
+  },
+  "footer": {
+    "navigation": "Navigation",
+    "contact": "Reach us",
+    "legal": "Legal information",
+    "rights": "All rights reserved.",
+    "newTab": "(new tab)"
+  },
+  "privacy": {
+    "title": "Privacy policy",
+    "updated": "Last updated: {date}",
+    "intro": "{company} complies with Québec's Act respecting the protection of personal information in the private sector, as amended by Law 25. This policy explains what information we collect on this site, why, and what your rights are.",
+    "sections": [
+      {
+        "title": "Person in charge of the protection of personal information",
+        "body": [
+          "The person in charge of the protection of personal information at {company} is {officerName}.",
+          "For any question or request about your information, write to {officerEmail}."
+        ]
+      },
+      {
+        "title": "Information we collect",
+        "body": [
+          "When you fill in the quote request, we collect your name, phone number, email address and the details of your shipment: type of shipment, vehicle, container size, destination, preferred date and message.",
+          "Shipment tracking asks for no personal information: it only shows the status of a container or file from its number.",
+          "To limit abuse, we briefly keep an encrypted fingerprint of the IP address of devices that submit a form. This fingerprint cannot be used to recover the original address."
+        ]
+      },
+      {
+        "title": "Why we use it",
+        "body": [
+          "Your information is used only to prepare your quote, to reply to you and, if you ship with us, to organise the shipment.",
+          "We do not sell your information and we do not use it for advertising."
+        ]
+      },
+      {
+        "title": "Your consent",
+        "body": [
+          "We collect your information only after you tick the consent box on the form. Without it, the request is not sent.",
+          "You can withdraw your consent at any time by writing to the person in charge. We will then delete your request, unless the law requires us to keep it."
+        ]
+      },
+      {
+        "title": "Service providers and where data is kept",
+        "body": [
+          "We use service providers to run this site: Netlify (website hosting), Supabase (database) and Resend (email delivery). They process your information on our behalf and may not use it for any other purpose.",
+          "These providers may store data outside Québec. We considered the protection they offer before choosing them."
+        ]
+      },
+      {
+        "title": "How long we keep it",
+        "body": [
+          "Quote requests are kept for {retentionMonths} months after our last exchange, then deleted. Documents related to a completed shipment are kept for as long as the law requires."
+        ]
+      },
+      {
+        "title": "Security",
+        "body": [
+          "Exchanges with this site are encrypted. Access to requests is restricted to authorised {company} staff and the database is not open to the public."
+        ]
+      },
+      {
+        "title": "Cookies",
+        "body": [
+          "This site uses no advertising cookies and no tool that tracks your browsing. The only cookie in use keeps staff signed in to the administration area."
+        ]
+      },
+      {
+        "title": "Your rights",
+        "body": [
+          "You can ask to see the information we hold about you, to have it corrected or to have it deleted. Write to the person in charge: we reply within 30 days.",
+          "If you are not satisfied with our reply, you can file a complaint with the Commission d'accès à l'information du Québec."
+        ]
+      },
+      {
+        "title": "Changes",
+        "body": [
+          "We update this policy when our practices change. The date of the last update appears at the top of the page."
+        ]
+      }
+    ]
+  },
+  "legal": {
+    "title": "Legal notice",
+    "sections": [
+      {
+        "title": "Publisher",
+        "body": [
+          "This site is published by {legalName}, {address}.",
+          "Phone: {phone}. Email: {email}."
+        ]
+      },
+      {
+        "title": "Hosting",
+        "body": [
+          "The site is hosted by Netlify, Inc., 101 2nd Street, San Francisco, California, United States."
+        ]
+      },
+      {
+        "title": "Published information",
+        "body": [
+          "Transit times and service descriptions are indicative. Only the quote we give you sets the price and conditions of your shipment.",
+          "Shipment tracking reflects the latest steps recorded by our team. The expected arrival date may change depending on the shipping line."
+        ]
+      },
+      {
+        "title": "Intellectual property",
+        "body": [
+          "The texts, logo and graphic elements of this site belong to {legalName}. They may not be reproduced without permission."
+        ]
+      },
+      {
+        "title": "Personal information",
+        "body": [
+          "How we handle your personal information is described in our privacy policy."
+        ]
+      }
+    ]
+  },
+  "admin": {
+    "title": "Administration",
+    "subtitle": "Shipments",
+    "loading": "Loading…",
+    "loginTitle": "Sign in",
+    "loginText": "Enter your email. You will receive a sign-in link.",
+    "email": "Email",
+    "sendLink": "Send me the link",
+    "linkSent": "If this email is authorised, a message was just sent to it. Open the link on this device, or enter the code you received.",
+    "code": "Code received by email",
+    "verifyCode": "Verify the code",
+    "changeEmail": "Use another email",
+    "logout": "Sign out",
+    "signedInAs": "Signed in: {email}",
+    "newShipment": "New shipment",
+    "reference": "File number",
+    "referenceHint": "Given to the customer for tracking.",
+    "containerNumber": "Container number",
+    "containerHint": "Optional. Can be added after loading.",
+    "originPort": "Departure port",
+    "destinationPort": "Arrival port",
+    "eta": "Expected arrival",
+    "note": "Internal note",
+    "noteHint": "Never shown to the public.",
+    "create": "Create the shipment",
+    "cancel": "Cancel",
+    "save": "Save",
+    "edit": "Edit",
+    "search": "Search a file or container",
+    "empty": "No shipments yet.",
+    "noResult": "No results.",
+    "nextStep": "Next step",
+    "otherStep": "Other step",
+    "addStep": "Add a step",
+    "status": "Step",
+    "occurredAt": "Date and time",
+    "location": "Location",
+    "locationHint": "Optional. E.g. Port of Montréal.",
+    "confirm": "Confirm",
+    "completed": "Shipment completed",
+    "saved": "Saved.",
+    "created": "Shipment created.",
+    "stepAdded": "Step added.",
+    "history": "Recorded steps",
+    "removeStep": "Remove",
+    "removeStepConfirm": "Remove this step?",
+    "publicLink": "View public tracking",
+    "errors": {
+      "generic": "Something went wrong. Try again.",
+      "network": "Could not connect. Check your network.",
+      "unauthorized": "Your session has expired. Sign in again.",
+      "invalid_code": "Invalid or expired code.",
+      "invalid_email": "Enter a valid email address.",
+      "rate_limited": "Too many attempts. Try again in a few minutes.",
+      "reference_required": "The file number is required (4 to 30 letters, digits or hyphens).",
+      "reference_taken": "This file number already exists.",
+      "container_invalid": "Invalid container number (4 to 30 letters or digits).",
+      "ports_required": "Enter the departure port and the arrival port.",
+      "not_configured": "The server is not configured yet (missing environment variables).",
+      "not_allowed": "This email does not have access to the administration."
+    }
+  },
+  "email": {
+    "subject": "New quote request {reference} — {name}",
+    "intro": "A new quote request just came in through the website.",
+    "reference": "Request number",
+    "replyHint": "Reply to this email to write directly to the person.",
+    "whatsapp": "Open the WhatsApp conversation",
+    "running": "Runs",
+    "yes": "Yes",
+    "no": "No",
+    "locale": "Visitor's language"
+  }
+}

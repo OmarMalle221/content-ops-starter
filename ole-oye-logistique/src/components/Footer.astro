@@ -1,0 +1,93 @@
+---
+import Icon from './Icon.astro';
+import { siteConfig, pick, isTodo } from '../config/site.config';
+import { useTranslations } from '../i18n';
+import { NAV_PAGES, pagePath } from '../lib/paths';
+import { whatsappLink } from '../lib/whatsapp';
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const { t } = useTranslations(lang);
+const { contact } = siteConfig;
+const year = new Date().getFullYear();
+const linkClass = 'inline-flex min-h-9 items-center gap-2 text-slate-200 hover:text-white hover:underline';
+---
+
+<footer class="bg-primary-dark pb-24 text-slate-200 sm:pb-10">
+  <div class="container-page grid gap-10 py-12 sm:grid-cols-2 lg:grid-cols-4">
+    <div>
+      <p class="font-display text-xl font-bold text-white">{siteConfig.name}</p>
+      <p class="mt-3 max-w-xs text-sm leading-relaxed text-slate-300">{pick(siteConfig.tagline, lang)}</p>
+    </div>
+
+    <nav aria-label={t('footer.navigation')}>
+      <h2 class="text-sm font-semibold tracking-wide text-white uppercase">{t('footer.navigation')}</h2>
+      <ul class="mt-3">
+        {
+          [...NAV_PAGES, 'quote' as const].map((key) => (
+            <li>
+              <a href={pagePath(lang, key)} class={linkClass}>
+                {t(`nav.${key}`)}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <div>
+      <h2 class="text-sm font-semibold tracking-wide text-white uppercase">{t('footer.contact')}</h2>
+      <ul class="mt-3">
+        <li>
+          <a href={`tel:${contact.phone}`} class={linkClass}>
+            <Icon name="phone" class="size-4" />
+            {contact.phoneDisplay}
+          </a>
+        </li>
+        <li>
+          <a href={whatsappLink(t('cta.whatsappMessage'))} class={linkClass} rel="noopener">
+            <Icon name="whatsapp" class="size-4" />
+            {t('cta.whatsappShort')}
+          </a>
+        </li>
+        <li>
+          {
+            isTodo(contact.email) ? (
+              <span class={linkClass}>
+                <Icon name="mail" class="size-4" />
+                {contact.email}
+              </span>
+            ) : (
+              <a href={`mailto:${contact.email}`} class={linkClass}>
+                <Icon name="mail" class="size-4" />
+                {contact.email}
+              </a>
+            )
+          }
+        </li>
+        <li class="mt-1 flex gap-2 text-slate-300">
+          <Icon name="pin" class="mt-0.5 size-4 shrink-0" />
+          <span>
+            {contact.address.street}<br />
+            {`${contact.address.city}, ${contact.address.region} ${contact.address.postalCode}`}
+          </span>
+        </li>
+      </ul>
+    </div>
+
+    <nav aria-label={t('footer.legal')}>
+      <h2 class="text-sm font-semibold tracking-wide text-white uppercase">{t('footer.legal')}</h2>
+      <ul class="mt-3">
+        <li><a href={pagePath(lang, 'legal')} class={linkClass}>{t('nav.legal')}</a></li>
+        <li><a href={pagePath(lang, 'privacy')} class={linkClass}>{t('nav.privacy')}</a></li>
+      </ul>
+    </nav>
+  </div>
+
+  <div class="container-page border-t border-white/15 pt-6 text-sm text-slate-300">
+    {`© ${year} ${siteConfig.legalName}. ${t('footer.rights')}`}
+  </div>
+</footer>
