@@ -5,8 +5,11 @@
 -- `authenticated` n'ont accès à rien ; seules les fonctions Netlify lisent et
 -- écrivent, avec la clé de service (qui contourne RLS).
 
-create extension if not exists pgcrypto;
-create extension if not exists citext;
+-- Cette migration ne touche qu'à ses propres objets : elle peut être appliquée
+-- dans un projet dédié comme dans celui de l'ERP, à côté des tables existantes.
+
+create schema if not exists extensions;
+create extension if not exists citext with schema extensions;
 
 -- ── Statuts normalisés, dans l'ordre du parcours ───────────────────────────
 -- Garder cette liste identique à `src/lib/statuses.ts`.
@@ -158,8 +161,10 @@ alter table shipment_events enable row level security;
 alter table admin_users     enable row level security;
 alter table rate_limits     enable row level security;
 
-revoke all on all tables    in schema public from anon, authenticated;
-revoke all on all sequences in schema public from anon, authenticated;
+-- Uniquement les objets de cette migration : les droits des autres tables du
+-- projet (celles de l'ERP, par exemple) ne sont pas modifiés.
+revoke all on table quote_requests, shipments, shipment_events, admin_users, rate_limits from anon, authenticated;
+revoke all on sequence quote_ref_seq from anon, authenticated;
 revoke execute on function check_rate_limit(text, text, integer, integer) from public, anon, authenticated;
 revoke execute on function sync_shipment_status() from public, anon, authenticated;
 grant  execute on function check_rate_limit(text, text, integer, integer) to service_role;
