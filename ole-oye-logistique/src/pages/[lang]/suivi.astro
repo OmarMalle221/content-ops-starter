@@ -3,9 +3,9 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHeader from '../../components/PageHeader.astro';
 import TrackingForm from '../../components/TrackingForm.astro';
 import { useTranslations } from '../../i18n';
-import { localeStaticPaths } from '../../lib/paths';
+import { trackingStaticPaths } from '../../lib/paths';
 
-export const getStaticPaths = localeStaticPaths;
+export const getStaticPaths = trackingStaticPaths;
 
 const { lang } = Astro.params;
 const { t } = useTranslations(lang);

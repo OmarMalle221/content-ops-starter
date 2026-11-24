@@ -2,6 +2,7 @@
 import Icon from './Icon.astro';
 import RouteArt from './RouteArt.astro';
 import { useTranslations } from '../i18n';
+import { isEnabled, trackingText } from '../lib/features';
 import { pagePath } from '../lib/paths';
 import { whatsappLink } from '../lib/whatsapp';
 
@@ -20,7 +21,7 @@ const { t } = useTranslations(lang);
       <h1 class="mt-3 text-4xl leading-[1.1] font-extrabold text-white sm:text-5xl lg:text-[3.4rem]">
         {t('home.title')}
       </h1>
-      <p class="mt-5 max-w-xl text-lg leading-relaxed text-slate-200">{t('home.lead')}</p>
+      <p class="mt-5 max-w-xl text-lg leading-relaxed text-slate-200">{trackingText(t, 'home.lead')}</p>
       <div class="mt-8 flex flex-col gap-3 sm:flex-row">
         <a href={pagePath(lang, 'quote')} class="btn-accent">
           {t('cta.quote')}
@@ -31,13 +32,17 @@ const { t } = useTranslations(lang);
           {t('cta.whatsapp')}
         </a>
       </div>
-      <a
-        href={pagePath(lang, 'tracking')}
-        class="mt-5 inline-flex min-h-11 items-center gap-2 font-semibold text-white underline decoration-white/40 underline-offset-4 hover:decoration-white"
-      >
-        <Icon name="search" class="size-5" />
-        {t('cta.track')}
-      </a>
+      {
+        isEnabled('tracking') && (
+          <a
+            href={pagePath(lang, 'tracking')}
+            class="mt-5 inline-flex min-h-11 items-center gap-2 font-semibold text-white underline decoration-white/40 underline-offset-4 hover:decoration-white"
+          >
+            <Icon name="search" class="size-5" />
+            {t('cta.track')}
+          </a>
+        )
+      }
     </div>
     <RouteArt fromLabel={t('home.routeFrom')} toLabel={t('home.routeTo')} />
   </div>

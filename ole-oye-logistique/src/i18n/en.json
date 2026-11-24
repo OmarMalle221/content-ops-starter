@@ -2,7 +2,8 @@
   "meta": {
     "home": {
       "title": "{company} — Vehicle and container shipping from {city} to {region}",
-      "description": "{company} ships your vehicles, full containers and shared-container parcels from {city} to {region}. Fast quotes, online tracking and a team you can reach on WhatsApp."
+      "description": "{company} ships your vehicles, full containers and shared-container parcels from {city} to {region}. Fast quotes and a team you can reach on WhatsApp.",
+      "descriptionTracking": "{company} ships your vehicles, full containers and shared-container parcels from {city} to {region}. Fast quotes, online tracking and a team you can reach on WhatsApp."
     },
     "services": {
       "title": "Export services to {region} — {company}",
@@ -60,7 +61,8 @@
   "home": {
     "eyebrow": "Exporter based in {city}",
     "title": "Your vehicles and goods, from {city} to all of {region}.",
-    "lead": "{company} ships vehicles, full containers and shared-container parcels to African ports. You get a clear price before departure and track your shipment online.",
+    "lead": "{company} ships vehicles, full containers and shared-container parcels to African ports. You get a clear price before departure.",
+    "leadTracking": "{company} ships vehicles, full containers and shared-container parcels to African ports. You get a clear price before departure and track your shipment online.",
     "routeFrom": "Departure",
     "routeTo": "Arrival",
     "trustTitle": "Why ship with us",
@@ -71,7 +73,7 @@
     "destinationsTitle": "We serve all of {region}",
     "destinationsLead": "These are the most requested ports. Don't see your city? Message us: we also ship to the other countries on the continent.",
     "stepsEyebrow": "How it works",
-    "stepsTitle": "Your shipment in four steps",
+    "stepsTitle": "Your shipment, step by step",
     "steps": [
       {
         "title": "You request a quote",
@@ -87,7 +89,8 @@
       },
       {
         "title": "You track online",
-        "text": "With your file number, you see every step until arrival."
+        "text": "With your file number, you see every step until arrival.",
+        "feature": "tracking"
       }
     ],
     "ctaTitle": "Ready to ship?",
@@ -254,7 +257,10 @@
         "title": "Information we collect",
         "body": [
           "When you fill in the quote request, we collect your name, phone number, email address and the details of your shipment: type of shipment, vehicle, container size, destination, preferred date and message.",
-          "Shipment tracking asks for no personal information: it only shows the status of a container or file from its number.",
+          {
+            "text": "Shipment tracking asks for no personal information: it only shows the status of a container or file from its number.",
+            "feature": "tracking"
+          },
           "To limit abuse, we briefly keep an encrypted fingerprint of the IP address of devices that submit a form. This fingerprint cannot be used to recover the original address."
         ]
       },
@@ -294,7 +300,11 @@
       {
         "title": "Cookies",
         "body": [
-          "This site uses no advertising cookies and no tool that tracks your browsing. The only cookie in use keeps staff signed in to the administration area."
+          "This site uses no advertising cookies and no tool that tracks your browsing.",
+          {
+            "text": "The only cookie in use keeps staff signed in to the administration area.",
+            "feature": "tracking"
+          }
         ]
       },
       {
@@ -332,7 +342,10 @@
         "title": "Published information",
         "body": [
           "Transit times and service descriptions are indicative. Only the quote we give you sets the price and conditions of your shipment.",
-          "Shipment tracking reflects the latest steps recorded by our team. The expected arrival date may change depending on the shipping line."
+          {
+            "text": "Shipment tracking reflects the latest steps recorded by our team. The expected arrival date may change depending on the shipping line.",
+            "feature": "tracking"
+          }
         ]
       },
       {

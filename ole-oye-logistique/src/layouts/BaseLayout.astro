@@ -6,6 +6,7 @@ import Footer from '../components/Footer.astro';
 import WhatsAppFloat from '../components/WhatsAppFloat.astro';
 import { siteConfig } from '../config/site.config';
 import { useTranslations } from '../i18n';
+import { trackingText } from '../lib/features';
 import { pagePath, type PageKey } from '../lib/paths';
 import { localBusinessJsonLd } from '../lib/seo';
 
@@ -22,7 +23,7 @@ const siteUrl = (Astro.site ?? new URL(siteConfig.url)).href;
 const absolute = (path: string) => new URL(path, siteUrl).href;
 
 const title = t(`meta.${page}.title`);
-const description = t(`meta.${page}.description`);
+const description = trackingText(t, `meta.${page}.description`);
 const canonical = absolute(pagePath(lang, page));
 const ogImage = absolute(siteConfig.brand.ogImage);
 const { colors } = siteConfig.brand;

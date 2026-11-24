@@ -76,6 +76,16 @@ export const siteConfig = {
   /** Préfixe des numéros de dossier proposés dans l'administration. */
   referencePrefix: 'OOL',
 
+  // ── Fonctionnalités ─────────────────────────────────────────────────────
+  features: {
+    /**
+     * Suivi d'expédition : page publique « Suivi », fonction `/api/track` et
+     * administration `/admin` pour saisir les étapes. À `false`, rien de tout
+     * cela n'est publié et les textes du site n'en parlent plus.
+     */
+    tracking: false,
+  },
+
   // ── Langues ─────────────────────────────────────────────────────────────
   // Ajouter une langue : créer `src/i18n/<code>.json` puis ajouter une ligne ici.
   defaultLocale: 'fr',
@@ -153,11 +163,11 @@ export const siteConfig = {
   /** Les trois arguments de confiance de la page d'accueil. */
   trust: [
     {
-      icon: 'tracking',
-      title: { fr: 'Suivi en ligne', en: 'Online tracking' },
+      icon: 'shield',
+      title: { fr: 'Un prix clair avant le départ', en: 'A clear price before departure' },
       text: {
-        fr: 'Suivez votre conteneur étape par étape, de notre entrepôt jusqu’au port d’arrivée.',
-        en: 'Follow your container step by step, from our warehouse to the arrival port.',
+        fr: 'Vous recevez un devis détaillé avant de déposer votre véhicule ou vos marchandises.',
+        en: 'You receive a detailed quote before dropping off your vehicle or goods.',
       },
     },
     {
@@ -192,13 +202,11 @@ export const siteConfig = {
           'Réception du véhicule à notre entrepôt de Montréal',
           'Chargement et arrimage en conteneur',
           "Préparation des documents d'exportation",
-          "Suivi en ligne jusqu'au port d'arrivée",
         ],
         en: [
           'Vehicle drop-off at our Montréal warehouse',
           'Loading and securing inside the container',
           'Preparation of export documents',
-          'Online tracking to the arrival port',
         ],
       },
     },
@@ -215,13 +223,13 @@ export const siteConfig = {
           "Conteneur de 20 ou 40 pieds selon le volume",
           'Chargement à notre entrepôt',
           'Transport du conteneur jusqu’au port de départ',
-          "Documents d'expédition et suivi en ligne",
+          "Documents d'expédition",
         ],
         en: [
           '20 or 40 foot container depending on volume',
           'Loading at our warehouse',
           'Transport of the container to the departure port',
-          'Shipping documents and online tracking',
+          'Shipping documents',
         ],
       },
     },
@@ -238,13 +246,11 @@ export const siteConfig = {
           'Dépôt de vos colis à notre entrepôt',
           'Regroupement dans un conteneur partagé',
           'Étiquetage et inventaire de vos colis',
-          'Suivi en ligne du conteneur',
         ],
         en: [
           'Drop-off of your parcels at our warehouse',
           'Consolidation in a shared container',
           'Labelling and inventory of your parcels',
-          'Online tracking of the container',
         ],
       },
     },

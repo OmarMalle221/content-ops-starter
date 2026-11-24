@@ -1,6 +1,9 @@
 ---
+import { enabledTexts, type FeatureItem } from '../lib/features';
+
 interface Props {
-  sections: { title: string; body: string[] }[];
+  /** Un paragraphe peut être réservé à une fonctionnalité : il disparaît quand elle est désactivée. */
+  sections: { title: string; body: FeatureItem[] }[];
 }
 
 const { sections } = Astro.props;
@@ -11,7 +14,7 @@ const { sections } = Astro.props;
     sections.map((section) => (
       <section>
         <h2 class="text-2xl font-bold">{section.title}</h2>
-        {section.body.map((paragraph) => (
+        {enabledTexts(section.body).map((paragraph) => (
           <p class="mt-3 text-lg leading-relaxed">{paragraph}</p>
         ))}
       </section>

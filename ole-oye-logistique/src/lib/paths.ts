@@ -1,4 +1,5 @@
 import { siteConfig } from '../config/site.config';
+import { isEnabled } from './features';
 
 /** Pages publiques, dans l'ordre du menu. La clé sert aussi de clé de traduction (`nav.<clé>`). */
 export const PAGES = {
@@ -14,7 +15,10 @@ export const PAGES = {
 
 export type PageKey = keyof typeof PAGES;
 
-export const NAV_PAGES: PageKey[] = ['home', 'services', 'destinations', 'tracking', 'contact'];
+/** Pages du menu. « Suivi » n'y figure que si la fonctionnalité est active. */
+export const NAV_PAGES: PageKey[] = (['home', 'services', 'destinations', 'tracking', 'contact'] as PageKey[]).filter(
+  (page) => page !== 'tracking' || isEnabled('tracking'),
+);
 
 /** Adresse d'une page dans une langue : `pagePath('en', 'quote')` → `/en/devis/`. */
 export function pagePath(lang: string, page: PageKey): string {
@@ -25,4 +29,9 @@ export function pagePath(lang: string, page: PageKey): string {
 /** Chemins statiques générés pour chaque page `[lang]`. */
 export function localeStaticPaths() {
   return siteConfig.locales.map((locale) => ({ params: { lang: locale.code } }));
+}
+
+/** Chemins de la page de suivi : aucun si la fonctionnalité est désactivée, la page n'est alors pas générée. */
+export function trackingStaticPaths() {
+  return isEnabled('tracking') ? localeStaticPaths() : [];
 }

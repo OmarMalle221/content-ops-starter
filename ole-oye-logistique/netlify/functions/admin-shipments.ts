@@ -9,6 +9,7 @@
  */
 import type { Config } from '@netlify/functions';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { siteConfig } from '../../src/config/site.config';
 import { isShipmentStatus, SHIPMENT_STATUSES } from '../../src/lib/statuses';
 import { CONTAINER_RE, REFERENCE_RE, normalizeContainer, normalizeReference } from '../../src/lib/tracking';
 import { errorResponse, isSameOrigin, json, readJson } from '../lib/http';
@@ -205,6 +206,8 @@ async function update(body: Record<string, unknown>, supabase: SupabaseClient): 
 }
 
 export default async function handler(req: Request): Promise<Response> {
+  // Suivi désactivé dans la config du site : cette route n'existe pas.
+  if (!siteConfig.features.tracking) return errorResponse('not_found', 404);
   try {
     if (!(await currentAdmin(req))) return errorResponse('unauthorized', 401);
     const supabase = serviceClient();

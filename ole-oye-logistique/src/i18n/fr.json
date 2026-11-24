@@ -2,7 +2,8 @@
   "meta": {
     "home": {
       "title": "{company} — Export de véhicules et conteneurs de {city} vers {region}",
-      "description": "{company} expédie vos véhicules, conteneurs complets et colis groupés de {city} vers {region}. Devis rapide, suivi en ligne et équipe joignable sur WhatsApp."
+      "description": "{company} expédie vos véhicules, conteneurs complets et colis groupés de {city} vers {region}. Devis rapide et équipe joignable sur WhatsApp.",
+      "descriptionTracking": "{company} expédie vos véhicules, conteneurs complets et colis groupés de {city} vers {region}. Devis rapide, suivi en ligne et équipe joignable sur WhatsApp."
     },
     "services": {
       "title": "Services d'export vers {region} — {company}",
@@ -60,7 +61,8 @@
   "home": {
     "eyebrow": "Exportateur à {city}",
     "title": "Vos véhicules et vos marchandises, de {city} à toute {region}.",
-    "lead": "{company} expédie véhicules, conteneurs complets et colis groupés vers les ports africains. Vous obtenez un prix clair avant le départ et vous suivez votre envoi en ligne.",
+    "lead": "{company} expédie véhicules, conteneurs complets et colis groupés vers les ports africains. Vous obtenez un prix clair avant le départ.",
+    "leadTracking": "{company} expédie véhicules, conteneurs complets et colis groupés vers les ports africains. Vous obtenez un prix clair avant le départ et vous suivez votre envoi en ligne.",
     "routeFrom": "Départ",
     "routeTo": "Arrivée",
     "trustTitle": "Pourquoi nous confier votre envoi",
@@ -71,7 +73,7 @@
     "destinationsTitle": "Nous desservons toute {region}",
     "destinationsLead": "Voici les ports les plus demandés. Votre ville n'y figure pas ? Écrivez-nous, nous expédions aussi vers les autres pays du continent.",
     "stepsEyebrow": "Comment ça marche",
-    "stepsTitle": "Votre envoi en quatre étapes",
+    "stepsTitle": "Votre envoi, étape par étape",
     "steps": [
       {
         "title": "Vous demandez un devis",
@@ -87,7 +89,8 @@
       },
       {
         "title": "Vous suivez en ligne",
-        "text": "Avec votre numéro de dossier, vous voyez chaque étape jusqu'à l'arrivée."
+        "text": "Avec votre numéro de dossier, vous voyez chaque étape jusqu'à l'arrivée.",
+        "feature": "tracking"
       }
     ],
     "ctaTitle": "Prêt à expédier ?",
@@ -254,7 +257,10 @@
         "title": "Renseignements que nous recueillons",
         "body": [
           "Lorsque vous remplissez la demande de devis, nous recueillons votre nom, votre numéro de téléphone, votre adresse courriel et les détails de votre envoi : type d'envoi, véhicule, taille du conteneur, destination, date souhaitée et message.",
-          "Le suivi d'expédition ne demande aucun renseignement personnel : il affiche seulement l'état d'un conteneur ou d'un dossier à partir de son numéro.",
+          {
+            "text": "Le suivi d'expédition ne demande aucun renseignement personnel : il affiche seulement l'état d'un conteneur ou d'un dossier à partir de son numéro.",
+            "feature": "tracking"
+          },
           "Pour limiter les abus, nous conservons brièvement une empreinte chiffrée de l'adresse IP des appareils qui envoient un formulaire. Cette empreinte ne permet pas de retrouver l'adresse d'origine."
         ]
       },
@@ -294,7 +300,11 @@
       {
         "title": "Témoins (cookies)",
         "body": [
-          "Ce site n'utilise aucun témoin publicitaire ni outil de suivi de votre navigation. Le seul témoin utilisé sert à garder connecté le personnel dans l'espace d'administration."
+          "Ce site n'utilise aucun témoin publicitaire ni outil de suivi de votre navigation.",
+          {
+            "text": "Le seul témoin utilisé sert à garder connecté le personnel dans l'espace d'administration.",
+            "feature": "tracking"
+          }
         ]
       },
       {
@@ -332,7 +342,10 @@
         "title": "Informations publiées",
         "body": [
           "Les délais de transit et les descriptions de services sont donnés à titre indicatif. Seul le devis que nous vous remettons précise le prix et les conditions de votre envoi.",
-          "Le suivi d'expédition reflète les dernières étapes enregistrées par notre équipe. La date d'arrivée prévue peut changer selon la compagnie maritime."
+          {
+            "text": "Le suivi d'expédition reflète les dernières étapes enregistrées par notre équipe. La date d'arrivée prévue peut changer selon la compagnie maritime.",
+            "feature": "tracking"
+          }
         ]
       },
       {

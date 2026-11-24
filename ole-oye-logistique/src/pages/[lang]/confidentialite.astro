@@ -4,6 +4,7 @@ import PageHeader from '../../components/PageHeader.astro';
 import LegalSections from '../../components/LegalSections.astro';
 import { siteConfig } from '../../config/site.config';
 import { useTranslations } from '../../i18n';
+import type { FeatureItem } from '../../lib/features';
 import { localeStaticPaths } from '../../lib/paths';
 
 export const getStaticPaths = localeStaticPaths;
@@ -16,7 +17,7 @@ const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.loc
 const updated = new Intl.DateTimeFormat(locale.htmlLang, { dateStyle: 'long', timeZone: 'UTC' }).format(
   new Date(`${privacy.policyVersion}T00:00:00Z`),
 );
-const sections = tx<{ title: string; body: string[] }[]>('privacy.sections', {
+const sections = tx<{ title: string; body: FeatureItem[] }[]>('privacy.sections', {
   officerName: privacy.officerName,
   officerEmail: privacy.officerEmail,
   retentionMonths: privacy.retentionMonths,

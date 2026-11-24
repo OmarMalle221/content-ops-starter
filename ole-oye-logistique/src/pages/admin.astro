@@ -9,8 +9,11 @@ import '../styles/global.css';
 import AdminApp from '../components/admin/AdminApp.astro';
 import { siteConfig } from '../config/site.config';
 import { useTranslations } from '../i18n';
+import { isEnabled } from '../lib/features';
 
 const lang = siteConfig.defaultLocale;
+// Sans le suivi, l'administration n'a rien à gérer : la page est retirée du site publié (voir astro.config.ts).
+if (!isEnabled('tracking')) return Astro.redirect(`/${lang}/`);
 const { t } = useTranslations(lang);
 const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.locales[0];
 const { colors } = siteConfig.brand;

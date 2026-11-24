@@ -6,6 +6,7 @@
  * note interne ni de prix : les colonnes lues sont listées explicitement.
  */
 import type { Config, Context } from '@netlify/functions';
+import { siteConfig } from '../../src/config/site.config';
 import { isShipmentStatus } from '../../src/lib/statuses';
 import {
   CONTAINER_RE,
@@ -24,6 +25,8 @@ export const config: Config = { path: '/api/track' };
 const RATE_LIMIT = { bucket: 'track', windowSeconds: 300, max: 30 };
 
 export default async function handler(req: Request, context: Context): Promise<Response> {
+  // Suivi désactivé dans la config du site : cette route n'existe pas.
+  if (!siteConfig.features.tracking) return errorResponse('not_found', 404);
   if (req.method !== 'GET') return errorResponse('method_not_allowed', 405);
 
   const query = new URL(req.url).searchParams.get('q') ?? '';

@@ -8,6 +8,7 @@ import track from '../netlify/functions/track';
 import adminAuth from '../netlify/functions/admin-auth';
 import adminShipments from '../netlify/functions/admin-shipments';
 import { createSessionToken, verifySessionToken } from '../netlify/lib/session';
+import { siteConfig } from '../src/config/site.config';
 
 const SITE = 'https://site.test';
 const context = { ip: '203.0.113.7' } as any;
@@ -36,6 +37,8 @@ const validQuote = {
 
 beforeEach(() => {
   resetDb();
+  // Les tests couvrent le site complet, quel que soit le réglage du client.
+  siteConfig.features.tracking = true;
   process.env.ADMIN_SESSION_SECRET = 'un-secret-de-test-de-plus-de-32-caracteres';
   process.env.RATE_LIMIT_SALT = 'sel';
   delete process.env.RESEND_API_KEY;
@@ -301,5 +304,39 @@ describe('administration', () => {
     expect((await shipments({ action: 'update', id: foreign, eta: '2027-01-01' })).status).toBe(404);
     expect((await shipments({ action: 'add_event', shipment_id: foreign, status: 'en_orbite' })).status).toBe(400);
     expect(db.tables.shipment_events).toHaveLength(0);
+  });
+});
+
+describe('suivi désactivé dans la config', () => {
+  beforeEach(() => {
+    siteConfig.features.tracking = false;
+    db.tables.admin_users.push({ email: 'patron@exportateur.test', tenant_id: TEST_TENANT });
+    db.tables.shipments.push({
+      id: 's1', tenant_id: TEST_TENANT, reference: 'OOL-26-0001', container_number: null,
+      origin_port: 'Montréal', destination_port: 'Dakar', eta: null, current_status: 'on_board', created_at: '2026-11-01T10:00:00Z',
+    });
+  });
+
+  it('ferme le suivi public et l’administration', async () => {
+    const cookie = { Cookie: `admin_session=${createSessionToken('patron@exportateur.test')}` };
+    const responses = [
+      await track(new Request(`${SITE}/api/track?q=OOL-26-0001`), context),
+      await adminAuth(new Request(`${SITE}/api/admin/auth`, { headers: cookie }), context),
+      await adminAuth(post('/api/admin/auth', { action: 'request', email: 'patron@exportateur.test' }), context),
+      await adminShipments(new Request(`${SITE}/api/admin/shipments`, { headers: cookie })),
+      await adminShipments(post('/api/admin/shipments', { action: 'create', reference: 'OOL-1', origin_port: 'A', destination_port: 'B' }, cookie)),
+    ];
+    for (const response of responses) {
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ ok: false, error: 'not_found' });
+    }
+    expect(db.sentOtps).toEqual([]);
+    expect(db.tables.shipments).toHaveLength(1);
+  });
+
+  it('laisse le devis fonctionner', async () => {
+    const response = await quote(post('/api/quote', validQuote), context);
+    expect(response.status).toBe(201);
+    expect(db.tables.quote_requests).toHaveLength(1);
   });
 });

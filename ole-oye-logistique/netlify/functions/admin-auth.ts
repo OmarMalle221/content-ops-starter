@@ -10,6 +10,7 @@
  * Seuls les courriels de la table `admin_users` peuvent se connecter.
  */
 import type { Config, Context } from '@netlify/functions';
+import { siteConfig } from '../../src/config/site.config';
 import { clientIp, errorResponse, isSameOrigin, json, readJson } from '../lib/http';
 import { allowRequest } from '../lib/rate-limit';
 import { clearSessionCookie, currentAdmin, isAllowedAdmin, sessionCookie } from '../lib/session';
@@ -27,6 +28,8 @@ async function openSession(req: Request, email: string | undefined | null): Prom
 }
 
 export default async function handler(req: Request, context: Context): Promise<Response> {
+  // Suivi désactivé dans la config du site : cette route n'existe pas.
+  if (!siteConfig.features.tracking) return errorResponse('not_found', 404);
   try {
     if (req.method === 'GET') {
       const email = await currentAdmin(req);

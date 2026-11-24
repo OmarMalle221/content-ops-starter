@@ -8,13 +8,14 @@ import CtaBand from '../../components/CtaBand.astro';
 import Icon from '../../components/Icon.astro';
 import { siteConfig } from '../../config/site.config';
 import { useTranslations } from '../../i18n';
+import { enabledItems, type FeatureName } from '../../lib/features';
 import { localeStaticPaths, pagePath } from '../../lib/paths';
 
 export const getStaticPaths = localeStaticPaths;
 
 const { lang } = Astro.params;
 const { t, tx } = useTranslations(lang);
-const steps = tx<{ title: string; text: string }[]>('home.steps');
+const steps = enabledItems(tx<{ title: string; text: string; feature?: FeatureName }[]>('home.steps'));
 ---
 
 <BaseLayout lang={lang} page="home">
@@ -40,7 +41,7 @@ const steps = tx<{ title: string; text: string }[]>('home.steps');
     <div class="container-page">
       <p class="eyebrow">{t('home.stepsEyebrow')}</p>
       <h2 id="steps-title" class="section-title mt-2">{t('home.stepsTitle')}</h2>
-      <ol class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <ol class:list={['mt-8 grid gap-4 sm:grid-cols-2', steps.length === 3 ? 'lg:grid-cols-3' : 'lg:grid-cols-4']}>
         {
           steps.map((step, index) => (
             <li class="card">

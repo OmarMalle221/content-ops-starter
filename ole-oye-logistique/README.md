@@ -1,6 +1,6 @@
 # Site exportateur — Ole Oye Logistique
 
-Site vitrine bilingue (français, anglais) pour un exportateur de véhicules et de conteneurs, avec demande de devis, suivi d'expédition et petite administration. Il est conçu comme un **modèle réutilisable** : tout ce qui est propre au client se trouve dans un seul fichier, [`src/config/site.config.ts`](src/config/site.config.ts).
+Site vitrine bilingue (français, anglais) pour un exportateur de véhicules et de conteneurs, avec demande de devis et, en option, suivi d'expédition et petite administration. Il est conçu comme un **modèle réutilisable** : tout ce qui est propre au client se trouve dans un seul fichier, [`src/config/site.config.ts`](src/config/site.config.ts).
 
 - **Astro** (site statique) et **Tailwind CSS**, TypeScript partout
 - **Netlify** pour l'hébergement et les fonctions serveur
@@ -17,9 +17,10 @@ Aucune clé n'est envoyée au navigateur : le site ne parle qu'aux fonctions `/a
 4. [Déploiement sur Netlify](#déploiement-sur-netlify)
 5. [Utiliser l'administration](#utiliser-ladministration)
 6. [Dupliquer ce modèle pour un nouveau client](#dupliquer-ce-modèle-pour-un-nouveau-client)
-7. [Ajouter une langue](#ajouter-une-langue)
-8. [Structure du projet](#structure-du-projet)
-9. [Brancher l'API d'un transporteur](#brancher-lapi-dun-transporteur)
+7. [Activer ou désactiver le suivi d'expédition](#activer-ou-désactiver-le-suivi-dexpédition)
+8. [Ajouter une langue](#ajouter-une-langue)
+9. [Structure du projet](#structure-du-projet)
+10. [Brancher l'API d'un transporteur](#brancher-lapi-dun-transporteur)
 
 ## Installation locale
 
@@ -118,7 +119,7 @@ Le statut d'une expédition (`shipments.current_status`) est recalculé par un d
 
 - `/` redirige vers `/fr/` (ou `/en/` pour un navigateur en anglais) ;
 - une demande de devis d'essai arrive dans `quote_requests` et par courriel ;
-- `/admin` envoie le courriel de connexion, et une expédition créée s'affiche dans `/fr/suivi/` ;
+- si le suivi est actif : `/admin` envoie le courriel de connexion, et une expédition créée s'affiche dans `/fr/suivi/` ;
 - le lien du site partagé dans WhatsApp montre l'image d'aperçu.
 
 ## Utiliser l'administration
@@ -143,6 +144,7 @@ Copier le dossier dans un nouveau dépôt, puis suivre cette liste.
 | --- | --- |
 | Identité | `name`, `shortName`, `legalName`, `url`, `referencePrefix` |
 | `brand.colors` | Couleurs de la marque. Garder un contraste suffisant : texte foncé sur `accent`, texte blanc sur `primary` |
+| `features` | `tracking` : active ou non le suivi d'expédition (voir plus bas) |
 | `contact` | Téléphone, WhatsApp, courriel, adresse, lien Google Maps, heures d'ouverture |
 | `origin`, `region` | Ville et port de départ, zone desservie |
 | `tagline`, `trust` | Slogan et les trois arguments de confiance (avec un chiffre dans `value` si le client en a) |
@@ -171,6 +173,26 @@ Faire relire la politique de confidentialité et les mentions légales (clés `p
 - Un domaine d'expédition vérifié dans Resend.
 
 Rien d'autre n'est à toucher : composants, pages, fonctions et schéma SQL sont communs à tous les clients.
+
+## Activer ou désactiver le suivi d'expédition
+
+Le suivi est optionnel. Il se règle dans `site.config.ts` :
+
+```ts
+features: {
+  tracking: false,
+},
+```
+
+À `false` (réglage actuel d'Ole Oye Logistique) :
+
+- la page « Suivi » et `/admin` ne sont pas publiées, et « Suivi » disparaît du menu ;
+- `/api/track` et `/api/admin/*` répondent 404 ;
+- les textes d'interface qui parlent du suivi sont retirés (accueil, politique de confidentialité, mentions légales).
+
+À `true`, tout revient sans autre changement. Les textes propres au client, dans `trust` et `services`, ne suivent pas ce réglage : y ajouter ou retirer soi-même les mentions du suivi.
+
+Les tables `shipments` et `shipment_events` restent dans la base dans les deux cas ; elles ne servent simplement pas tant que le suivi est désactivé. Les sections « Utiliser l'administration » et « Brancher l'API d'un transporteur » ne concernent que les sites où le suivi est actif.
 
 ## Ajouter une langue
 
