@@ -1,0 +1,15 @@
+---
+interface Props {
+  title: string;
+  lead?: string;
+}
+
+const { title, lead } = Astro.props;
+---
+
+<section class="bg-linear-to-br from-primary to-primary-dark text-white">
+  <div class="container-page py-10 sm:py-14">
+    <h1 class="text-4xl font-extrabold text-white sm:text-5xl">{title}</h1>
+    {lead && <p class="mt-4 max-w-3xl text-lg leading-relaxed text-slate-200">{lead}</p>}
+  </div>
+</section>

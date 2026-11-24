@@ -1,0 +1,37 @@
+---
+import Icon from './Icon.astro';
+import { siteConfig, pick } from '../config/site.config';
+import { useTranslations } from '../i18n';
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const { t } = useTranslations(lang);
+---
+
+<section aria-labelledby="trust-title" class="bg-surface">
+  <div class="container-page py-10 sm:py-12">
+    <h2 id="trust-title" class="sr-only">{t('home.trustTitle')}</h2>
+    <ul class="grid gap-4 md:grid-cols-3">
+      {
+        siteConfig.trust.map((point) => (
+          <li class="card flex gap-4">
+            <span class="flex size-12 shrink-0 items-center justify-center rounded-xl bg-primary text-accent">
+              {point.value ? (
+                <span class="font-display text-base font-extrabold">{point.value}</span>
+              ) : (
+                <Icon name={point.icon} />
+              )}
+            </span>
+            <div>
+              <h3 class="text-lg font-bold">{pick(point.title, lang)}</h3>
+              <p class="mt-1 text-[0.95rem] leading-relaxed">{pick(point.text, lang)}</p>
+            </div>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</section>

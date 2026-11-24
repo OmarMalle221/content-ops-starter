@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+/*
+ * Les couleurs viennent de `src/config/site.config.ts` : la mise en page les
+ * expose en variables CSS (--brand-*), reprises ici comme couleurs Tailwind.
+ */
+@theme inline {
+  --color-primary: var(--brand-primary);
+  --color-primary-dark: var(--brand-primary-dark);
+  --color-primary-soft: var(--brand-primary-soft);
+  --color-accent: var(--brand-accent);
+  --color-accent-dark: var(--brand-accent-dark);
+  --color-accent-text: var(--brand-accent-text);
+  --color-surface: var(--brand-surface);
+  --color-whatsapp: #25d366;
+  --color-whatsapp-dark: #1fb658;
+  --color-whatsapp-ink: #05301a;
+  --font-display: 'Archivo Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-white font-sans text-slate-700 antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display text-primary;
+    text-wrap: balance;
+  }
+  :focus-visible {
+    outline: 3px solid var(--brand-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@utility btn {
+  @apply inline-flex min-h-12 items-center justify-center gap-2 rounded-lg px-5 py-3 text-base font-semibold transition-colors;
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-6xl px-4 sm:px-6;
+  }
+  .btn-accent {
+    @apply btn bg-accent text-primary-dark hover:bg-accent-dark;
+  }
+  .btn-primary {
+    @apply btn bg-primary text-white hover:bg-primary-dark;
+  }
+  .btn-outline {
+    @apply btn border-2 border-primary text-primary hover:bg-primary-soft;
+  }
+  .btn-ghost-light {
+    @apply btn border-2 border-white/40 text-white hover:bg-white/10;
+  }
+  .btn-whatsapp {
+    @apply btn bg-whatsapp text-whatsapp-ink hover:bg-whatsapp-dark;
+  }
+  .eyebrow {
+    @apply text-sm font-semibold tracking-wide text-accent-text uppercase;
+  }
+  .section {
+    @apply py-14 sm:py-20;
+  }
+  .section-title {
+    @apply text-3xl font-bold sm:text-4xl;
+  }
+  .card {
+    @apply rounded-2xl border border-slate-200 bg-white p-6 shadow-sm;
+  }
+  .field-label {
+    @apply mb-1.5 block text-sm font-semibold text-primary;
+  }
+  .field-input {
+    @apply block min-h-12 w-full rounded-lg border border-slate-400 bg-white px-3.5 py-2.5 text-base text-slate-900 placeholder:text-slate-500 focus:border-primary focus:ring-2 focus:ring-primary/30 focus:outline-none;
+  }
+  .field-input[aria-invalid='true'] {
+    @apply border-red-700 ring-1 ring-red-700;
+  }
+  .field-error {
+    @apply mt-1.5 text-sm font-medium text-red-700;
+  }
+  .field-hint {
+    @apply mt-1.5 text-sm text-slate-600;
+  }
+}

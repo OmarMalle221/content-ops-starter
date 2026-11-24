@@ -1,0 +1,23 @@
+---
+/**
+ * Secours pour la racine du site. En production, Netlify redirige `/` vers la
+ * bonne langue avant d'arriver ici (voir `netlify.toml`).
+ */
+import { siteConfig } from '../config/site.config';
+
+const target = `/${siteConfig.defaultLocale}/`;
+---
+
+<!doctype html>
+<html lang={siteConfig.defaultLocale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content={`0;url=${target}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={new URL(target, Astro.site ?? siteConfig.url).href} />
+    <title>{siteConfig.name}</title>
+  </head>
+  <body>
+    <a href={target}>{siteConfig.name}</a>
+  </body>
+</html>

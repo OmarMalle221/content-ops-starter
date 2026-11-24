@@ -1,0 +1,21 @@
+---
+import Icon from './Icon.astro';
+import { useTranslations } from '../i18n';
+import { whatsappLink } from '../lib/whatsapp';
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const { t } = useTranslations(lang);
+---
+
+<a
+  href={whatsappLink(t('cta.whatsappMessage'))}
+  rel="noopener"
+  aria-label={t('cta.whatsapp')}
+  class="fixed right-4 bottom-4 z-30 flex size-14 items-center justify-center rounded-full bg-whatsapp text-whatsapp-ink shadow-lg ring-4 ring-white transition-transform hover:scale-105 hover:bg-whatsapp-dark"
+>
+  <Icon name="whatsapp" class="size-8" />
+</a>

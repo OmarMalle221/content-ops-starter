@@ -1,0 +1,87 @@
+---
+import Icon from './Icon.astro';
+import LangSwitcher from './LangSwitcher.astro';
+import { siteConfig } from '../config/site.config';
+import { useTranslations } from '../i18n';
+import { NAV_PAGES, pagePath, type PageKey } from '../lib/paths';
+
+interface Props {
+  lang: string;
+  page: PageKey;
+}
+
+const { lang, page } = Astro.props;
+const { t } = useTranslations(lang);
+const { brand } = siteConfig;
+---
+
+<header class="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+  <div class="container-page flex h-16 items-center justify-between gap-3">
+    <a href={pagePath(lang, 'home')} class="flex min-w-0 items-center gap-2.5" aria-label={siteConfig.name}>
+      <img src={brand.logo} alt="" width="40" height="40" class="h-10 w-auto shrink-0" />
+      {
+        !brand.logoIncludesName && (
+          <span class="truncate font-display text-base leading-tight font-bold text-primary sm:text-lg">{siteConfig.name}</span>
+        )
+      }
+    </a>
+
+    <nav aria-label={t('nav.main')} class="hidden lg:block">
+      <ul class="flex items-center gap-1">
+        {
+          NAV_PAGES.map((key) => (
+            <li>
+              <a
+                href={pagePath(lang, key)}
+                aria-current={key === page ? 'page' : undefined}
+                class:list={[
+                  'rounded-lg px-3 py-2 text-[0.95rem] font-semibold hover:bg-primary-soft',
+                  key === page ? 'text-primary underline decoration-accent decoration-2 underline-offset-8' : 'text-slate-700',
+                ]}
+              >
+                {t(`nav.${key}`)}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <div class="flex shrink-0 items-center gap-2">
+      <LangSwitcher lang={lang} page={page} />
+      <a href={pagePath(lang, 'quote')} class="btn-accent hidden min-h-10 px-4 py-2 text-sm sm:inline-flex">
+        {t('cta.quote')}
+      </a>
+
+      <details class="group lg:hidden">
+        <summary
+          class="flex size-11 cursor-pointer list-none items-center justify-center rounded-lg border border-slate-300 text-primary [&::-webkit-details-marker]:hidden"
+          aria-label={t('nav.menu')}
+        >
+          <Icon name="menu" />
+        </summary>
+        <nav
+          aria-label={t('nav.main')}
+          class="absolute inset-x-0 top-16 border-b border-slate-200 bg-white px-4 pt-2 pb-5 shadow-lg"
+        >
+          <ul class="divide-y divide-slate-100">
+            {
+              NAV_PAGES.map((key) => (
+                <li>
+                  <a
+                    href={pagePath(lang, key)}
+                    aria-current={key === page ? 'page' : undefined}
+                    class:list={['block py-3.5 text-lg font-semibold', key === page ? 'text-accent-text' : 'text-primary']}
+                  >
+                    {t(`nav.${key}`)}
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+          <a href={pagePath(lang, 'quote')} class="btn-accent mt-3 w-full">{t('cta.quote')}</a>
+        </nav>
+      </details>
+    </div>
+  </div>
+</header>

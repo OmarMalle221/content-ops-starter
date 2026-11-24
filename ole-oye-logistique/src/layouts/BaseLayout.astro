@@ -1,0 +1,87 @@
+---
+import '@fontsource-variable/archivo';
+import '../styles/global.css';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import WhatsAppFloat from '../components/WhatsAppFloat.astro';
+import { siteConfig } from '../config/site.config';
+import { useTranslations } from '../i18n';
+import { pagePath, type PageKey } from '../lib/paths';
+import { localBusinessJsonLd } from '../lib/seo';
+
+interface Props {
+  lang: string;
+  /** Page courante : détermine le titre, la description et les liens `hreflang`. */
+  page: PageKey;
+}
+
+const { lang, page } = Astro.props;
+const { t } = useTranslations(lang);
+const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.locales[0];
+const siteUrl = (Astro.site ?? new URL(siteConfig.url)).href;
+const absolute = (path: string) => new URL(path, siteUrl).href;
+
+const title = t(`meta.${page}.title`);
+const description = t(`meta.${page}.description`);
+const canonical = absolute(pagePath(lang, page));
+const ogImage = absolute(siteConfig.brand.ogImage);
+const { colors } = siteConfig.brand;
+
+// Les couleurs de la config deviennent des variables CSS, reprises par Tailwind.
+const brandCss = `:root{--brand-primary:${colors.primary};--brand-primary-dark:${colors.primaryDark};--brand-primary-soft:${colors.primarySoft};--brand-accent:${colors.accent};--brand-accent-dark:${colors.accentDark};--brand-accent-text:${colors.accentText};--brand-surface:${colors.surface}}`;
+const jsonLd = JSON.stringify(localBusinessJsonLd(lang, siteUrl)).replace(/</g, '\\u003c');
+---
+
+<!doctype html>
+<html lang={locale.htmlLang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {
+      siteConfig.locales.map((l) => (
+        <link rel="alternate" hreflang={l.htmlLang} href={absolute(pagePath(l.code, page))} />
+      ))
+    }
+    <link rel="alternate" hreflang="x-default" href={absolute(pagePath(siteConfig.defaultLocale, page))} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={siteConfig.name} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={siteConfig.name} />
+    <meta property="og:locale" content={locale.ogLocale} />
+    {
+      siteConfig.locales
+        .filter((l) => l.code !== lang)
+        .map((l) => <meta property="og:locale:alternate" content={l.ogLocale} />)
+    }
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <meta name="theme-color" content={colors.primary} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <style is:inline set:html={brandCss}></style>
+    <script is:inline type="application/ld+json" set:html={jsonLd}></script>
+  </head>
+  <body class="flex min-h-screen flex-col">
+    <a
+      href="#contenu"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-3 focus:font-semibold focus:text-primary focus:shadow-lg"
+    >
+      {t('nav.skip')}
+    </a>
+    <Header lang={lang} page={page} />
+    <main id="contenu" class="flex-1">
+      <slot />
+    </main>
+    <Footer lang={lang} />
+    <WhatsAppFloat lang={lang} />
+  </body>
+</html>
