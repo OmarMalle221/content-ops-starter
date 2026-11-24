@@ -1,0 +1,25 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import LegalSections from '../../components/LegalSections.astro';
+import { useTranslations } from '../../i18n';
+import { localeStaticPaths, pagePath } from '../../lib/paths';
+
+export const getStaticPaths = localeStaticPaths;
+
+const { lang } = Astro.params;
+const { t, tx } = useTranslations(lang);
+const sections = tx<{ title: string; body: string[] }[]>('legal.sections');
+---
+
+<BaseLayout lang={lang} page="legal">
+  <PageHeader title={t('legal.title')} />
+  <div class="container-page section max-w-3xl">
+    <LegalSections sections={sections} />
+    <p class="mt-9">
+      <a href={pagePath(lang, 'privacy')} class="font-semibold text-primary underline underline-offset-4">
+        {t('nav.privacy')}
+      </a>
+    </p>
+  </div>
+</BaseLayout>

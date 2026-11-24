@@ -1,0 +1,32 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import LegalSections from '../../components/LegalSections.astro';
+import { siteConfig } from '../../config/site.config';
+import { useTranslations } from '../../i18n';
+import { localeStaticPaths } from '../../lib/paths';
+
+export const getStaticPaths = localeStaticPaths;
+
+const { lang } = Astro.params;
+const { t, tx } = useTranslations(lang);
+const { privacy } = siteConfig;
+const locale = siteConfig.locales.find((l) => l.code === lang) ?? siteConfig.locales[0];
+
+const updated = new Intl.DateTimeFormat(locale.htmlLang, { dateStyle: 'long', timeZone: 'UTC' }).format(
+  new Date(`${privacy.policyVersion}T00:00:00Z`),
+);
+const sections = tx<{ title: string; body: string[] }[]>('privacy.sections', {
+  officerName: privacy.officerName,
+  officerEmail: privacy.officerEmail,
+  retentionMonths: privacy.retentionMonths,
+});
+---
+
+<BaseLayout lang={lang} page="privacy">
+  <PageHeader title={t('privacy.title')} lead={t('privacy.updated', { date: updated })} />
+  <div class="container-page section max-w-3xl">
+    <p class="mb-9 text-lg leading-relaxed">{t('privacy.intro')}</p>
+    <LegalSections sections={sections} />
+  </div>
+</BaseLayout>
