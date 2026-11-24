@@ -392,6 +392,10 @@
     "saved": "Saved.",
     "created": "Shipment created.",
     "stepAdded": "Step added.",
+    "history": "Recorded steps",
+    "removeStep": "Remove",
+    "removeStepConfirm": "Remove this step?",
+    "publicLink": "View public tracking",
     "errors": {
       "generic": "Something went wrong. Try again.",
       "network": "Could not connect. Check your network.",
@@ -403,7 +407,8 @@
       "reference_taken": "This file number already exists.",
       "container_invalid": "Invalid container number (4 to 30 letters or digits).",
       "ports_required": "Enter the departure port and the arrival port.",
-      "not_configured": "The server is not configured yet (missing environment variables)."
+      "not_configured": "The server is not configured yet (missing environment variables).",
+      "not_allowed": "This email does not have access to the administration."
     }
   },
   "email": {

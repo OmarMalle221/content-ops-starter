@@ -392,6 +392,10 @@
     "saved": "Enregistré.",
     "created": "Expédition créée.",
     "stepAdded": "Étape ajoutée.",
+    "history": "Étapes enregistrées",
+    "removeStep": "Retirer",
+    "removeStepConfirm": "Retirer cette étape ?",
+    "publicLink": "Voir le suivi public",
     "errors": {
       "generic": "Une erreur est survenue. Réessayez.",
       "network": "Connexion impossible. Vérifiez votre réseau.",
@@ -403,7 +407,8 @@
       "reference_taken": "Ce numéro de dossier existe déjà.",
       "container_invalid": "Numéro de conteneur invalide (4 à 30 lettres ou chiffres).",
       "ports_required": "Indiquez le port de départ et le port d'arrivée.",
-      "not_configured": "Le serveur n'est pas encore configuré (variables d'environnement manquantes)."
+      "not_configured": "Le serveur n'est pas encore configuré (variables d'environnement manquantes).",
+      "not_allowed": "Ce courriel n'a pas accès à l'administration."
     }
   },
   "email": {
