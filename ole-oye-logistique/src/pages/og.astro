@@ -1,0 +1,38 @@
+---
+/**
+ * Gabarit de l'image d'aperçu (WhatsApp, Facebook). Cette page n'est liée
+ * nulle part : `npm run og` la photographie en 1200 × 630 px pour produire
+ * `public/og-image.png` à partir du nom, des couleurs et du slogan de la config.
+ */
+import '@fontsource-variable/archivo';
+import '../styles/global.css';
+import { siteConfig, pick } from '../config/site.config';
+
+const lang = siteConfig.defaultLocale;
+const { colors } = siteConfig.brand;
+const brandCss = `:root{--brand-primary:${colors.primary};--brand-primary-dark:${colors.primaryDark};--brand-primary-soft:${colors.primarySoft};--brand-accent:${colors.accent};--brand-accent-dark:${colors.accentDark};--brand-accent-text:${colors.accentText};--brand-surface:${colors.surface}}`;
+const cities = siteConfig.destinations.slice(0, 4).map((d) => d.city);
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{siteConfig.name}</title>
+    <style is:inline set:html={brandCss}></style>
+  </head>
+  <body class="m-0">
+    <div class="flex h-[630px] w-[1200px] flex-col justify-between bg-linear-to-br from-primary to-primary-dark p-[72px] text-white">
+      <div class="flex items-center gap-6">
+        <img src={siteConfig.brand.logo} alt="" class="size-24 rounded-3xl ring-2 ring-white/30" />
+        <p class="font-display text-5xl font-extrabold">{siteConfig.name}</p>
+      </div>
+      <p class="max-w-[960px] font-display text-[68px] leading-[1.08] font-extrabold">{pick(siteConfig.tagline, lang)}</p>
+      <div class="flex items-center justify-between">
+        <p class="text-3xl text-slate-200">{siteConfig.origin.city} → {cities.join(' · ')}…</p>
+        <p class="shrink-0 rounded-2xl bg-accent px-6 py-3 font-display text-3xl font-bold whitespace-nowrap text-primary-dark">{siteConfig.contact.phoneDisplay}</p>
+      </div>
+    </div>
+  </body>
+</html>

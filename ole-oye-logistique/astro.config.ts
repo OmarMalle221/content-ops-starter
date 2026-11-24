@@ -12,7 +12,8 @@ export default defineConfig({
   build: { format: 'directory' },
   integrations: [
     sitemap({
-      filter: (page) => !page.includes('/admin'),
+      // Hors sitemap : l'administration, le gabarit d'image et la racine (simple redirection).
+      filter: (page) => !/^\/(admin\/|og\/)?$/.test(new URL(page).pathname),
       i18n: {
         defaultLocale: siteConfig.defaultLocale,
         locales: Object.fromEntries(siteConfig.locales.map((l) => [l.code, l.htmlLang])),

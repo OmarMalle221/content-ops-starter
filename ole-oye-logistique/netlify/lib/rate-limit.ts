@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { serviceClient } from './supabase';
+import { NotConfiguredError, serviceClient } from './supabase';
 
 export interface RateLimitRule {
   /** Nom du compteur : un par fonction. */
@@ -34,6 +34,8 @@ export async function allowRequest(ip: string, rule: RateLimitRule): Promise<boo
     }
     return data !== false;
   } catch (error) {
+    // Site pas encore configuré : l'erreur remonte, la fonction répondra 503.
+    if (error instanceof NotConfiguredError) throw error;
     console.error('rate-limit', error);
     return true;
   }
