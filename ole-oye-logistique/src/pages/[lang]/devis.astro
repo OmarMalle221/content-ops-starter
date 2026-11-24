@@ -1,0 +1,38 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHeader from '../../components/PageHeader.astro';
+import QuoteForm from '../../components/QuoteForm.astro';
+import Icon from '../../components/Icon.astro';
+import { siteConfig } from '../../config/site.config';
+import { useTranslations } from '../../i18n';
+import { localeStaticPaths } from '../../lib/paths';
+import { whatsappLink } from '../../lib/whatsapp';
+
+export const getStaticPaths = localeStaticPaths;
+
+const { lang } = Astro.params;
+const { t } = useTranslations(lang);
+---
+
+<BaseLayout lang={lang} page="quote">
+  <PageHeader title={t('quote.title')} lead={t('quote.lead')} />
+
+  <div class="container-page section grid gap-8 lg:grid-cols-[1fr_20rem] lg:gap-12">
+    <QuoteForm lang={lang} />
+
+    <aside class="h-fit rounded-2xl bg-surface p-6 lg:sticky lg:top-24">
+      <h2 class="text-xl font-bold">{t('quote.asideTitle')}</h2>
+      <p class="mt-2 leading-relaxed">{t('quote.asideText')}</p>
+      <div class="mt-5 flex flex-col gap-3">
+        <a href={whatsappLink(t('cta.whatsappMessage'))} class="btn-whatsapp" rel="noopener">
+          <Icon name="whatsapp" class="size-5" />
+          {t('cta.whatsappShort')}
+        </a>
+        <a href={`tel:${siteConfig.contact.phone}`} class="btn-outline">
+          <Icon name="phone" class="size-5" />
+          {siteConfig.contact.phoneDisplay}
+        </a>
+      </div>
+    </aside>
+  </div>
+</BaseLayout>

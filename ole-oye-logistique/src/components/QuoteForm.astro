@@ -1,0 +1,355 @@
+---
+/**
+ * Formulaire de devis. Îlot sans framework : le HTML est rendu à la
+ * compilation, le script ci-dessous gère les champs conditionnels, la
+ * validation immédiate et l'envoi vers la fonction `/api/quote`.
+ */
+import Icon from './Icon.astro';
+import { siteConfig, pick } from '../config/site.config';
+import { useTranslations } from '../i18n';
+import { pagePath } from '../lib/paths';
+import { CONTAINER_SIZES, HONEYPOT_FIELD, OTHER_DESTINATION, SHIPMENT_TYPES } from '../lib/quote-schema';
+
+interface Props {
+  lang: string;
+}
+
+const { lang } = Astro.props;
+const { t, tx } = useTranslations(lang);
+
+// Tout ce dont le script a besoin, transmis en JSON : aucune clé, aucun secret.
+const clientConfig = {
+  lang,
+  endpoint: '/api/quote',
+  destinations: siteConfig.destinations.map((d) => d.slug),
+  allowOtherDestination: siteConfig.acceptsOtherDestinations,
+  locales: siteConfig.locales.map((l) => l.code),
+  defaultLocale: siteConfig.defaultLocale,
+  whatsapp: siteConfig.contact.whatsapp,
+  messages: {
+    errors: tx<Record<string, string>>('quote.errors'),
+    submit: t('quote.submit'),
+    sending: t('quote.sending'),
+    whatsappMessage: t('quote.successWhatsappMessage'),
+  },
+};
+const radioCard =
+  'flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border border-slate-400 bg-white px-4 py-3 font-semibold text-slate-800 has-checked:border-primary has-checked:bg-primary-soft has-checked:text-primary has-focus-visible:outline-3 has-focus-visible:outline-accent';
+---
+
+<div data-quote-root>
+  <form class="space-y-8" novalidate data-quote-form data-config={JSON.stringify(clientConfig)} data-error-summary={t('quote.errorSummary')}>
+    <p class="text-sm text-slate-600">{t('quote.required')}</p>
+
+    <div role="alert" tabindex="-1" class="hidden rounded-lg border border-red-700 bg-red-50 px-4 py-3 font-semibold text-red-800" data-form-error></div>
+
+    <fieldset class="space-y-5">
+      <legend class="font-display text-xl font-bold text-primary">{t('quote.sectionContact')}</legend>
+
+      <div>
+        <label for="q-full_name" class="field-label">{t('quote.name')} <span aria-hidden="true">*</span></label>
+        <input id="q-full_name" name="full_name" type="text" autocomplete="name" required maxlength="120" class="field-input" aria-describedby="q-full_name-error" />
+        <p id="q-full_name-error" class="field-error" hidden></p>
+      </div>
+
+      <div class="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label for="q-phone" class="field-label">{t('quote.phone')} <span aria-hidden="true">*</span></label>
+          <input id="q-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" required maxlength="30" class="field-input" aria-describedby="q-phone-hint q-phone-error" />
+          <p id="q-phone-hint" class="field-hint">{t('quote.phoneHint')}</p>
+          <p id="q-phone-error" class="field-error" hidden></p>
+        </div>
+        <div>
+          <label for="q-email" class="field-label">{t('quote.email')} <span aria-hidden="true">*</span></label>
+          <input id="q-email" name="email" type="email" autocomplete="email" inputmode="email" required maxlength="254" class="field-input" aria-describedby="q-email-error" />
+          <p id="q-email-error" class="field-error" hidden></p>
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="space-y-5">
+      <h2 class="font-display text-xl font-bold text-primary">{t('quote.sectionShipment')}</h2>
+
+      <fieldset aria-describedby="q-shipment_type-error" data-field="shipment_type">
+        <legend class="field-label">{t('quote.shipmentType')} <span aria-hidden="true">*</span></legend>
+        <div class="grid grid-cols-2 gap-3">
+          {
+            SHIPMENT_TYPES.map((type) => (
+              <label class={radioCard}>
+                <input type="radio" name="shipment_type" value={type} required class="size-5 accent-(--brand-primary)" />
+                {t(`quote.types.${type}`)}
+              </label>
+            ))
+          }
+        </div>
+        <p id="q-shipment_type-error" class="field-error" hidden></p>
+      </fieldset>
+
+      <fieldset class="space-y-5 rounded-xl bg-surface p-4 sm:p-5" data-show-for="vehicle" hidden>
+        <legend class="float-left mb-4 w-full font-display text-lg font-bold text-primary">{t('quote.vehicleLegend')}</legend>
+        <div class="clear-both grid gap-5 sm:grid-cols-3">
+          <div>
+            <label for="q-vehicle_make" class="field-label">{t('quote.vehicleMake')} <span aria-hidden="true">*</span></label>
+            <input id="q-vehicle_make" name="vehicle_make" type="text" maxlength="60" class="field-input" aria-describedby="q-vehicle_make-error" />
+            <p id="q-vehicle_make-error" class="field-error" hidden></p>
+          </div>
+          <div>
+            <label for="q-vehicle_model" class="field-label">{t('quote.vehicleModel')} <span aria-hidden="true">*</span></label>
+            <input id="q-vehicle_model" name="vehicle_model" type="text" maxlength="60" class="field-input" aria-describedby="q-vehicle_model-error" />
+            <p id="q-vehicle_model-error" class="field-error" hidden></p>
+          </div>
+          <div>
+            <label for="q-vehicle_year" class="field-label">{t('quote.vehicleYear')} <span aria-hidden="true">*</span></label>
+            <input id="q-vehicle_year" name="vehicle_year" type="text" inputmode="numeric" maxlength="4" class="field-input" aria-describedby="q-vehicle_year-error" />
+            <p id="q-vehicle_year-error" class="field-error" hidden></p>
+          </div>
+        </div>
+        <fieldset aria-describedby="q-vehicle_running-error" data-field="vehicle_running">
+          <legend class="field-label">{t('quote.vehicleRunning')} <span aria-hidden="true">*</span></legend>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label class={radioCard}>
+              <input type="radio" name="vehicle_running" value="yes" class="size-5 accent-(--brand-primary)" />
+              {t('quote.runningYes')}
+            </label>
+            <label class={radioCard}>
+              <input type="radio" name="vehicle_running" value="no" class="size-5 accent-(--brand-primary)" />
+              {t('quote.runningNo')}
+            </label>
+          </div>
+          <p id="q-vehicle_running-error" class="field-error" hidden></p>
+        </fieldset>
+      </fieldset>
+
+      <fieldset class="rounded-xl bg-surface p-4 sm:p-5" aria-describedby="q-container_size-error" data-show-for="full_container" data-field="container_size" hidden>
+        <legend class="float-left mb-4 w-full font-display text-lg font-bold text-primary">
+          {t('quote.containerSize')} <span aria-hidden="true">*</span>
+        </legend>
+        <div class="clear-both grid grid-cols-2 gap-3">
+          {
+            CONTAINER_SIZES.map((size) => (
+              <label class={radioCard}>
+                <input type="radio" name="container_size" value={size} class="size-5 accent-(--brand-primary)" />
+                {t(`quote.container${size}`)}
+              </label>
+            ))
+          }
+        </div>
+        <p id="q-container_size-error" class="field-error" hidden></p>
+      </fieldset>
+
+      <div class="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label for="q-destination" class="field-label">{t('quote.destination')} <span aria-hidden="true">*</span></label>
+          <select id="q-destination" name="destination" required class="field-input" aria-describedby="q-destination-error">
+            <option value="">{t('quote.destinationPlaceholder')}</option>
+            {
+              siteConfig.destinations.map((destination) => (
+                <option value={destination.slug}>
+                  {destination.city}, {pick(destination.country, lang)}
+                </option>
+              ))
+            }
+            {siteConfig.acceptsOtherDestinations && <option value={OTHER_DESTINATION}>{t('quote.destinationOther')}</option>}
+          </select>
+          <p id="q-destination-error" class="field-error" hidden></p>
+        </div>
+        <div>
+          <label for="q-desired_date" class="field-label">{t('quote.desiredDate')}</label>
+          <input id="q-desired_date" name="desired_date" type="date" class="field-input" aria-describedby="q-desired_date-hint q-desired_date-error" />
+          <p id="q-desired_date-hint" class="field-hint">{t('quote.desiredDateHint')}</p>
+          <p id="q-desired_date-error" class="field-error" hidden></p>
+        </div>
+      </div>
+
+      <div>
+        <label for="q-message" class="field-label">{t('quote.message')}</label>
+        <textarea id="q-message" name="message" rows="4" maxlength="2000" class="field-input" aria-describedby="q-message-hint q-message-error"></textarea>
+        <p id="q-message-hint" class="field-hint">{t('quote.messageHint')}</p>
+        <p id="q-message-error" class="field-error" hidden></p>
+      </div>
+    </div>
+
+    <!-- Champ piège anti-robots : hors écran, ignoré par le clavier et les lecteurs d'écran. -->
+    <div class="absolute -left-[9999px] size-px overflow-hidden" aria-hidden="true">
+      <label for="q-website">{t('quote.honeypot')}</label>
+      <input id="q-website" name={HONEYPOT_FIELD} type="text" tabindex="-1" autocomplete="off" />
+    </div>
+
+    <div>
+      <label class="flex cursor-pointer gap-3">
+        <input id="q-consent" name="consent" type="checkbox" required class="mt-1 size-6 shrink-0 accent-(--brand-primary)" aria-describedby="q-consent-error" />
+        <span class="leading-relaxed text-slate-800">
+          {t('quote.consent')}
+          <a href={pagePath(lang, 'privacy')} target="_blank" rel="noopener" class="font-semibold text-primary underline underline-offset-2">{t('quote.consentLink')}</a>. <span aria-hidden="true">*</span>
+        </span>
+      </label>
+      <p id="q-consent-error" class="field-error" hidden></p>
+    </div>
+
+    <button type="submit" class="btn-accent w-full text-lg sm:w-auto" data-submit>
+      {t('quote.submit')}
+    </button>
+
+    <noscript>
+      <p class="rounded-lg bg-surface px-4 py-3 font-semibold text-primary">{t('quote.noscript')}</p>
+    </noscript>
+  </form>
+
+  <section class="hidden rounded-2xl border border-emerald-700 bg-emerald-50 p-6 sm:p-8" aria-labelledby="quote-success-title" data-quote-success>
+    <span class="flex size-12 items-center justify-center rounded-full bg-emerald-700 text-white">
+      <Icon name="check" class="size-7" />
+    </span>
+    <h2 id="quote-success-title" tabindex="-1" class="mt-4 text-3xl font-bold">{t('quote.successTitle')}</h2>
+    <p class="mt-2 text-lg text-slate-800">{t('quote.successText')}</p>
+    <p class="mt-5 text-sm font-semibold tracking-wide text-slate-700 uppercase">{t('quote.successReference')}</p>
+    <p class="font-display text-3xl font-extrabold text-primary" data-reference></p>
+    <p class="mt-5 max-w-xl text-slate-800">{t('quote.successWhatsappHint')}</p>
+    <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+      <a href="#" class="btn-whatsapp" rel="noopener" data-whatsapp-link>
+        <Icon name="whatsapp" class="size-5" />
+        {t('quote.successWhatsapp')}
+      </a>
+      <button type="button" class="btn-outline" data-new-request>{t('quote.successNew')}</button>
+    </div>
+  </section>
+</div>
+
+<script>
+  import { QUOTE_FIELDS, todayIso, validateQuote, type QuoteErrors, type QuoteField } from '../lib/quote-schema';
+
+  interface ClientConfig {
+    lang: string;
+    endpoint: string;
+    destinations: string[];
+    allowOtherDestination: boolean;
+    locales: string[];
+    defaultLocale: string;
+    whatsapp: string;
+    messages: { errors: Record<string, string>; submit: string; sending: string; whatsappMessage: string };
+  }
+
+  const root = document.querySelector<HTMLElement>('[data-quote-root]');
+  const form = root?.querySelector<HTMLFormElement>('[data-quote-form]');
+
+  if (root && form) {
+    const config = JSON.parse(form.dataset.config ?? '{}') as ClientConfig;
+    const { messages } = config;
+    const success = root.querySelector<HTMLElement>('[data-quote-success]')!;
+    const formError = form.querySelector<HTMLElement>('[data-form-error]')!;
+    const submit = form.querySelector<HTMLButtonElement>('[data-submit]')!;
+
+    const dateInput = form.querySelector<HTMLInputElement>('#q-desired_date');
+    if (dateInput) dateInput.min = todayIso();
+
+    /** Affiche les champs propres au type d'envoi choisi et désactive les autres. */
+    const syncConditionalFields = () => {
+      const type = new FormData(form).get('shipment_type');
+      form.querySelectorAll<HTMLFieldSetElement>('[data-show-for]').forEach((group) => {
+        const visible = group.dataset.showFor === type;
+        group.hidden = !visible;
+        group.disabled = !visible;
+      });
+    };
+
+    const controlsOf = (field: QuoteField) =>
+      Array.from(form.querySelectorAll<HTMLInputElement>(`[name="${field}"]`));
+
+    const showErrors = (errors: QuoteErrors) => {
+      let first: HTMLElement | null = null;
+      for (const field of QUOTE_FIELDS) {
+        const code = errors[field];
+        const message = form.querySelector<HTMLElement>(`#q-${field}-error`);
+        const controls = controlsOf(field);
+        if (message) {
+          message.textContent = code ? (messages.errors[code] ?? messages.errors.required) : '';
+          message.hidden = !code;
+        }
+        // Pour un groupe de boutons radio, l'état d'erreur est porté par le groupe.
+        const group = form.querySelector<HTMLElement>(`[data-field="${field}"]`);
+        if (group) group.setAttribute('aria-invalid', String(Boolean(code)));
+        else controls.forEach((control) => control.setAttribute('aria-invalid', String(Boolean(code))));
+        if (code && !first) first = controls[0] ?? null;
+      }
+      return first;
+    };
+
+    const showFormError = (code: string | null) => {
+      formError.textContent = code ? (messages.errors[code] ?? messages.errors.server) : '';
+      formError.classList.toggle('hidden', !code);
+    };
+
+    const collect = (): Record<string, unknown> => {
+      const data: Record<string, unknown> = Object.fromEntries(new FormData(form).entries());
+      data.consent = form.querySelector<HTMLInputElement>('#q-consent')?.checked === true;
+      data.locale = config.lang;
+      return data;
+    };
+
+    form.addEventListener('change', (event) => {
+      if ((event.target as HTMLInputElement).name === 'shipment_type') syncConditionalFields();
+    });
+    syncConditionalFields();
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      showFormError(null);
+      const data = collect();
+      const result = validateQuote(data, config);
+      const firstInvalid = showErrors(result.ok ? {} : result.errors);
+      if (!result.ok) {
+        formError.textContent = form.dataset.errorSummary ?? '';
+        formError.classList.remove('hidden');
+        (firstInvalid ?? formError).focus();
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = messages.sending;
+      try {
+        const response = await fetch(config.endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          reference?: string;
+          error?: string;
+          fields?: QuoteErrors;
+        };
+        if (response.ok && payload.ok && payload.reference) {
+          const text = messages.whatsappMessage.replace('{reference}', payload.reference);
+          success.querySelector<HTMLElement>('[data-reference]')!.textContent = payload.reference;
+          success.querySelector<HTMLAnchorElement>('[data-whatsapp-link]')!.href =
+            `https://wa.me/${config.whatsapp}?text=${encodeURIComponent(text)}`;
+          form.classList.add('hidden');
+          success.classList.remove('hidden');
+          success.querySelector<HTMLElement>('h2')?.focus();
+          success.scrollIntoView({ block: 'start' });
+          form.reset();
+          syncConditionalFields();
+        } else if (payload.error === 'validation' && payload.fields) {
+          const target = showErrors(payload.fields);
+          formError.textContent = form.dataset.errorSummary ?? '';
+          formError.classList.remove('hidden');
+          (target ?? formError).focus();
+        } else {
+          showFormError(payload.error === 'rate_limited' ? 'rate_limited' : 'server');
+          formError.focus();
+        }
+      } catch {
+        showFormError('network');
+        formError.focus();
+      } finally {
+        submit.disabled = false;
+        submit.textContent = messages.submit;
+      }
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-new-request]')?.addEventListener('click', () => {
+      success.classList.add('hidden');
+      form.classList.remove('hidden');
+      form.querySelector<HTMLInputElement>('#q-full_name')?.focus();
+    });
+  }
+</script>
