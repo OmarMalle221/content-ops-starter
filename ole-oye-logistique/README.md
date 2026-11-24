@@ -77,8 +77,10 @@ openssl rand -base64 48
 
 ## Mise en place de Supabase
 
-1. Créer un projet Supabase, ou utiliser celui de l'ERP.
-2. Exécuter [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql) dans **SQL Editor**, ou avec `supabase db push` si le projet est lié à la CLI.
+1. Créer un projet Supabase, ou utiliser celui de l'ERP : les migrations ne créent et ne modifient que leurs propres objets, les tables déjà présentes gardent leurs droits.
+2. Exécuter dans l'ordre les fichiers de [`supabase/migrations/`](supabase/migrations/) dans **SQL Editor**, ou avec `supabase db push` si le projet est lié à la CLI :
+   - `0001_init.sql` crée les tables, le déclencheur de statut et la limite de débit ;
+   - `0002_service_role_grants.sql` donne à la clé de service ses droits sur ces tables. Sans lui, les fonctions reçoivent « permission denied » dans les projets où les nouvelles tables ne sont pas ouvertes d'office.
 3. Choisir l'UUID du client (`SITE_TENANT_ID`). Avec l'ERP, c'est l'identifiant du tenant ; sinon, en générer un et le garder.
 4. Autoriser la ou les personnes qui gèrent les expéditions, dans **SQL Editor** :
 
@@ -90,7 +92,7 @@ openssl rand -base64 48
 5. Dans **Authentication → URL Configuration**, mettre l'adresse du site dans *Site URL* et ajouter `https://votre-domaine/admin/` dans *Redirect URLs*. Sans cela, le lien de connexion ne ramène pas vers l'administration.
 6. Facultatif : dans **Authentication → Email Templates → Magic Link**, ajouter `{{ .Token }}` au message. La personne peut alors taper le code à six chiffres au lieu de cliquer sur le lien, ce qui est plus fiable quand la messagerie ouvre les liens dans un autre navigateur.
 
-### Ce que crée la migration
+### Ce que créent les migrations
 
 | Table | Contenu |
 | --- | --- |
@@ -100,7 +102,7 @@ openssl rand -base64 48
 | `admin_users` | Courriels autorisés à se connecter à `/admin` |
 | `rate_limits` | Compteurs de la limite de débit (empreintes, jamais d'adresse IP en clair) |
 
-La sécurité par ligne (RLS) est activée sur toutes les tables, sans aucune règle d'accès : les rôles `anon` et `authenticated` ne peuvent rien lire ni écrire. Seule la clé de service, utilisée par les fonctions, a accès aux données.
+La sécurité par ligne (RLS) est activée sur ces cinq tables, sans aucune règle d'accès, et les rôles `anon` et `authenticated` n'y ont aucun droit : ils ne peuvent rien lire ni écrire. Seule la clé de service, utilisée par les fonctions, a accès aux données.
 
 Le statut d'une expédition (`shipments.current_status`) est recalculé par un déclencheur à chaque ajout, correction ou retrait d'étape : c'est toujours celui de l'étape la plus récente.
 
